@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+cache-control: no-cache
+
+(2026-10-28 캡처: 25초 동안 본문 없음. connected/ping 이벤트도 수신되지 않음)

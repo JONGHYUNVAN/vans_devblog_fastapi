@@ -1,0 +1,1 @@
+{"status":"healthy","service":"VansDevBlog Search Service","version":"1.0.0","components":{"elasticsearch":{"status":"up","connected":true},"mongodb":{"status":"up","connected":true}},"cached":true,"last_check":"2026-10-28 05:43:48"}
