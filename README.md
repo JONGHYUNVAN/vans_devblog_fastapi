@@ -1,4 +1,4 @@
-# vans_devblog_search
+# vans_devblog_fastapi
 
 VansDevBlog 검색·실시간 시세 서비스. `vans_devblog_django`(Django + DRF)를 FastAPI로 옮기는 중이다.
 전환 계획과 진행 상태는 [MIGRATION_PLAN.md](MIGRATION_PLAN.md)에 있다.

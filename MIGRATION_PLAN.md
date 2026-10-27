@@ -92,7 +92,7 @@
 
 ## 3. 목표 구조
 
-새 저장소 `vans_devblog_search`(로컬 `D:/blog/vans_devblog_search`)에서 작업. Django 저장소는 컷오버 확인 후 보관(archive).
+새 저장소 `vans_devblog_fastapi`(로컬 `D:/blog/vans_devblog_fastapi`)에서 작업. Django 저장소는 컷오버 확인 후 보관(archive).
 
 ```
 app/
@@ -167,7 +167,7 @@ requirements.txt (또는 pyproject.toml)
 - [x] `search/clients/mongodb_client.py` 미커밋 변경(certifi CA 지정) 확인. 새 코드에 TLS 연결일 때만 적용하는 형태로 옮김. Django 저장소는 손대지 않음.
 - [x] 배포 중인 Django 서비스 응답 13종을 `tests/golden/`에 저장. 관찰 사항은 `tests/golden/README.md`.
 - [ ] CloudType 대시보드에서 현재 Django 서비스의 실제 시작 명령·환경변수 확인 (cloudtype.yml과 불일치). **사용자 확인 필요.**
-- [x] 새 저장소 `vans_devblog_search` 생성 (계획 변경: 같은 저장소 브랜치 대신 새 저장소).
+- [x] 새 저장소 `vans_devblog_fastapi` 생성 (계획 변경: 같은 저장소 브랜치 대신 새 저장소).
 
 ### Phase 1 — 골격 + 헬스체크
 - [x] `app/config.py`, `app/main.py`, `app/cache.py`, CORS, 예외 핸들러(`RequestValidationError` → 400 `{"error":"Invalid request parameters","details":...}`).
@@ -237,7 +237,7 @@ pytest, pytest-asyncio, pytest-timeout
 
 ## 7. 결정이 필요한 항목
 
-1. **저장소**: ~~같은 저장소~~ → **새 저장소 `vans_devblog_search`로 결정 (2026-10-28).**
+1. **저장소**: ~~같은 저장소~~ → **새 저장소 `vans_devblog_fastapi`로 결정 (2026-10-28).**
 2. **KIS를 같은 서비스에 유지**할지 분리할지. → 권장: 유지 (단일 프로세스로 충분, 분리하면 서비스가 하나 더 늘어남).
 3. **환경변수 이름** 유지 vs 정리(`ELASTICSEARCH_*` → `ES_*`). → 권장: 유지 (CloudType 복사만 하면 됨).
 4. 프론트 `SEARCH_API_URL`/`DJANGO_API_URL` 통합 여부. → 전환과 별개, 선택.
