@@ -124,7 +124,7 @@ app/
     popular_index.py   # 현재 popular_search_document.py 그대로
   kis/
     constants.py, parser.py        # 그대로
-    auth.py                        # requests → httpx, 캐시 → TTLCache(23h)
+    auth.py                        # requests → httpx2, 캐시 → TTLCache(23h)
     manager.py                     # asyncio 네이티브 싱글톤 (스레드/Lock/queue.Queue 제거)
 cli/
   __main__.py          # typer: sync-posts, migrate-index, setup-popular, test-mongo
@@ -191,14 +191,14 @@ requirements.txt (또는 pyproject.toml)
 - [ ] `cli/` typer 명령 4개 (fetch_mongodb_data는 sync와 중복이라 제외).
 
 ### Phase 4 — KIS
-- [ ] `kis/auth.py`: httpx + TTLCache(82800s).
+- [ ] `kis/auth.py`: httpx2 + TTLCache(82800s).
 - [ ] `kis/manager.py`: 스레드·`threading.Lock`·`queue.Queue` 제거. `subscribe()`가 `asyncio.Queue`를 반환, 매니저 태스크는 첫 구독 시 lazy 시작. 재연결(최대 10회/5초), PINGPONG, AES 복호화, 파서는 그대로.
 - [ ] `snapshot`: `await asyncio.sleep(5)`. 응답 형식 `{"success","data":{symbol,name,trade,orderbook,updatedAt}}` 및 400/503 형식 유지.
 - [ ] `stream`: `StreamingResponse(media_type="text/event-stream")`, 헤더 `Cache-Control: no-cache`, `X-Accel-Buffering: no`. 이벤트명 `connected/trade/orderbook/ping/error`, ping 15초 유지. `request.is_disconnected()`로 구독 해제. KIS 미설정 시 ping-only degraded 스트림 유지.
 - [ ] `tests/test_kis*.py` 포팅 (현재 44개).
 
 ### Phase 5 — 테스트·문서
-- [ ] `httpx.TestClient` 기반으로 `test_api`, `test_services`, `test_clients` 포팅. e2e는 마커로 분리.
+- [ ] `TestClient`(httpx2) 기반으로 `test_api`, `test_services`, `test_clients` 포팅. e2e는 마커로 분리.
 - [ ] README 전면 교체, `docs/source`(Sphinx) 삭제 또는 FastAPI 기준으로 축소.
 - [ ] `.gitignore`에 `docs/build/`, `staticfiles/`, `.idea/`, `db.sqlite3` 추가하고 추적 해제.
 
@@ -221,7 +221,7 @@ pydantic>=2
 pydantic-settings
 elasticsearch>=8.15,<9
 pymongo
-httpx
+httpx2  # httpx 후속(Pydantic 관리). starlette TestClient 도 httpx2 를 우선 사용
 websockets
 pycryptodome
 cachetools
