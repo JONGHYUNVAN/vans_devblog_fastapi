@@ -1,7 +1,7 @@
 # Django → FastAPI 전환 계획 (vans_devblog_django)
 
 작성일: 2026-10-28
-상태: **Phase 0·1 완료 (2026-10-28)**. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
+상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`, 2026-10-29) → 다음은 Phase 1.5. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
 
 ---
 
@@ -94,43 +94,54 @@
 
 새 저장소 `vans_devblog_fastapi`(로컬 `D:/blog/vans_devblog_fastapi`)에서 작업. Django 저장소는 컷오버 확인 후 보관(archive).
 
+계층형 아키텍처(Controller → Service → Repository → Entity), 계층 우선 폴더. 계층별 책임·의존 방향·이름 규칙은 `CONVENTIONS.md`.
+
 ```
 app/
-  main.py              # FastAPI 인스턴스, lifespan(ES/Mongo 클라이언트, 인기검색어 인덱스 보장), CORS, 예외 핸들러
-  config.py            # pydantic-settings (아래 환경변수 표)
-  cache.py             # TTLCache 래퍼 (search 5분 / autocomplete 10분 / popular 1분 / health 30분 / last_sync 30일)
-  deps.py              # get_es, get_mongo, verify_internal_key(Header X-Internal-Key)
-  routers/
-    health.py          # GET /api/v1/search/health/
-    search.py          # posts/, autocomplete/, popular/, categories/
-    sync.py            # sync/status/, sync/, sync/all/
-    internal.py        # /api/internal/search/index/ (+ /api/v1/search/internal/index/ 별칭 유지)
-    kis.py             # /api/kis/snapshot/{symbol}/, /api/kis/stream/{symbol}/
-  schemas/
-    search.py          # SearchRequest(Query 파라미터 모델), SearchResponse, AutocompleteRequest/Response, Popular, Categories
-    sync.py            # SyncRequest, SyncResponse, SyncStatus
-    kis.py             # SnapshotResponse
-    errors.py          # {"error","message"} / {"error","details"} 형식
-  services/
-    search_service.py  # 포팅 (django 제거)
-    sync_service.py    # 포팅 (Search → es.count/delete_by_query/helpers.scan)
-    health_service.py  # 포팅
-  clients/
-    es_client.py       # elasticsearch 8.x 동기 클라이언트
-    mongo_client.py    # pymongo (현재 코드 그대로)
-  search_index/
-    analyzers.py       # BASE_INDEX_SETTINGS dict (elasticsearch_dsl analyzer 객체 제거)
-    post_index.py      # posts 매핑 dict + upsert/get/delete 함수 (PostDocument 대체), extract_tiptap_text
-    popular_index.py   # 현재 popular_search_document.py 그대로
-  kis/
-    constants.py, parser.py        # 그대로
-    auth.py                        # requests → httpx2, 캐시 → TTLCache(23h)
-    manager.py                     # asyncio 네이티브 싱글톤 (스레드/Lock/queue.Queue 제거)
+  main.py                  # FastAPI 인스턴스, lifespan(ES/Mongo 클라이언트 생성·종료, 인기검색어 인덱스 보장, KIS 매니저 종료), CORS, 예외 핸들러·라우터 등록
+  dependencies.py          # Depends 조립(클라이언트 → 리포지토리 → 서비스), verify_internal_key(Header X-Internal-Key)
+  core/
+    config.py              # pydantic-settings (아래 환경변수 표)
+    cache.py               # TTL 캐시 (search 5분 / autocomplete 10분 / popular 1분 / health 30분 / last_sync 30일)
+    exceptions.py          # AppError 계열 + 핸들러: {"error","message"} / 400 {"error","details"}
+  routers/                 # [Controller] 모듈마다 router 하나
+    health.py              # GET /api/v1/search/health/
+    search.py              # posts/, autocomplete/, popular/, categories/
+    sync.py                # sync/status/, sync/, sync/all/
+    internal.py            # /api/internal/search/index/ (+ /api/v1/search/internal/index/ 별칭 유지)
+    kis.py                 # /api/kis/snapshot/{symbol}/, /api/kis/stream/{symbol}/
+  schemas/                 # [DTO]
+    health.py              # HealthStatus
+    search.py              # SearchParams, AutocompleteParams, SearchResult, AutocompleteResult, PopularKeywords, CategoryList
+    sync.py                # SyncOptions, SyncResult, SyncStatus
+    indexing.py            # SearchIndexPayload (NestJS가 보내는 타입과 같은 이름)
+    kis.py                 # Snapshot
+  services/                # [Service]
+    health.py              # HealthService — 포팅
+    search.py              # SearchService — 검색·자동완성·인기검색어·카테고리 (cache_service 흡수, django 제거)
+    sync.py                # SyncService — Mongo → ES 전체/증분 동기화, 고스트 문서 정리
+    indexing.py            # IndexingService — 내부 API 단건 색인·삭제
+    kis.py                 # KISService — snapshot 대기, SSE 이벤트 생성
+  repositories/            # [Repository]
+    post_index.py          # PostIndexRepository — ES posts alias: 검색 쿼리(8.x 문법), 자동완성, upsert/delete, count, delete_by_query, scan
+    popular_search.py      # PopularSearchRepository — ES vans_popular_searches (현재 popular_search_document.py 로직)
+    post.py                # PostRepository — MongoDB posts + categories lookup, 읽기 전용
+  models/                  # [Entity]
+    post.py                # Post, PostSearchCriteria, POST_INDEX_MAPPING(PostDocument 대체), extract_tiptap_text
+    popular_search.py      # PopularSearch, 인덱스 매핑
+    analyzers.py           # BASE_INDEX_SETTINGS dict (elasticsearch_dsl analyzer 객체 제거)
+  clients/                 # [Infrastructure]
+    es.py                  # create_es, check_connection (elasticsearch 8.x 동기 클라이언트)
+    mongo.py               # create_mongo_client, check_connection (TLS일 때만 certifi CA)
+    kis/
+      constants.py, parser.py   # 그대로
+      auth.py                   # KISAuthClient — requests → httpx2, 캐시 → TTLCache(23h)
+      stream.py                 # KISStreamManager — asyncio 네이티브 싱글톤 (스레드/Lock/queue.Queue 제거)
 cli/
-  __main__.py          # typer: sync-posts, migrate-index, setup-popular, test-mongo
-tests/
+  __main__.py              # typer: sync-posts, migrate-index, setup-popular, test-mongo (서비스만 호출)
+tests/                     # app/ 구조를 따른다 (routers/, services/, repositories/, 폴더마다 __init__.py) + golden/
 Dockerfile
-requirements.txt (또는 pyproject.toml)
+requirements.txt, requirements-dev.txt, pyproject.toml(ruff 설정)
 ```
 
 **동기/비동기 방침**
@@ -176,24 +187,33 @@ requirements.txt (또는 pyproject.toml)
 - [x] `/` → `/docs` 리다이렉트.
 - [x] `app/clients/mongo_client.py` 포팅 (실사용 메서드만). 증분 동기화도 카테고리 조회를 거치도록 수정.
 
+### Phase 1.5 — 계층 구조 정리 (Phase 2 전에)
+`CONVENTIONS.md` 9절 표가 빌 때까지. 동작·응답은 바꾸지 않는다(기존 테스트 + golden 유지).
+- [ ] ruff 도입: `pyproject.toml`에 `[tool.ruff]`(줄 길이 120, `target-version = "py312"`, 규칙 `E, W, F, I, N, B, UP, SIM, G`), `requirements-dev.txt`에 추가. 일괄 서식 적용은 별도 `style:` 커밋.
+- [ ] `config.py`·`cache.py`·`errors.py` → `app/core/`. `errors.py`는 `core/exceptions.py`로 바꾸고 `AppError` 계열 추가.
+- [ ] `clients/es_client.py` → `clients/es.py`. `MongoDBClient` 분리: 연결 생성은 `clients/mongo.py`, posts 조회는 `repositories/post.py`의 `PostRepository`(메서드 이름은 `CONVENTIONS.md` 4절: `get_all_posts` → `iter_all` 등).
+- [ ] lifespan에서 ES·Mongo 클라이언트를 한 번 만들어 `app.state`에 두고 `app/dependencies.py`에서 주입.
+- [ ] 헬스체크: `services/health.py`의 `HealthService` 클래스(2초 타임아웃·30분 캐시 동작 유지). 테스트를 `dependency_overrides` 방식으로 바꾸고 `tests/routers/`, `tests/services/`로 이동.
+- [ ] 로거 `__name__`, `Optional` → `X | None`, `except ... as exc`.
+
 ### Phase 2 — 검색 API
-- [ ] pydantic 스키마: `SearchRequest`(query≤200, mainCategory, subCategory, theme/category 하위호환, tags CSV→list 최대 10개, language ko/en/all, date_from/to + 순서 검증, page≥1, page_size 1~100, sort relevance/date_desc/date_asc), `AutocompleteRequest`(query 1~100자, limit 1~20).
-- [ ] `es_client.py` 8.x 문법으로 포팅 (`body=` → `query=`/`source=`/`highlight=`…). 쿼리 내용은 동일.
-- [ ] `search_service.py`, `cache_service` 포팅. 응답 dict 형식 `{total,page,page_size,total_pages,post_ids,results,aggregations}` 유지.
+- [ ] `schemas/search.py`: `SearchParams`(query≤200, mainCategory, subCategory, theme/category 하위호환, tags CSV→list 최대 10개, language ko/en/all, date_from/to + 순서 검증, page≥1, page_size 1~100, sort relevance/date_desc/date_asc), `AutocompleteParams`(query 1~100자, limit 1~20).
+- [ ] `repositories/post_index.py`: ES 쿼리를 8.x 문법으로 포팅 (`body=` → `query=`/`source=`/`highlight=`…). 쿼리 내용은 동일. 검색 조건은 `models/post.py`의 `PostSearchCriteria`.
+- [ ] `services/search.py` 포팅(`cache_service` 흡수). 응답 dict 형식 `{total,page,page_size,total_pages,post_ids,results,aggregations}` 유지.
 - [ ] `popular/`, `categories/` (categories는 현재 Mongo 클라이언트 None → 항상 fallback 목록 반환. 동작 그대로 유지하되 주석으로 명시).
 - [ ] golden 파일과 응답 diff.
 
 ### Phase 3 — 내부 인덱싱 + 동기화 + CLI
-- [ ] `post_index.py`: `PostDocument` 매핑을 dict로 (이미 `migrate_search_index._build_mapping`에 dict 버전 존재 → 재사용). `upsert(post_id, doc)`, `delete(post_id)`는 `posts` alias에 대해 `es.index/es.delete`.
-- [ ] `POST/DELETE /api/internal/search/index/` + `/api/v1/search/internal/index/` 별칭. 403 `{"error":"Authentication failed","message":...}` 유지. 404 형식 유지.
-- [ ] `sync_service.py` 포팅: `Search().count()` → `es.count(index="posts")`, `Search().delete()` → `es.delete_by_query`, `s.scan()` → `helpers.scan`.
+- [ ] `models/post.py`: `PostDocument` 매핑을 `POST_INDEX_MAPPING` dict로 (이미 `migrate_search_index._build_mapping`에 dict 버전 존재 → 재사용). `PostIndexRepository.upsert(post)`, `delete(post_id)`는 `posts` alias에 대해 `es.index/es.delete`.
+- [ ] `routers/internal.py` + `services/indexing.py`: `POST/DELETE /api/internal/search/index/` + `/api/v1/search/internal/index/` 별칭. 403 `{"error":"Authentication failed","message":...}` 유지. 404 형식 유지.
+- [ ] `services/sync.py` 포팅. ES 접근은 `PostIndexRepository`로: `Search().count()` → `es.count(index="posts")`, `Search().delete()` → `es.delete_by_query`, `s.scan()` → `helpers.scan`.
 - [ ] `sync/status/`, `sync/`, `sync/all/`.
 - [ ] `cli/` typer 명령 4개 (fetch_mongodb_data는 sync와 중복이라 제외).
 
 ### Phase 4 — KIS
-- [ ] `kis/auth.py`: httpx2 + TTLCache(82800s).
-- [ ] `kis/manager.py`: 스레드·`threading.Lock`·`queue.Queue` 제거. `subscribe()`가 `asyncio.Queue`를 반환, 매니저 태스크는 첫 구독 시 lazy 시작. 재연결(최대 10회/5초), PINGPONG, AES 복호화, 파서는 그대로.
-- [ ] `snapshot`: `await asyncio.sleep(5)`. 응답 형식 `{"success","data":{symbol,name,trade,orderbook,updatedAt}}` 및 400/503 형식 유지.
+- [ ] `clients/kis/auth.py`: httpx2 + TTLCache(82800s).
+- [ ] `clients/kis/stream.py`: 스레드·`threading.Lock`·`queue.Queue` 제거. `subscribe()`가 `asyncio.Queue`를 반환, 매니저 태스크는 첫 구독 시 lazy 시작. 재연결(최대 10회/5초), PINGPONG, AES 복호화, 파서는 그대로.
+- [ ] `services/kis.py` + `routers/kis.py`. `snapshot`: `await asyncio.sleep(5)`. 응답 형식 `{"success","data":{symbol,name,trade,orderbook,updatedAt}}` 및 400/503 형식 유지.
 - [ ] `stream`: `StreamingResponse(media_type="text/event-stream")`, 헤더 `Cache-Control: no-cache`, `X-Accel-Buffering: no`. 이벤트명 `connected/trade/orderbook/ping/error`, ping 15초 유지. `request.is_disconnected()`로 구독 해제. KIS 미설정 시 ping-only degraded 스트림 유지.
 - [ ] `tests/test_kis*.py` 포팅 (현재 44개).
 
@@ -228,7 +248,7 @@ cachetools
 typer
 python-dotenv
 # dev
-pytest, pytest-asyncio, pytest-timeout
+pytest, pytest-asyncio, pytest-timeout, ruff
 ```
 
 삭제: Django, djangorestframework, django-cors-headers, whitenoise, dj-database-url, psycopg2-binary, django-redis, redis, django-elasticsearch-dsl, elasticsearch-dsl, PyMySQL, drf-yasg, gunicorn, requests, uvloop(uvicorn[standard]에 포함), setproctitle.
@@ -241,12 +261,14 @@ pytest, pytest-asyncio, pytest-timeout
 2. **KIS를 같은 서비스에 유지**할지 분리할지. → 권장: 유지 (단일 프로세스로 충분, 분리하면 서비스가 하나 더 늘어남).
 3. **환경변수 이름** 유지 vs 정리(`ELASTICSEARCH_*` → `ES_*`). → 권장: 유지 (CloudType 복사만 하면 됨).
 4. 프론트 `SEARCH_API_URL`/`DJANGO_API_URL` 통합 여부. → 전환과 별개, 선택.
+5. **코드 구조**: 계층형 아키텍처, 계층 우선 폴더로 결정 (2026-10-29). 규칙은 `CONVENTIONS.md`.
 
 ## 8. 대략적 작업량
 
 | Phase | 규모 |
 |---|---|
 | 0~1 | 반나절 |
+| 1.5 | 2~3시간 |
 | 2~3 | 1일 |
 | 4 | 반나절~1일 (KIS 매니저 재작성 + 테스트) |
 | 5 | 반나절 |
