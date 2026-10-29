@@ -196,10 +196,10 @@ PEP 8과 FastAPI 공식 문서의 관례를 따른다. 계층은 패키지 이�
 |---|---|---|
 | Python | 실행 3.13(Docker). 문법은 3.12 범위(ruff `target-version = "py312"`) | 로컬 개발 환경이 3.12 |
 | 서식 | `ruff format` — 4칸 들여쓰기, 큰따옴표, 줄 길이 120 | 기존 코드가 큰따옴표, 100자를 넘는 줄이 많다 |
-| lint | `ruff check` — 규칙 `E, W, F, I, N, B, UP, SIM, G` | pycodestyle·pyflakes·isort·pep8-naming·bugbear·pyupgrade·simplify·로깅 포맷 |
+| lint | `ruff check` — 규칙 `E, W, F, I, N, B, UP, SIM, G`, `E501` 제외 | pycodestyle·pyflakes·isort·pep8-naming·bugbear·pyupgrade·simplify·로깅 포맷. 코드 줄 길이는 formatter가 맞추고, 주석은 한글이 폭 2로 계산돼 E501이 한국어 주석마다 걸린다 |
 | 줄바꿈 | LF | `.gitattributes` |
 
-커밋 전 확인: `ruff format --check . && ruff check . && pytest -q`
+커밋 전 확인: `ruff format --check . && ruff check . && pytest -q` (venv 안에서. Windows는 `.venv/Scripts/` 접두)
 
 ### 규칙
 
@@ -241,7 +241,7 @@ class PostIndexRepository:
 
 ## 7. 테스트
 
-- `tests/`는 `app/` 구조를 따른다: `tests/routers/test_search.py`, `tests/services/test_search.py`, `tests/repositories/test_post_index.py`. 하위 폴더마다 빈 `__init__.py`를 둔다 — 없으면 같은 파일 이름(`test_search.py`)이 여러 폴더에 있을 때 pytest가 모듈 이름 충돌로 실패한다. 공용 픽스처는 `tests/conftest.py`, 가짜 구현은 `tests/fakes.py`.
+- `tests/`는 `app/` 구조를 따른다: `tests/routers/test_search.py`, `tests/services/test_search.py`, `tests/repositories/test_post_index.py`. 하위 폴더마다 빈 `__init__.py`를 둔다 — 없으면 같은 파일 이름(`test_search.py`)이 여러 폴더에 있을 때 pytest가 모듈 이름 충돌로 실패한다. 공용 픽스처는 `tests/conftest.py`. 가짜 구현은 한 파일에서만 쓰면 그 파일에, 여러 파일이 쓰면 `tests/fakes.py`에 둔다.
 - 이름: 파일 `test_<대상 파일명>.py`, 함수 `test_<대상>_<기대 결과>[_when_<조건>]`(예: `test_health_degraded_when_mongo_down`). 테스트 더블은 손으로 짠 구현이 `Fake<클래스>`, `MagicMock`이 `mock_<대상>`.
 - 단위 테스트는 네트워크·실제 DB 없이 돈다. 서비스는 가짜 리포지토리를 생성자로 넘기고, 라우터는 `app.dependency_overrides`로 서비스를 바꾼다. `monkeypatch`로 모듈 내부 함수를 바꾸지 않는다 — DI로 해결한다.
 - 응답 계약은 `tests/golden/`과 키 구조·상태 코드를 비교한다. 계약이 걸린 엔드포인트는 golden 테스트를 꼭 둔다.
@@ -256,16 +256,8 @@ class PostIndexRepository:
 
 ## 9. 현행 코드와 다른 곳
 
-2026-10-29 기준. `MIGRATION_PLAN.md` Phase 1.5에서 옮기고, 옮기면 행을 지운다.
+구조·이름 차이는 2026-10-29 Phase 1.5에서 정리했다. 남은 차이와 옮기는 단계(옮기면 행을 지운다):
 
-| 현행 | 이 문서 |
-|---|---|
-| `app/config.py`, `app/cache.py`, `app/errors.py` | `app/core/config.py`, `core/cache.py`, `core/exceptions.py`(+ `AppError` 계열) |
-| `services/health_service.py`의 모듈 함수, 테스트가 `monkeypatch`로 내부 함수 교체 | `services/health.py`의 `HealthService` 클래스, 테스트는 `dependency_overrides` |
-| `clients/es_client.py`, `clients/mongo_client.py` | `clients/es.py`, `clients/mongo.py` |
-| `MongoDBClient`가 연결 생성과 posts 조회(`get_all_posts`, `get_posts_updated_since` …)를 함께 함 | 연결은 `clients/mongo.py`, 조회는 `repositories/post.py`의 `PostRepository` (`iter_all`, `iter_updated_since` …, 4절) |
-| `es_client.POSTS_INDEX` | `repositories/post_index.py` 상단 상수 |
-| 요청마다 ES·Mongo 클라이언트 생성 | lifespan에서 한 번 만들어 `app.state`, `dependencies.py`에서 주입 (헬스체크의 2초 타임아웃 동작은 유지) |
-| 로거 이름 `"search"` | `__name__` |
-| `Optional[X]`, `except ... as e` | `X \| None`, `as exc` |
-| 줄 길이 120 초과(`mongo_client.py`, `config.py`), ruff 미도입 | `pyproject.toml` ruff 설정 + `ruff format` |
+| 현행 | 이 문서 | 옮기는 단계 |
+|---|---|---|
+| `PostRepository`가 Mongo 원본 문서(`dict`)를 돌려준다 | 엔티티 `Post`(`models/post.py`)로 바꿔 반환 | Phase 3 (`models/post.py` 작성 때) |

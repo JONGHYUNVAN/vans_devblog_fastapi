@@ -1,7 +1,7 @@
 # Django → FastAPI 전환 계획 (vans_devblog_django)
 
 작성일: 2026-10-28
-상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`, 2026-10-29) → 다음은 Phase 1.5. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
+상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5 완료 (2026-10-29)** → 다음은 Phase 2. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
 
 ---
 
@@ -188,17 +188,17 @@ requirements.txt, requirements-dev.txt, pyproject.toml(ruff 설정)
 - [x] `app/clients/mongo_client.py` 포팅 (실사용 메서드만). 증분 동기화도 카테고리 조회를 거치도록 수정.
 
 ### Phase 1.5 — 계층 구조 정리 (Phase 2 전에)
-`CONVENTIONS.md` 9절 표가 빌 때까지. 동작·응답은 바꾸지 않는다(기존 테스트 + golden 유지).
-- [ ] ruff 도입: `pyproject.toml`에 `[tool.ruff]`(줄 길이 120, `target-version = "py312"`, 규칙 `E, W, F, I, N, B, UP, SIM, G`), `requirements-dev.txt`에 추가. 일괄 서식 적용은 별도 `style:` 커밋.
-- [ ] `config.py`·`cache.py`·`errors.py` → `app/core/`. `errors.py`는 `core/exceptions.py`로 바꾸고 `AppError` 계열 추가.
-- [ ] `clients/es_client.py` → `clients/es.py`. `MongoDBClient` 분리: 연결 생성은 `clients/mongo.py`, posts 조회는 `repositories/post.py`의 `PostRepository`(메서드 이름은 `CONVENTIONS.md` 4절: `get_all_posts` → `iter_all` 등).
-- [ ] lifespan에서 ES·Mongo 클라이언트를 한 번 만들어 `app.state`에 두고 `app/dependencies.py`에서 주입.
-- [ ] 헬스체크: `services/health.py`의 `HealthService` 클래스(2초 타임아웃·30분 캐시 동작 유지). 테스트를 `dependency_overrides` 방식으로 바꾸고 `tests/routers/`, `tests/services/`로 이동.
-- [ ] 로거 `__name__`, `Optional` → `X | None`, `except ... as exc`.
+`CONVENTIONS.md` 9절의 구조·이름 차이를 없앤다. 동작·응답은 바꾸지 않는다(기존 테스트 + golden 유지).
+- [x] ruff 도입: `pyproject.toml`에 `[tool.ruff]`(줄 길이 120, `target-version = "py312"`, 규칙 `E, W, F, I, N, B, UP, SIM, G`), `requirements-dev.txt`에 추가. 일괄 서식 적용은 별도 `style:` 커밋.
+- [x] `config.py`·`cache.py`·`errors.py` → `app/core/`. `errors.py`는 `core/exceptions.py`로 바꾸고 `AppError` 기반 클래스·핸들러 추가(하위 예외는 쓰는 Phase에서).
+- [x] `clients/es_client.py` → `clients/es.py`. `MongoDBClient` 분리: 연결 생성은 `clients/mongo.py`, posts 조회는 `repositories/post.py`의 `PostRepository`(메서드 이름은 `CONVENTIONS.md` 4절: `get_all_posts` → `iter_all` 등). `get_posts_count`가 예외를 삼키고 0을 돌려주던 것은 없앴다(호출하는 서비스가 판단). 쓰지 않던 `POSTS_INDEX` 상수는 지우고 Phase 2의 `repositories/post_index.py`에서 만든다.
+- [x] lifespan에서 ES·Mongo 클라이언트를 한 번 만들어 `app.state`에 두고 `app/dependencies.py`에서 주입. Mongo는 `connect=False`(mongodb+srv DNS 실패가 기동 실패가 되지 않게).
+- [x] 헬스체크: `services/health.py`의 `HealthService` 클래스(2초 타임아웃·30분 캐시 동작 유지). 테스트를 `dependency_overrides` 방식으로 바꾸고 `tests/routers/`, `tests/services/`로 이동.
+- [x] 로거 `__name__`, `Optional` → `X | None`, `except ... as exc`. 응답 스키마 `schemas/health.py`(`HealthStatus`, `UnhealthyStatus`) 추가.
 
 ### Phase 2 — 검색 API
 - [ ] `schemas/search.py`: `SearchParams`(query≤200, mainCategory, subCategory, theme/category 하위호환, tags CSV→list 최대 10개, language ko/en/all, date_from/to + 순서 검증, page≥1, page_size 1~100, sort relevance/date_desc/date_asc), `AutocompleteParams`(query 1~100자, limit 1~20).
-- [ ] `repositories/post_index.py`: ES 쿼리를 8.x 문법으로 포팅 (`body=` → `query=`/`source=`/`highlight=`…). 쿼리 내용은 동일. 검색 조건은 `models/post.py`의 `PostSearchCriteria`.
+- [ ] `repositories/post_index.py`: `POSTS_INDEX = "posts"`(posts_v2를 가리키는 alias) 상수. ES 쿼리를 8.x 문법으로 포팅 (`body=` → `query=`/`source=`/`highlight=`…). 쿼리 내용은 동일. 검색 조건은 `models/post.py`의 `PostSearchCriteria`.
 - [ ] `services/search.py` 포팅(`cache_service` 흡수). 응답 dict 형식 `{total,page,page_size,total_pages,post_ids,results,aggregations}` 유지.
 - [ ] `popular/`, `categories/` (categories는 현재 Mongo 클라이언트 None → 항상 fallback 목록 반환. 동작 그대로 유지하되 주석으로 명시).
 - [ ] golden 파일과 응답 diff.
