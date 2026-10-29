@@ -7,6 +7,9 @@ VansDevBlog 검색·실시간 시세 서비스. `vans_devblog_django`(Django + D
 - MongoDB(Post BE) → ES 동기화, NestJS 내부 인덱싱 API
 - KIS OpenAPI 실시간 체결가·호가 SSE
 
+코드는 계층형 구조(`routers` → `services` → `repositories` → `models`, 연결은 `clients`)다.
+계층별 책임, 이름·주석 규칙은 [CONVENTIONS.md](CONVENTIONS.md)에 있다.
+
 ## 로컬 실행
 
 ```bash
@@ -34,10 +37,19 @@ cp .env.example .env                                          # 값 채우기
 ## 테스트
 
 ```bash
-.venv/Scripts/python -m pytest -q
+.venv/Scripts/ruff format --check . && .venv/Scripts/ruff check . && .venv/Scripts/python -m pytest -q
 ```
 
+커밋 전에 위 세 가지가 통과해야 한다. 기본 테스트는 네트워크·실제 DB 없이 돈다(KIS 매니저 테스트는 로컬 WebSocket 서버를 띄운다).
 `tests/golden/`은 운영 Django 서비스 응답을 캡처한 것이다. 키 구조와 상태 코드를 비교하는 기준으로 쓴다.
+
+배포된 서비스는 e2e 테스트로 확인한다. 기본 실행에서 빠지고, 운영에 돌려도 되게 읽기 요청 위주다.
+
+```bash
+E2E_BASE_URL=https://<서비스 주소> .venv/Scripts/python -m pytest -m e2e
+```
+
+`E2E_INTERNAL_KEY`를 함께 주면 내부 색인 API로 테스트 문서를 색인했다가 지우는 것까지 확인한다.
 
 ## 배포
 
@@ -57,3 +69,7 @@ Django 전용 변수(`DJANGO_SETTINGS_MODULE`, `SECRET_KEY`, `ALLOWED_HOSTS`, `D
 | vans_story BFF | `GET /api/kis/snapshot/{symbol}/`, `GET /api/kis/stream/{symbol}/` (SSE) |
 | vans_story_be_post | `POST /api/internal/search/index/`, `DELETE /api/internal/search/index/{post_id}/` (`X-Internal-Key`) |
 | CloudType | `GET /api/v1/search/health/` |
+| 운영자 | `GET /api/v1/search/sync/status/`, `POST /api/v1/search/sync/`·`sync/all/` (`X-Internal-Key`) |
+
+그 밖에 `GET /api/v1/search/categories/`와 Django에 있던 별칭 `/api/v1/search/internal/index/`도 그대로 받는다.
+응답 형식은 `tests/golden/`과 같고, Django와 달라진 곳은 [MIGRATION_PLAN.md](MIGRATION_PLAN.md) 각 Phase에 적었다.

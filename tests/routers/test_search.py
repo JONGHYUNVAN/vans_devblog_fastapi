@@ -1,6 +1,7 @@
 """검색 라우터 테스트. 응답 계약(golden)과 쿼리 파라미터 변환을 확인한다."""
 
 from fastapi import BackgroundTasks
+from fastapi.testclient import TestClient
 
 from app.dependencies import get_search_service
 from app.main import app
@@ -116,3 +117,16 @@ def test_categories_response_matches_golden(client):
 
     assert response.status_code == 200
     assert response.json() == load_golden("categories")
+
+
+def test_search_posts_500_with_generic_body_when_es_fails():
+    _use_service(FakePostIndexRepository(error=RuntimeError("es down at https://es.internal:9200")))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/api/v1/search/posts/?query=React")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": "Internal server error",
+        "message": "An unexpected error occurred. Please try again.",
+    }

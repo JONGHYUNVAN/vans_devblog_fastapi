@@ -9,3 +9,7 @@ ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "tests"]
+
+[tool.pytest.ini_options]
+markers = ["e2e: 배포된 서비스나 실제 KIS 에 요청을 보낸다. 기본 실행에서 빠진다 (pytest -m e2e)"]
+addopts = "-m 'not e2e'"

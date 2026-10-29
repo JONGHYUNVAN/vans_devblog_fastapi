@@ -1,7 +1,7 @@
 # Django → FastAPI 전환 계획 (vans_devblog_django)
 
 작성일: 2026-10-28
-상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5·2·3·4 완료 (2026-10-29)** → 다음은 Phase 5. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
+상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5~5 완료 (2026-10-29)** → 다음은 Phase 6(배포·컷오버). 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
 
 ---
 
@@ -248,16 +248,21 @@ Django와 달라진 곳 (코드에 주석):
 - 스냅샷은 SSE 구독자가 있는 종목만 데이터가 있다. KIS 구독을 SSE 구독자 기준으로만 하기 때문에, 구독자 없는 종목의 스냅샷은 5초 기다린 뒤 null을 돌려준다.
 
 ### Phase 5 — 테스트·문서
-- [ ] `TestClient`(httpx2) 기반으로 `test_api`, `test_services`, `test_clients` 포팅. e2e는 마커로 분리.
-- [ ] README 전면 교체, `docs/source`(Sphinx) 삭제 또는 FastAPI 기준으로 축소.
-- [ ] `.gitignore`에 `docs/build/`, `staticfiles/`, `.idea/`, `db.sqlite3` 추가하고 추적 해제.
+- [x] 테스트 포팅. Django 테스트 중 의미 있는 것(API·서비스·클라이언트·KIS)은 Phase 1.5~4에서 계층별로 옮겼다(`tests/routers|services|repositories|clients|models|core`). Phase 5에서 TTL 캐시, 전역 500 형식, 계약 경로(trailing slash·리다이렉트 없음) 테스트를 더했다. 기본 실행 106개.
+  - 옮기지 않은 것: Django ORM 모델(`test_models`, 쓰지 않던 `SearchLog`·`PopularSearch`), Django 설정·URL·메모리 측정(`test_simple`, `test_urls`, `test_memory_efficient`), 목 객체만 확인하던 통합 테스트(`test_integration`).
+- [x] e2e는 `@pytest.mark.e2e`로 분리해 기본 실행에서 뺐다(`pyproject.toml`). `tests/e2e/test_deployed.py`가 `E2E_BASE_URL`의 서비스에 golden 계약을 확인한다. Phase 6 수동 검증에 쓴다. 로컬 uvicorn(ES·KIS 없음)으로 돌려 스위트 자체를 확인했다(ES·KIS가 필요한 3개 외 통과).
+- [x] README 갱신(구조, 테스트·e2e, API 계약 표에 동기화·별칭).
+- [—] `docs/source`(Sphinx) 정리, `.gitignore`의 `docs/build/`·`staticfiles/`·`db.sqlite3` 추적 해제: 해당 없음. Django 저장소 항목이고, 새 저장소로 옮기기로 해서 Django 저장소는 컷오버 뒤 보관(archive)한다.
+- 실제 KIS e2e(`test_kis_e2e`: 실서버 접속키·체결 수신)는 옮기지 않았다. 배포 후 `test_kis_stream_sends_first_event_promptly`와 장중 수동 확인으로 대신한다.
 
 ### Phase 6 — 배포·컷오버
 - [ ] CloudType에 **Dockerfile 서비스 신규 생성** (Post BE가 2026-10-25에 한 방식과 동일). 환경변수 복사. 헬스체크 경로 `/api/v1/search/health/`.
-- [ ] 새 서비스 URL로 수동 검증: 검색 3종, 내부 인덱싱 POST/DELETE, KIS snapshot/stream, `sync/all/` (MongoDB Atlas 허용 IP 문제로 로컬에서는 불가 → CloudType에서만).
+  - `ELASTICSEARCH_VERIFY_CERTS`: Django는 `verify_certs=False`를 코드에 박아 두었다. 새 서비스 기본값은 검증함(true)이라, ES 인증서가 자체 서명이면 `false`로 둬야 연결된다.
+  - `INTERNAL_API_KEY`: 반드시 설정 (NestJS와 같은 값). 비어 있으면 내부 색인·동기화 실행이 모두 403이다.
+- [ ] 새 서비스 URL로 검증: `E2E_BASE_URL=<새 URL> E2E_INTERNAL_KEY=<키> pytest -m e2e` + 장중 KIS 체결 수신, `sync/status/`·`sync/all/`(`X-Internal-Key` 필요) (MongoDB Atlas 허용 IP 문제로 로컬에서는 불가 → CloudType에서만).
 - [ ] Vercel `SEARCH_API_URL`, `DJANGO_API_URL` → 새 URL. NestJS CloudType `SEARCH_SERVICE_URL` → 새 URL.
 - [ ] 1~2일 관찰 후 Django CloudType 서비스 중지.
-- [ ] 저장소에서 Django 코드 삭제 (`vans_search_service/`, `search/api`, `search/models.py`, `migrations/`, `management/`, `manage.py`, gunicorn 설정, `cloudtype.yml`, `cloudtype-deploy.sh`, `Procfile`).
+- [ ] `vans_devblog_django` 저장소 보관(archive). 새 저장소로 옮겼으므로 Django 코드를 지우지 않고 저장소째 보관한다.
 - [ ] 메모리 참조 파일 갱신 (`ref_be_search.md`, `ref_services.md`, `MEMORY.md` 서비스 표).
 
 ---
