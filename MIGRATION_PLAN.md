@@ -1,7 +1,7 @@
 # Django → FastAPI 전환 계획 (vans_devblog_django)
 
 작성일: 2026-10-28
-상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5 완료 (2026-10-29)** → 다음은 Phase 2. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
+상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5·2 완료 (2026-10-29)** → 다음은 Phase 3. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
 
 ---
 
@@ -112,7 +112,7 @@ app/
     kis.py                 # /api/kis/snapshot/{symbol}/, /api/kis/stream/{symbol}/
   schemas/                 # [DTO]
     health.py              # HealthStatus
-    search.py              # SearchParams, AutocompleteParams, SearchResult, AutocompleteResult, PopularKeywords, CategoryList
+    search.py              # SearchParams, AutocompleteParams, SearchResult(SearchHit), AutocompleteResult, PopularKeywords(PopularKeyword), CategoryList
     sync.py                # SyncOptions, SyncResult, SyncStatus
     indexing.py            # SearchIndexPayload (NestJS가 보내는 타입과 같은 이름)
     kis.py                 # Snapshot
@@ -127,7 +127,7 @@ app/
     popular_search.py      # PopularSearchRepository — ES vans_popular_searches (현재 popular_search_document.py 로직)
     post.py                # PostRepository — MongoDB posts + categories lookup, 읽기 전용
   models/                  # [Entity]
-    post.py                # Post, PostSearchCriteria, POST_INDEX_MAPPING(PostDocument 대체), extract_tiptap_text
+    post.py                # Post, PostSearchCriteria, PostHit, PostSearchPage, POST_INDEX_MAPPING(PostDocument 대체), extract_tiptap_text
     popular_search.py      # PopularSearch, 인덱스 매핑
     analyzers.py           # BASE_INDEX_SETTINGS dict (elasticsearch_dsl analyzer 객체 제거)
   clients/                 # [Infrastructure]
@@ -197,13 +197,20 @@ requirements.txt, requirements-dev.txt, pyproject.toml(ruff 설정)
 - [x] 로거 `__name__`, `Optional` → `X | None`, `except ... as exc`. 응답 스키마 `schemas/health.py`(`HealthStatus`, `UnhealthyStatus`) 추가.
 
 ### Phase 2 — 검색 API
-- [ ] `schemas/search.py`: `SearchParams`(query≤200, mainCategory, subCategory, theme/category 하위호환, tags CSV→list 최대 10개, language ko/en/all, date_from/to + 순서 검증, page≥1, page_size 1~100, sort relevance/date_desc/date_asc), `AutocompleteParams`(query 1~100자, limit 1~20).
-- [ ] `repositories/post_index.py`: `POSTS_INDEX = "posts"`(posts_v2를 가리키는 alias) 상수. ES 쿼리를 8.x 문법으로 포팅 (`body=` → `query=`/`source=`/`highlight=`…). 쿼리 내용은 동일. 검색 조건은 `models/post.py`의 `PostSearchCriteria`.
-- [ ] `services/search.py` 포팅(`cache_service` 흡수). 응답 dict 형식 `{total,page,page_size,total_pages,post_ids,results,aggregations}` 유지.
-- [ ] `popular/`, `categories/` (categories는 현재 Mongo 클라이언트 None → 항상 fallback 목록 반환. 동작 그대로 유지하되 주석으로 명시).
-- [ ] golden 파일과 응답 diff.
+- [x] `schemas/search.py`: `SearchParams`(query≤200, mainCategory, subCategory, tags CSV→list 최대 10개, language ko/en/all, date_from/to + 순서 검증, page≥1, page_size 1~100, sort relevance/date_desc/date_asc, 문자열 앞뒤 공백 제거), `AutocompleteParams`(query 1~100자, limit 1~20). theme/category는 Django serializer에 선언이 없어 무시되던 파라미터라 받지 않는다. date_from/to는 Django처럼 검사만 하고 검색에 쓰지 않는다.
+- [x] `repositories/post_index.py`(`POSTS_INDEX = "posts"`, `search`, `list_by_prefix`)와 `repositories/popular_search.py`(`list_top`, `upsert`). 쿼리 내용은 Django와 같고 8.x 문법(`body=` → `query=`/`source=`/`from_=`…)으로 옮겼다. 실제 8.x 클라이언트가 만드는 요청 본문을 Django 쿼리와 대조했다(ES 서버 없이 transport 단에서 확인).
+- [x] `services/search.py`(`cache_service` 흡수). 응답 형식 `{total,page,page_size,total_pages,post_ids,results,aggregations}` 유지. 인기 검색어 갱신은 daemon 스레드 대신 `BackgroundTasks`(dependencies.py가 `add_task`를 서비스에 넘긴다).
+- [x] `popular/`, `categories/`. categories는 Django처럼 고정 목록(Mongo 클라이언트가 없어 항상 fallback이던 동작).
+- [x] golden 비교: 키 구조·상태 코드를 가짜 리포지토리로 테스트(`tests/routers/test_search.py`). 실제 ES 응답 비교는 Phase 6 수동 검증에서.
+
+Django와 달라진 곳 (코드에 주석):
+- 검색 캐시 키에 정렬을 넣었다 (Django는 5분 안에 정렬만 바꾸면 이전 정렬 결과를 돌려줬다).
+- 자동완성 캐시 키에 limit을 넣고 language를 뺐다 (language는 쿼리에 쓰이지 않는다). 후보 순서는 set 대신 검색 결과 순서.
+- 검색 ES 오류의 500 본문이 전역 핸들러 형식(`"error": "Internal server error"`)이다. 프론트는 상태 코드와 `message`만 읽는다. 자동완성·인기 검색어는 Django처럼 ES 오류에도 빈 목록 200.
+- 400 `details`에서 `query` 필드 이름이 지워지던 핸들러 버그를 고쳤다(파라미터 위치 이름과 겹침).
 
 ### Phase 3 — 내부 인덱싱 + 동기화 + CLI
+- [ ] lifespan에서 인기 검색어 인덱스 보장 (Django `apps.ready()`의 `create_index_if_not_exists` 대체, 매핑은 `models/popular_search.py`).
 - [ ] `models/post.py`: `PostDocument` 매핑을 `POST_INDEX_MAPPING` dict로 (이미 `migrate_search_index._build_mapping`에 dict 버전 존재 → 재사용). `PostIndexRepository.upsert(post)`, `delete(post_id)`는 `posts` alias에 대해 `es.index/es.delete`.
 - [ ] `routers/internal.py` + `services/indexing.py`: `POST/DELETE /api/internal/search/index/` + `/api/v1/search/internal/index/` 별칭. 403 `{"error":"Authentication failed","message":...}` 유지. 404 형식 유지.
 - [ ] `services/sync.py` 포팅. ES 접근은 `PostIndexRepository`로: `Search().count()` → `es.count(index="posts")`, `Search().delete()` → `es.delete_by_query`, `s.scan()` → `helpers.scan`.

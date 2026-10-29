@@ -4,12 +4,15 @@ from functools import partial
 from typing import Annotated
 
 from elasticsearch import Elasticsearch
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from pymongo import MongoClient
 
 from app.clients.es import is_es_reachable
 from app.clients.mongo import is_mongo_reachable
+from app.repositories.popular_search import PopularSearchRepository
+from app.repositories.post_index import PostIndexRepository
 from app.services.health import HealthService
+from app.services.search import SearchService
 
 
 def get_es(request: Request) -> Elasticsearch:
@@ -27,4 +30,15 @@ def get_health_service(
     return HealthService(
         is_es_reachable=partial(is_es_reachable, es),
         is_mongo_reachable=partial(is_mongo_reachable, mongo_client),
+    )
+
+
+def get_search_service(
+    es: Annotated[Elasticsearch, Depends(get_es)],
+    background_tasks: BackgroundTasks,
+) -> SearchService:
+    return SearchService(
+        post_index_repository=PostIndexRepository(es),
+        popular_search_repository=PopularSearchRepository(es),
+        run_in_background=background_tasks.add_task,
     )

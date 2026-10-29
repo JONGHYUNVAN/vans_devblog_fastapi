@@ -12,7 +12,7 @@ from app.clients.es import create_es
 from app.clients.mongo import create_mongo_client
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
-from app.routers import health
+from app.routers import health, search
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +53,7 @@ app.add_middleware(
 register_exception_handlers(app)
 
 app.include_router(health.router)
+app.include_router(search.router)
 
 
 @app.get("/", include_in_schema=False)

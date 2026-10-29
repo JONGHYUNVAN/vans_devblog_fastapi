@@ -27,8 +27,11 @@ def _details(exc: RequestValidationError) -> dict[str, list[str]]:
     """DRF serializer.errors 와 같은 {필드: [메시지]} 형태로 바꾼다."""
     details: dict[str, list[str]] = defaultdict(list)
     for error in exc.errors():
-        loc = [str(p) for p in error.get("loc", ()) if p not in _LOCATIONS]
-        field = ".".join(loc) or "non_field_errors"
+        loc = tuple(error.get("loc", ()))
+        # 첫 요소만 파라미터 위치(query·body…)다. 필드 이름이 위치 이름과 같을 수 있다(검색어 필드 query).
+        if loc and loc[0] in _LOCATIONS:
+            loc = loc[1:]
+        field = ".".join(str(part) for part in loc) or "non_field_errors"
         msg = str(error.get("msg", "invalid")).removeprefix("Value error, ")
         details[field].append(msg)
     return dict(details)
