@@ -1,7 +1,7 @@
 # Django → FastAPI 전환 계획 (vans_devblog_django)
 
 작성일: 2026-10-28
-상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5·2 완료 (2026-10-29)** → 다음은 Phase 3. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
+상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5·2·3 완료 (2026-10-29)** → 다음은 Phase 4. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
 
 ---
 
@@ -99,7 +99,7 @@
 ```
 app/
   main.py                  # FastAPI 인스턴스, lifespan(ES/Mongo 클라이언트 생성·종료, 인기검색어 인덱스 보장, KIS 매니저 종료), CORS, 예외 핸들러·라우터 등록
-  dependencies.py          # Depends 조립(클라이언트 → 리포지토리 → 서비스), verify_internal_key(Header X-Internal-Key)
+  dependencies.py          # Depends 조립(클라이언트 → 리포지토리 → 서비스), verify_internal_key(Header X-Internal-Key), open_clients(lifespan·CLI 공용)
   core/
     config.py              # pydantic-settings (아래 환경변수 표)
     cache.py               # TTL 캐시 (search 5분 / autocomplete 10분 / popular 1분 / health 30분 / last_sync 30일)
@@ -107,27 +107,28 @@ app/
   routers/                 # [Controller] 모듈마다 router 하나
     health.py              # GET /api/v1/search/health/
     search.py              # posts/, autocomplete/, popular/, categories/
-    sync.py                # sync/status/, sync/, sync/all/
+    sync.py                # sync/status/, sync/, sync/all/ (실행은 X-Internal-Key 필요)
     internal.py            # /api/internal/search/index/ (+ /api/v1/search/internal/index/ 별칭 유지)
     kis.py                 # /api/kis/snapshot/{symbol}/, /api/kis/stream/{symbol}/
   schemas/                 # [DTO]
     health.py              # HealthStatus
     search.py              # SearchParams, AutocompleteParams, SearchResult(SearchHit), AutocompleteResult, PopularKeywords(PopularKeyword), CategoryList
     sync.py                # SyncOptions, SyncResult, SyncStatus
-    indexing.py            # SearchIndexPayload (NestJS가 보내는 타입과 같은 이름)
+    indexing.py            # SearchIndexPayload (NestJS가 보내는 타입과 같은 이름), IndexingResult
     kis.py                 # Snapshot
   services/                # [Service]
     health.py              # HealthService — 포팅
     search.py              # SearchService — 검색·자동완성·인기검색어·카테고리 (cache_service 흡수, django 제거)
     sync.py                # SyncService — Mongo → ES 전체/증분 동기화, 고스트 문서 정리
     indexing.py            # IndexingService — 내부 API 단건 색인·삭제
+    index_setup.py         # IndexSetupService — 인기 검색어 인덱스 생성 (lifespan·CLI)
     kis.py                 # KISService — snapshot 대기, SSE 이벤트 생성
   repositories/            # [Repository]
     post_index.py          # PostIndexRepository — ES posts alias: 검색 쿼리(8.x 문법), 자동완성, upsert/delete, count, delete_by_query, scan
     popular_search.py      # PopularSearchRepository — ES vans_popular_searches (현재 popular_search_document.py 로직)
-    post.py                # PostRepository — MongoDB posts + categories lookup, 읽기 전용
+    post.py                # PostRepository — MongoDB posts + categories lookup → Post, 읽기 전용
   models/                  # [Entity]
-    post.py                # Post, PostSearchCriteria, PostHit, PostSearchPage, POST_INDEX_MAPPING(PostDocument 대체), extract_tiptap_text
+    post.py                # Post, PostSearchCriteria, PostHit, PostSearchPage, POST_INDEX_MAPPING(PostDocument 대체), extract_content_text
     popular_search.py      # PopularSearch, 인덱스 매핑
     analyzers.py           # BASE_INDEX_SETTINGS dict (elasticsearch_dsl analyzer 객체 제거)
   clients/                 # [Infrastructure]
@@ -138,7 +139,7 @@ app/
       auth.py                   # KISAuthClient — requests → httpx2, 캐시 → TTLCache(23h)
       stream.py                 # KISStreamManager — asyncio 네이티브 싱글톤 (스레드/Lock/queue.Queue 제거)
 cli/
-  __main__.py              # typer: sync-posts, migrate-index, setup-popular, test-mongo (서비스만 호출)
+  __main__.py              # typer: sync-posts, sync-status, setup-popular (서비스만 호출)
 tests/                     # app/ 구조를 따른다 (routers/, services/, repositories/, 폴더마다 __init__.py) + golden/
 Dockerfile
 requirements.txt, requirements-dev.txt, pyproject.toml(ruff 설정)
@@ -210,12 +211,24 @@ Django와 달라진 곳 (코드에 주석):
 - 400 `details`에서 `query` 필드 이름이 지워지던 핸들러 버그를 고쳤다(파라미터 위치 이름과 겹침).
 
 ### Phase 3 — 내부 인덱싱 + 동기화 + CLI
-- [ ] lifespan에서 인기 검색어 인덱스 보장 (Django `apps.ready()`의 `create_index_if_not_exists` 대체, 매핑은 `models/popular_search.py`).
-- [ ] `models/post.py`: `PostDocument` 매핑을 `POST_INDEX_MAPPING` dict로 (이미 `migrate_search_index._build_mapping`에 dict 버전 존재 → 재사용). `PostIndexRepository.upsert(post)`, `delete(post_id)`는 `posts` alias에 대해 `es.index/es.delete`.
-- [ ] `routers/internal.py` + `services/indexing.py`: `POST/DELETE /api/internal/search/index/` + `/api/v1/search/internal/index/` 별칭. 403 `{"error":"Authentication failed","message":...}` 유지. 404 형식 유지.
-- [ ] `services/sync.py` 포팅. ES 접근은 `PostIndexRepository`로: `Search().count()` → `es.count(index="posts")`, `Search().delete()` → `es.delete_by_query`, `s.scan()` → `helpers.scan`.
-- [ ] `sync/status/`, `sync/`, `sync/all/`.
-- [ ] `cli/` typer 명령 4개 (fetch_mongodb_data는 sync와 중복이라 제외).
+- [x] lifespan에서 인기 검색어 인덱스 보장 (Django `apps.ready()` 대체). ES가 없어도 앱은 뜬다(5초 1회 시도 후 경고).
+- [x] `models/analyzers.py`(`BASE_INDEX_SETTINGS`), `models/post.py`(`POST_INDEX_MAPPING`, `extract_content_text`), `models/popular_search.py`(매핑). 설정·매핑은 Django 정의와 dict 비교로 같음을 확인했다. `POST_INDEX_MAPPING`은 인덱스를 새로 만들 때를 위해 보존만 한다.
+- [x] `PostRepository`가 Mongo 문서를 `Post`로 바꿔 돌려준다(`CONVENTIONS.md` 9절 마지막 차이 해소). `PostIndexRepository.upsert/delete/delete_all/count/list_ids`. 저장 형식은 Django(elasticsearch_dsl)와 같다: None·빈 리스트는 저장하지 않고 빈 문자열은 저장, 날짜는 받은 문자열 그대로(Mongo datetime은 isoformat).
+- [x] `routers/internal.py` + `services/indexing.py`: `POST/DELETE /api/internal/search/index/` + `/api/v1/search/internal/index/` 별칭(문서에서 숨김). 403 본문은 golden과 같다.
+- [x] `services/sync.py` + `sync/status/`, `sync/`, `sync/all/`. 응답 형식과 상태 판정(completed/partial/failed, failed면 500), 고스트 문서 정리, 마지막 동기화 시각(30일 캐시) 유지.
+- [x] `cli/`: `sync-posts`, `sync-status`, `setup-popular` (`python -m cli --help`). Dockerfile에 `cli/` 복사 추가.
+
+결정 (2026-10-29):
+- 동기화 실행(`POST sync/`, `sync/all/`)에 `X-Internal-Key`를 요구한다. Django는 인증이 없어 누구나 전체 동기화·전체 삭제를 부를 수 있었다. 호출하는 코드는 없다(문서·swagger에만 있음). `GET sync/status/`는 공개 그대로.
+- `migrate-index`는 옮기지 않았다. 이미 끝난 일회성 마이그레이션(vans_posts → posts_v2)이고 다시 돌리면 운영 중인 posts_v2를 지우고 새로 만든다. 매핑만 `POST_INDEX_MAPPING`으로 보존.
+- `test_mongodb_connection`은 `sync-status`로 대체했다. 원본은 없는 필드(`is_published` 등)를 읽어 이미 동작하지 않았다. `fetch_mongodb_data`는 sync와 중복이라 제외.
+- `INTERNAL_API_KEY`가 비어 있으면 내부 API를 모두 거절한다(Django는 기본값 키가 코드에 있었다).
+
+Django와 달라진 곳 (코드에 주석):
+- `clear_existing`이 posts 인덱스만 비운다. Django는 인덱스를 지정하지 않아 인기 검색어까지 모든 인덱스의 문서를 지웠다.
+- `total_docs_in_elasticsearch`가 posts 인덱스만 센다. Django는 모든 인덱스 합계라 `sync_needed`가 늘 true였다.
+- 내부 API 404 본문이 `{"error": "Not found", "message"}`(Django: `"post_id"` 키), 500은 전역 핸들러 형식(Django: `message`에 예외 문자열). 동기화 실패 `message`에도 예외 문자열을 넣지 않는다. NestJS는 응답 본문을 읽지 않는다.
+- `batch_size`는 MongoDB 커서 배치 크기로만 쓴다. 색인은 Django처럼 한 건씩이다.
 
 ### Phase 4 — KIS
 - [ ] `clients/kis/auth.py`: httpx2 + TTLCache(82800s).

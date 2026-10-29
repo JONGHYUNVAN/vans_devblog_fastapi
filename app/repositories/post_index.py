@@ -1,8 +1,8 @@
-"""ES posts 인덱스 검색."""
+"""ES posts 인덱스 검색·색인·삭제."""
 
 from typing import Any
 
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, NotFoundError, helpers
 
 from app.models.post import Post, PostHit, PostSearchCriteria, PostSearchPage, PostSort
 
@@ -32,7 +32,7 @@ _HIGHLIGHT = {
 
 
 class PostIndexRepository:
-    """posts alias 에 대한 검색."""
+    """posts alias 에 대한 검색·색인·삭제. 문서 id 는 post_id 다."""
 
     def __init__(self, es: Elasticsearch) -> None:
         self._es = es
@@ -79,6 +79,36 @@ class PostIndexRepository:
             source=["title", "tags"],
         )
         return [Post.model_validate(hit["_source"]) for hit in response["hits"]["hits"]]
+
+    def upsert(self, post: Post) -> None:
+        """post_id 를 문서 id 로 저장한다. 있으면 통째로 바꾼다. ES 오류는 그대로 던진다."""
+        self._es.index(index=POSTS_INDEX, id=post.post_id, document=_to_source(post))
+
+    def delete(self, post_id: str) -> bool:
+        """문서를 지운다. 없으면 False. 그 밖의 ES 오류는 그대로 던진다."""
+        try:
+            self._es.delete(index=POSTS_INDEX, id=post_id)
+        except NotFoundError:
+            return False
+        return True
+
+    def delete_all(self) -> int:
+        """posts 인덱스의 문서를 모두 지우고 지운 수를 돌려준다. 인덱스와 매핑은 남는다."""
+        return self._es.delete_by_query(index=POSTS_INDEX, query={"match_all": {}})["deleted"]
+
+    def count(self) -> int:
+        return self._es.count(index=POSTS_INDEX)["count"]
+
+    def list_ids(self) -> list[str]:
+        """색인된 모든 문서의 post_id (scroll 로 전부 읽는다)."""
+        hits = helpers.scan(self._es, index=POSTS_INDEX, query={"_source": ["post_id"]})
+        return [hit["_source"]["post_id"] for hit in hits if hit["_source"].get("post_id")]
+
+
+def _to_source(post: Post) -> dict[str, Any]:
+    # Django(elasticsearch_dsl save)처럼 None·빈 리스트는 저장하지 않고 빈 문자열은 저장한다.
+    # 그래서 태그 없는 게시글은 검색 응답에서 tags 가 null 이다.
+    return {key: value for key, value in post.model_dump(by_alias=True).items() if value not in (None, [], {})}
 
 
 def _match_query(query: str) -> dict[str, Any]:

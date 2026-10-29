@@ -1,10 +1,10 @@
-"""ES 인기 검색어 인덱스 조회·갱신."""
+"""ES 인기 검색어 인덱스 조회·갱신과 인덱스 생성."""
 
 from datetime import datetime
 
 from elasticsearch import Elasticsearch
 
-from app.models.popular_search import PopularSearch
+from app.models.popular_search import POPULAR_SEARCH_INDEX_MAPPING, PopularSearch
 
 POPULAR_SEARCHES_INDEX = "vans_popular_searches"
 
@@ -48,3 +48,17 @@ class PopularSearchRepository:
                 document={"query": query, "search_count": 1, "last_searched": searched_at, "created_at": searched_at},
                 refresh=True,
             )
+
+    def create_index_if_missing(self) -> bool:
+        """인덱스가 없으면 만든다. 만들었으면 True. ES 오류는 그대로 던진다."""
+        if self._es.indices.exists(index=POPULAR_SEARCHES_INDEX):
+            return False
+        self._es.indices.create(index=POPULAR_SEARCHES_INDEX, **POPULAR_SEARCH_INDEX_MAPPING)
+        return True
+
+    def delete_index(self) -> bool:
+        """인덱스를 지운다. 없었으면 False. ES 오류는 그대로 던진다."""
+        if not self._es.indices.exists(index=POPULAR_SEARCHES_INDEX):
+            return False
+        self._es.indices.delete(index=POPULAR_SEARCHES_INDEX)
+        return True

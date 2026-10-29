@@ -23,6 +23,16 @@ class AppError(Exception):
         self.message = message
 
 
+class NotFoundError(AppError):
+    status_code = 404
+    error = "Not found"
+
+
+class AuthenticationError(AppError):
+    status_code = 403  # 계약: Django 서비스가 인증 실패에 403 을 돌려줬다
+    error = "Authentication failed"
+
+
 def _details(exc: RequestValidationError) -> dict[str, list[str]]:
     """DRF serializer.errors 와 같은 {필드: [메시지]} 형태로 바꾼다."""
     details: dict[str, list[str]] = defaultdict(list)

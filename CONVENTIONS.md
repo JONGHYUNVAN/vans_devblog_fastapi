@@ -31,7 +31,7 @@ app/
 ├─ models/                  [Entity] 저장된 문서의 형태 + ES 인덱스 매핑
 └─ clients/                 [Infrastructure] 연결 생성, 외부 API(KIS)
    └─ kis/                  외부 시스템 하나 = 하위 패키지 하나
-cli/                        [Controller] typer 명령. 라우터와 같은 규칙(서비스만 호출)
+cli/                        [Controller] typer 명령. 라우터와 같은 규칙(서비스만 호출). 서비스는 dependencies.py 의 open_clients·get_*_service 로 만든다
 tests/                      app/ 구조를 그대로 따른다(7절)
 ```
 
@@ -90,7 +90,7 @@ HTTP를 서비스 호출로 번역만 한다.
 | 의존(리포지토리, 설정값)은 생성자로 받는다 | `get_settings()`·클라이언트 생성을 서비스 안에서 직접 호출 |
 | KIS처럼 외부 API가 곧 데이터 원천이면 `clients/kis`를 생성자로 받아 쓴다 | ES 쿼리 DSL 조립(→ 리포지토리) |
 
-예외를 삼켜도 되는 경우는 계약이 요구할 때뿐이다(헬스체크의 degraded, 내부 색인 fire-and-forget, 인기검색어 갱신 실패, 자동완성·인기검색어 조회 실패의 빈 목록). 그때도 `logger.warning`을 남기고 주석으로 이유를 적는다. 헬스체크는 연결 자체를 확인하는 기능이라 예외적으로 `clients`의 연결 확인 함수를 쓴다.
+예외를 삼켜도 되는 경우는 계약이 요구할 때뿐이다(헬스체크의 degraded, 인기검색어 갱신 실패, 자동완성·인기검색어 조회 실패의 빈 목록, 동기화 결과를 `SyncResult(status=failed)`·건수 0으로 보고하는 동기화). 그때도 `logger.warning`을 남기고 주석으로 이유를 적는다. 헬스체크와 동기화 상태는 연결 자체를 보고하는 기능이라 예외적으로 `clients`의 연결 확인 함수를 쓴다(`dependencies.py`가 묶어 넘긴다).
 
 ### 리포지토리 (`repositories/<저장소>.py`)
 
@@ -256,8 +256,8 @@ class PostIndexRepository:
 
 ## 9. 현행 코드와 다른 곳
 
-구조·이름 차이는 2026-10-29 Phase 1.5에서 정리했다. 남은 차이와 옮기는 단계(옮기면 행을 지운다):
+구조·이름 차이는 2026-10-29 Phase 1.5에서, 마지막 차이(`PostRepository`가 Mongo 원본 `dict`를 돌려주던 것)는 Phase 3에서 정리했다. 지금은 없다.
+새로 생기면 아래 표에 적고, 옮기면 행을 지운다.
 
 | 현행 | 이 문서 | 옮기는 단계 |
 |---|---|---|
-| `PostRepository`가 Mongo 원본 문서(`dict`)를 돌려준다 | 엔티티 `Post`(`models/post.py`)로 바꿔 반환 | Phase 3 (`models/post.py` 작성 때) |

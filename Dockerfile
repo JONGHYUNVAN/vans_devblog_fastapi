@@ -11,6 +11,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+COPY cli ./cli
 
 RUN useradd --create-home --uid 1000 appuser
 USER appuser

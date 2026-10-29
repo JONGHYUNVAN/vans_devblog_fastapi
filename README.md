@@ -20,6 +20,17 @@ cp .env.example .env                                          # 값 채우기
 - 헬스체크: http://localhost:8002/api/v1/search/health/
 - 이 PC는 MongoDB Atlas 허용 IP에 없어서 로컬 헬스체크의 mongodb는 down으로 나온다.
 
+## 운영 명령
+
+```bash
+.venv/Scripts/python -m cli --help
+.venv/Scripts/python -m cli sync-status                 # MongoDB·ES 연결과 게시글 수
+.venv/Scripts/python -m cli sync-posts --dry-run        # MongoDB → ES 동기화 (건수만 확인)
+.venv/Scripts/python -m cli setup-popular               # 인기 검색어 인덱스 생성
+```
+
+컨테이너에서는 `python -m cli ...`. HTTP로는 `POST /api/v1/search/sync/`(`X-Internal-Key` 필요)가 같은 동기화를 한다.
+
 ## 테스트
 
 ```bash

@@ -7,4 +7,5 @@ pymongo==4.19.0
 certifi==2026.10.23
 cachetools==7.2.6
 httpx2==2.16.0
+typer==0.27.3
 tzdata==2026.5
