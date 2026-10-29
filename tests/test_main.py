@@ -1,4 +1,7 @@
+"""app/main.py 테스트."""
+
+
 def test_root_redirects_to_docs(client):
-    res = client.get("/", follow_redirects=False)
-    assert res.status_code in (302, 307)
-    assert res.headers["location"] == "/docs"
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code in (302, 307)
+    assert response.headers["location"] == "/docs"

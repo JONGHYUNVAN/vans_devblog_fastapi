@@ -1,3 +1,5 @@
+"""HealthService 테스트."""
+
 from app.services.health import CHECK_TIMEOUT, HealthService
 
 

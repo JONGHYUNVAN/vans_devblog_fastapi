@@ -26,10 +26,10 @@ class AppError(Exception):
 def _details(exc: RequestValidationError) -> dict[str, list[str]]:
     """DRF serializer.errors 와 같은 {필드: [메시지]} 형태로 바꾼다."""
     details: dict[str, list[str]] = defaultdict(list)
-    for err in exc.errors():
-        loc = [str(p) for p in err.get("loc", ()) if p not in _LOCATIONS]
+    for error in exc.errors():
+        loc = [str(p) for p in error.get("loc", ()) if p not in _LOCATIONS]
         field = ".".join(loc) or "non_field_errors"
-        msg = str(err.get("msg", "invalid")).removeprefix("Value error, ")
+        msg = str(error.get("msg", "invalid")).removeprefix("Value error, ")
         details[field].append(msg)
     return dict(details)
 

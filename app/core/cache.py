@@ -19,7 +19,7 @@ _MAX_ENTRIES = 1000
 
 
 class TTLStore:
-    def __init__(self, max_entries: int = _MAX_ENTRIES):
+    def __init__(self, max_entries: int = _MAX_ENTRIES) -> None:
         self._data: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
         self._max = max_entries
@@ -51,13 +51,13 @@ class TTLStore:
 
     def _evict(self) -> None:
         now = time.monotonic()
-        expired = [k for k, (exp, _) in self._data.items() if exp < now]
-        for k in expired:
-            del self._data[k]
+        expired = [key for key, (expires_at, _) in self._data.items() if expires_at < now]
+        for key in expired:
+            del self._data[key]
         if len(self._data) >= self._max:
             # 가장 먼저 만료될 항목부터 1/4 제거
-            for k, _ in sorted(self._data.items(), key=lambda kv: kv[1][0])[: self._max // 4]:
-                del self._data[k]
+            for key, _ in sorted(self._data.items(), key=lambda item: item[1][0])[: self._max // 4]:
+                del self._data[key]
 
 
 cache = TTLStore()

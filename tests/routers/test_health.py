@@ -1,3 +1,5 @@
+"""헬스체크 라우터 테스트. 응답 계약(golden)과 500 unhealthy 형식을 확인한다."""
+
 from app.dependencies import get_health_service
 from app.main import app
 from app.services.health import HealthService
@@ -15,10 +17,10 @@ def test_health_response_keys_match_golden(client):
     )
     golden = load_golden("health")
 
-    res = client.get("/api/v1/search/health/")
+    response = client.get("/api/v1/search/health/")
 
-    assert res.status_code == 200
-    body = res.json()
+    assert response.status_code == 200
+    body = response.json()
     assert set(body) == set(golden)
     assert set(body["components"]) == set(golden["components"])
     assert body["components"]["mongodb"] == golden["components"]["mongodb"]
@@ -27,10 +29,10 @@ def test_health_response_keys_match_golden(client):
 def test_health_returns_500_unhealthy_when_unexpected_error(client):
     app.dependency_overrides[get_health_service] = FakeHealthService
 
-    res = client.get("/api/v1/search/health/")
+    response = client.get("/api/v1/search/health/")
 
-    assert res.status_code == 500
-    body = res.json()
+    assert response.status_code == 500
+    body = response.json()
     assert body["status"] == "unhealthy"
     assert body["error"] == "boom"
     assert set(body) == {"status", "service", "version", "error", "cached", "last_check"}

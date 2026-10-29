@@ -1,3 +1,5 @@
+"""공용 픽스처: 테스트마다 캐시·의존성 덮어쓰기 초기화, lifespan 없는 TestClient, golden 로더."""
+
 import json
 from pathlib import Path
 
