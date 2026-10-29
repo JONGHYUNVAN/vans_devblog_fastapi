@@ -1,8 +1,9 @@
 """MongoDB 클라이언트. Post BE 의 posts/categories 컬렉션을 읽기 전용으로 조회한다."""
 
 import logging
+from collections.abc import Iterator
 from datetime import datetime
-from typing import Any, Iterator, Optional
+from typing import Any
 
 import certifi
 from pymongo import MongoClient
@@ -33,7 +34,7 @@ def _uses_tls(url: str) -> bool:
 class MongoDBClient:
     """posts 컬렉션 조회 클라이언트. 생성 시 ping 으로 연결을 확인하고, 실패하면 ConnectionFailure."""
 
-    def __init__(self, timeout: Optional[int] = None, settings: Optional[Settings] = None):
+    def __init__(self, timeout: int | None = None, settings: Settings | None = None):
         s = settings or get_settings()
         url = _connection_url(s)
 
@@ -89,21 +90,26 @@ class MongoDBClient:
         Django 버전은 여기서 find() 를 써서 카테고리가 빠졌고, 증분 동기화가 ES 의 카테고리를 빈 값으로 덮어썼다.
         """
         match = {"$or": [{"updatedAt": {"$gte": since}}, {"createdAt": {"$gte": since}}]}
-        yield from self.posts_collection.aggregate(
-            self._category_lookup_pipeline(match), batchSize=batch_size
-        )
+        yield from self.posts_collection.aggregate(self._category_lookup_pipeline(match), batchSize=batch_size)
 
     def get_all_post_ids(self) -> set[str]:
         return {str(doc["_id"]) for doc in self.posts_collection.find({}, {"_id": 1})}
 
     @staticmethod
-    def _category_lookup_pipeline(match: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    def _category_lookup_pipeline(match: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """categories 컬렉션에서 mainCategoryId/subCategoryId 의 value 를 mainCategory/subCategory 로 붙인다."""
         pipeline: list[dict[str, Any]] = []
         if match:
             pipeline.append({"$match": match})
         pipeline += [
-            {"$lookup": {"from": "categories", "localField": "mainCategoryId", "foreignField": "_id", "as": "_mainCat"}},
+            {
+                "$lookup": {
+                    "from": "categories",
+                    "localField": "mainCategoryId",
+                    "foreignField": "_id",
+                    "as": "_mainCat",
+                }
+            },
             {"$lookup": {"from": "categories", "localField": "subCategoryId", "foreignField": "_id", "as": "_subCat"}},
             {
                 "$addFields": {

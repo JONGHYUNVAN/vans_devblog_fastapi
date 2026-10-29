@@ -1,7 +1,6 @@
 """Elasticsearch 클라이언트 생성. 검색 쿼리 로직은 Phase 2 에서 옮긴다."""
 
 import logging
-from typing import Optional
 
 from elasticsearch import Elasticsearch
 
@@ -13,7 +12,7 @@ logger = logging.getLogger("search")
 POSTS_INDEX = "posts"
 
 
-def create_es(timeout: Optional[int] = None, settings: Optional[Settings] = None) -> Elasticsearch:
+def create_es(timeout: int | None = None, settings: Settings | None = None) -> Elasticsearch:
     s = settings or get_settings()
     return Elasticsearch(
         hosts=[s.elasticsearch_url],
