@@ -1,0 +1,11 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "B", "UP", "SIM", "G"]
+# 코드 줄 길이는 formatter 가 맞춘다. 주석·docstring 은 formatter 가 줄이지 않고 한글이 폭 2로 계산돼 E501 이 한국어 주석마다 걸린다.
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
