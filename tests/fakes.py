@@ -1,7 +1,9 @@
-"""여러 테스트 파일이 쓰는 가짜 리포지토리."""
+"""여러 테스트 파일이 쓰는 가짜 구현과 KIS 샘플 데이터."""
 
+import asyncio
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 
 from app.models.popular_search import PopularSearch
 from app.models.post import Post, PostSearchCriteria, PostSearchPage
@@ -109,3 +111,46 @@ class FakePostRepository:
         if self.error:
             raise self.error
         return [post.post_id for post in self.posts if post.post_id]
+
+
+def kis_trade_body(**overrides: str) -> str:
+    """체결가(H0STCNT0) 본문 15필드. overrides 는 {"f2": "58300"} 처럼 필드 번호로 바꾼다."""
+    fields = ["005930", "153000", "58300", "2", "200", "0.34", "58200", "58000", "58500", "57800"]
+    fields += ["58310", "58290", "100", "5000000", "290000000000"]
+    for name, value in overrides.items():
+        fields[int(name.removeprefix("f"))] = value
+    return "^".join(fields)
+
+
+def kis_orderbook_body() -> str:
+    """호가(H0STASP0) 본문 45필드."""
+    fields = ["005930", "153000", "0"]
+    fields += [str(58300 + i * 10) for i in range(10)]  # 매도호가
+    fields += [str(58290 - i * 10) for i in range(10)]  # 매수호가
+    fields += [str(1000 + i * 100) for i in range(10)]  # 매도잔량
+    fields += [str(900 + i * 100) for i in range(10)]  # 매수잔량
+    fields += ["55000", "49500"]
+    return "^".join(fields)
+
+
+class FakeKISStream:
+    """KISStreamManager 대역. 스냅샷은 고정값, 구독 큐는 테스트가 직접 채운다."""
+
+    def __init__(self, snapshot: dict[str, Any] | None = None) -> None:
+        self.snapshot = snapshot
+        self.queues: dict[str, asyncio.Queue[tuple[str, dict[str, Any]]]] = {}
+        self.unsubscribed: list[str] = []
+        self.ensure_calls = 0
+
+    def get_snapshot(self, symbol: str) -> dict[str, Any] | None:
+        return self.snapshot
+
+    def ensure_connected(self) -> None:
+        self.ensure_calls += 1
+
+    def subscribe(self, symbol: str) -> asyncio.Queue[tuple[str, dict[str, Any]]]:
+        self.queues[symbol] = asyncio.Queue()
+        return self.queues[symbol]
+
+    def unsubscribe(self, symbol: str, queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
+        self.unsubscribed.append(symbol)

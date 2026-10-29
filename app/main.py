@@ -10,10 +10,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
+from app.clients.kis.stream import create_kis_stream
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.dependencies import get_index_setup_service, open_clients
-from app.routers import health, internal, search, sync
+from app.routers import health, internal, kis, search, sync
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,12 +32,19 @@ _STARTUP_ES_TIMEOUT = 5
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """ES·MongoDB 클라이언트를 한 번 만들어 app.state 에 두고, 종료 때 닫는다. 인기 검색어 인덱스도 준비한다."""
+    """ES·MongoDB 클라이언트와 KIS 스트림 매니저를 한 번 만들어 app.state 에 두고, 종료 때 닫는다.
+
+    인기 검색어 인덱스도 준비한다. KIS 연결은 첫 구독 때 맺는다.
+    """
     with open_clients(settings) as (es, mongo_client):
         app.state.es = es
         app.state.mongo_client = mongo_client
+        app.state.kis_stream = create_kis_stream(settings)
         await _ensure_popular_index(es)
-        yield
+        try:
+            yield
+        finally:
+            await app.state.kis_stream.close()
 
 
 async def _ensure_popular_index(es: Elasticsearch) -> None:
@@ -74,6 +82,7 @@ app.include_router(health.router)
 app.include_router(search.router)
 app.include_router(sync.router)
 app.include_router(internal.router)
+app.include_router(kis.router)
 
 
 @app.get("/", include_in_schema=False)

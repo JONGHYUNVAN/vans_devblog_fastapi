@@ -1,7 +1,7 @@
 # Django → FastAPI 전환 계획 (vans_devblog_django)
 
 작성일: 2026-10-28
-상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5·2·3 완료 (2026-10-29)** → 다음은 Phase 4. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
+상태: **Phase 0·1 완료 (2026-10-28)**. 계층형 구조·코드 컨벤션 확정(`CONVENTIONS.md`), **Phase 1.5·2·3·4 완료 (2026-10-29)** → 다음은 Phase 5. 원본 계획은 `vans_devblog_django/docs/FASTAPI_MIGRATION_PLAN.md`.
 
 ---
 
@@ -98,12 +98,12 @@
 
 ```
 app/
-  main.py                  # FastAPI 인스턴스, lifespan(ES/Mongo 클라이언트 생성·종료, 인기검색어 인덱스 보장, KIS 매니저 종료), CORS, 예외 핸들러·라우터 등록
+  main.py                  # FastAPI 인스턴스, lifespan(ES/Mongo 클라이언트·KIS 매니저 생성·종료, 인기검색어 인덱스 보장), CORS, 예외 핸들러·라우터 등록
   dependencies.py          # Depends 조립(클라이언트 → 리포지토리 → 서비스), verify_internal_key(Header X-Internal-Key), open_clients(lifespan·CLI 공용)
   core/
     config.py              # pydantic-settings (아래 환경변수 표)
-    cache.py               # TTL 캐시 (search 5분 / autocomplete 10분 / popular 1분 / health 30분 / last_sync 30일)
-    exceptions.py          # AppError 계열 + 핸들러: {"error","message"} / 400 {"error","details"}
+    cache.py               # TTL 캐시 (search 5분 / autocomplete 10분 / popular 1분 / health 30분 / last_sync 30일 / KIS approval_key 23시간)
+    exceptions.py          # AppError 계열 + 핸들러: {"error","message"} / 400 {"error","details"} / KISError {"success":false,"error":{message,code}}
   routers/                 # [Controller] 모듈마다 router 하나
     health.py              # GET /api/v1/search/health/
     search.py              # posts/, autocomplete/, popular/, categories/
@@ -115,7 +115,7 @@ app/
     search.py              # SearchParams, AutocompleteParams, SearchResult(SearchHit), AutocompleteResult, PopularKeywords(PopularKeyword), CategoryList
     sync.py                # SyncOptions, SyncResult, SyncStatus
     indexing.py            # SearchIndexPayload (NestJS가 보내는 타입과 같은 이름), IndexingResult
-    kis.py                 # Snapshot
+    kis.py                 # Snapshot(SnapshotData)
   services/                # [Service]
     health.py              # HealthService — 포팅
     search.py              # SearchService — 검색·자동완성·인기검색어·카테고리 (cache_service 흡수, django 제거)
@@ -136,8 +136,8 @@ app/
     mongo.py               # create_mongo_client, check_connection (TLS일 때만 certifi CA)
     kis/
       constants.py, parser.py   # 그대로
-      auth.py                   # KISAuthClient — requests → httpx2, 캐시 → TTLCache(23h)
-      stream.py                 # KISStreamManager — asyncio 네이티브 싱글톤 (스레드/Lock/queue.Queue 제거)
+      auth.py                   # KISAuthClient — requests → httpx2.AsyncClient, 캐시 → core/cache(23h)
+      stream.py                 # KISStreamManager — asyncio 네이티브, lifespan 이 app.state 에 둔다 (스레드/Lock/queue.Queue 제거)
 cli/
   __main__.py              # typer: sync-posts, sync-status, setup-popular (서비스만 호출)
 tests/                     # app/ 구조를 따른다 (routers/, services/, repositories/, 폴더마다 __init__.py) + golden/
@@ -231,11 +231,21 @@ Django와 달라진 곳 (코드에 주석):
 - `batch_size`는 MongoDB 커서 배치 크기로만 쓴다. 색인은 Django처럼 한 건씩이다.
 
 ### Phase 4 — KIS
-- [ ] `clients/kis/auth.py`: httpx2 + TTLCache(82800s).
-- [ ] `clients/kis/stream.py`: 스레드·`threading.Lock`·`queue.Queue` 제거. `subscribe()`가 `asyncio.Queue`를 반환, 매니저 태스크는 첫 구독 시 lazy 시작. 재연결(최대 10회/5초), PINGPONG, AES 복호화, 파서는 그대로.
-- [ ] `services/kis.py` + `routers/kis.py`. `snapshot`: `await asyncio.sleep(5)`. 응답 형식 `{"success","data":{symbol,name,trade,orderbook,updatedAt}}` 및 400/503 형식 유지.
-- [ ] `stream`: `StreamingResponse(media_type="text/event-stream")`, 헤더 `Cache-Control: no-cache`, `X-Accel-Buffering: no`. 이벤트명 `connected/trade/orderbook/ping/error`, ping 15초 유지. `request.is_disconnected()`로 구독 해제. KIS 미설정 시 ping-only degraded 스트림 유지.
-- [ ] `tests/test_kis*.py` 포팅 (현재 44개).
+- [x] `clients/kis/constants.py`·`parser.py`(그대로), `auth.py`(httpx2 `AsyncClient`, 접속키 23시간 캐시는 `core/cache.py`, 동시 발급 방지 락).
+- [x] `clients/kis/stream.py`: 스레드·`threading.Lock`·`queue.Queue` 제거, 앱 이벤트 루프의 태스크 하나. `subscribe()`가 `asyncio.Queue`를 돌려주고 첫 구독 때 연결한다. 재연결(5초, 연속 실패 10회 초과 시 멈춤), PINGPONG, AES 복호화, 파서는 그대로. 종료 때 1000으로 정상 종료한다.
+- [x] `services/kis.py` + `routers/kis.py`. `snapshot`은 `await asyncio.sleep(5)`. 응답 형식 `{"success","data":{symbol,name,trade,orderbook,updatedAt}}`, 400/503 형식 유지(`KISError` 핸들러).
+- [x] `stream`: `StreamingResponse`, 헤더 `Cache-Control: no-cache`, `X-Accel-Buffering: no`. 이벤트 `connected/trade/orderbook/ping/error`, ping 15초. 연결이 끊기면 구독 해제(Starlette 취소 + `request.is_disconnected()`). KIS 미설정이면 30초 ping만.
+- [x] 테스트 29개(파서·인증·매니저·서비스·라우터). 매니저는 로컬 WebSocket 서버로 구독·PINGPONG·복호화·재연결을 확인한다. 비동기 테스트는 anyio pytest 플러그인(`@pytest.mark.anyio`, 추가 의존성 없음).
+- [x] 실제 uvicorn + 가짜 KIS 서버로 확인: `connected` 0.2초, 체결 중계, 15초 ping, 클라이언트 종료 → KIS 구독 해제, 스냅샷 캐시.
+
+Django와 달라진 곳 (코드에 주석):
+- 연속 실패 10회로 멈춘 뒤에도 다음 구독이 연결을 다시 시작한다. Django는 실패 횟수를 초기화하지 않아 프로세스를 재시작할 때까지 KIS가 죽어 있었다.
+- 서버가 연결을 정상 종료해도 5초 쉬고 다시 붙는다(Django는 바로 재접속).
+- 구독 해제·재구독이 겹치면 현재 구독자 기준으로 보낼지 정한다.
+- 운영 Django의 stream은 25초 동안 본문이 없었다(golden). 지금은 `connected`가 바로 간다.
+
+남은 동작 (Django 그대로, 바꾸지 않음):
+- 스냅샷은 SSE 구독자가 있는 종목만 데이터가 있다. KIS 구독을 SSE 구독자 기준으로만 하기 때문에, 구독자 없는 종목의 스냅샷은 5초 기다린 뒤 null을 돌려준다.
 
 ### Phase 5 — 테스트·문서
 - [ ] `TestClient`(httpx2) 기반으로 `test_api`, `test_services`, `test_clients` 포팅. e2e는 마커로 분리.
@@ -264,11 +274,9 @@ pymongo
 httpx2  # httpx 후속(Pydantic 관리). starlette TestClient 도 httpx2 를 우선 사용
 websockets
 pycryptodome
-cachetools
 typer
-python-dotenv
 # dev
-pytest, pytest-asyncio, pytest-timeout, ruff
+pytest, ruff   (비동기 테스트는 anyio 플러그인 — anyio 는 starlette 의존성)
 ```
 
 삭제: Django, djangorestframework, django-cors-headers, whitenoise, dj-database-url, psycopg2-binary, django-redis, redis, django-elasticsearch-dsl, elasticsearch-dsl, PyMySQL, drf-yasg, gunicorn, requests, uvloop(uvicorn[standard]에 포함), setproctitle.

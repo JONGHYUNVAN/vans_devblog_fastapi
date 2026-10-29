@@ -205,7 +205,7 @@ PEP 8과 FastAPI 공식 문서의 관례를 따른다. 계층은 패키지 이�
 
 - **타입 힌트**: 공개 함수·메서드는 모든 매개변수와 반환형을 적는다. `X | None`(`Optional` 쓰지 않음), 내장 제네릭(`list[str]`, `dict[str, Any]`), 반복자는 `collections.abc.Iterator`. `Any`는 ES·Mongo 원본 문서를 다룰 때만.
 - **import**: 항상 절대경로(`from app.services.search import SearchService`). 상대 import, `import *` 금지. `__init__.py`는 비워 둔다(재노출로 import 경로를 줄이지 않는다). 순서는 ruff(isort)가 정한다.
-- **의존성 주입**: 서비스·리포지토리는 클래스이고 의존은 생성자로 받는다. 모듈 전역 인스턴스를 만들지 않는다 — 예외는 lifespan 수명과 같은 `core/cache.py`의 `cache`와 KIS 스트림 매니저뿐이다.
+- **의존성 주입**: 서비스·리포지토리는 클래스이고 의존은 생성자로 받는다. 모듈 전역 인스턴스를 만들지 않는다 — 예외는 `core/cache.py`의 `cache`뿐이다. 앱 수명과 같은 객체(ES·Mongo 클라이언트, KIS 스트림 매니저)는 lifespan이 만들어 `app.state`에 둔다.
 - **Pydantic v2 API만**: `model_dump`, `model_validate`, `field_validator`, `ConfigDict`. v1 API(`.dict()`, `parse_obj`, `@validator`, `class Config`) 금지.
 - **시간**: `datetime.now(UTC)`. naive `datetime` 금지. KST는 표시용 문자열(`last_check`)에만.
 - **로깅**: 모듈마다 `logger = logging.getLogger(__name__)`. `print` 금지. 인자는 `%s` 지연 포맷(`logger.warning("동기화 실패: %s", exc)`) — f-string 금지(ruff G004). 비밀번호·토큰·API 키·접속 URI는 어떤 레벨에도 남기지 않는다. 스택이 필요하면 `logger.exception`.
@@ -245,7 +245,8 @@ class PostIndexRepository:
 - 이름: 파일 `test_<대상 파일명>.py`, 함수 `test_<대상>_<기대 결과>[_when_<조건>]`(예: `test_health_degraded_when_mongo_down`). 테스트 더블은 손으로 짠 구현이 `Fake<클래스>`, `MagicMock`이 `mock_<대상>`.
 - 단위 테스트는 네트워크·실제 DB 없이 돈다. 서비스는 가짜 리포지토리를 생성자로 넘기고, 라우터는 `app.dependency_overrides`로 서비스를 바꾼다. `monkeypatch`로 모듈 내부 함수를 바꾸지 않는다 — DI로 해결한다.
 - 응답 계약은 `tests/golden/`과 키 구조·상태 코드를 비교한다. 계약이 걸린 엔드포인트는 golden 테스트를 꼭 둔다.
-- 실제 ES·Mongo·KIS에 붙는 테스트는 `@pytest.mark.e2e`를 달고 기본 실행에서 뺀다.
+- 비동기 테스트는 `@pytest.mark.anyio`(anyio pytest 플러그인, `tests/conftest.py`가 asyncio로 고정). pytest-asyncio는 쓰지 않는다.
+- 실제 ES·Mongo·KIS에 붙는 테스트는 `@pytest.mark.e2e`를 달고 기본 실행에서 뺀다. 로컬에 띄운 가짜 서버(WebSocket 등)는 외부 네트워크가 아니므로 기본 실행에 둔다.
 - 서비스 메서드마다 정상 1건 + 던지는 예외 종류마다 1건. 버그 수정 커밋에는 그 버그를 재현하는 테스트를 같이 넣는다.
 
 ## 8. Git

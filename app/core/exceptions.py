@@ -33,6 +33,22 @@ class AuthenticationError(AppError):
     error = "Authentication failed"
 
 
+class KISError(AppError):
+    """KIS 엔드포인트 오류. 응답 형식이 다르다: {"success": false, "error": {"message", "code"}} (Django kis 앱 계약)."""
+
+    code: str = "KIS_ERROR"
+
+
+class InvalidSymbolError(KISError):
+    status_code = 400
+    code = "INVALID_SYMBOL"
+
+
+class KISNotConfiguredError(KISError):
+    status_code = 503
+    code = "KIS_NOT_CONFIGURED"
+
+
 def _details(exc: RequestValidationError) -> dict[str, list[str]]:
     """DRF serializer.errors 와 같은 {필드: [메시지]} 형태로 바꾼다."""
     details: dict[str, list[str]] = defaultdict(list)
@@ -48,11 +64,17 @@ def _details(exc: RequestValidationError) -> dict[str, list[str]]:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """AppError, 요청 검증 오류(400), 처리하지 못한 예외(500)의 응답 형식을 등록한다."""
+    """AppError·KISError, 요청 검증 오류(400), 처리하지 못한 예외(500)의 응답 형식을 등록한다."""
 
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError) -> JSONResponse:
         return JSONResponse({"error": exc.error, "message": exc.message}, status_code=exc.status_code)
+
+    @app.exception_handler(KISError)
+    async def _kis_error(_: Request, exc: KISError) -> JSONResponse:
+        return JSONResponse(
+            {"success": False, "error": {"message": exc.message, "code": exc.code}}, status_code=exc.status_code
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:

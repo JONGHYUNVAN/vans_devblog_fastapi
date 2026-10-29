@@ -29,3 +29,9 @@ def _isolate():
 def client():
     # with 블록 없이 만들어 lifespan(실제 ES·Mongo 클라이언트 생성)을 돌리지 않는다. 의존성은 각 테스트가 덮어쓴다.
     return TestClient(app)
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    # @pytest.mark.anyio 테스트를 asyncio 로만 돌린다 (앱이 asyncio 전제)
+    return "asyncio"

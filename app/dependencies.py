@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, Depends, Header, Request
 from pymongo import MongoClient
 
 from app.clients.es import create_es, is_es_reachable
+from app.clients.kis.stream import KISStreamManager
 from app.clients.mongo import create_mongo_client, is_mongo_reachable
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
@@ -23,6 +24,7 @@ from app.repositories.post_index import PostIndexRepository
 from app.services.health import HealthService
 from app.services.index_setup import IndexSetupService
 from app.services.indexing import IndexingService
+from app.services.kis import KISService
 from app.services.search import SearchService
 from app.services.sync import SyncService
 
@@ -45,6 +47,10 @@ def get_es(request: Request) -> Elasticsearch:
 
 def get_mongo_client(request: Request) -> MongoClient:
     return request.app.state.mongo_client
+
+
+def get_kis_stream(request: Request) -> KISStreamManager:
+    return request.app.state.kis_stream
 
 
 def verify_internal_key(
@@ -97,3 +103,10 @@ def get_sync_service(
 
 def get_index_setup_service(es: Elasticsearch) -> IndexSetupService:
     return IndexSetupService(popular_search_repository=PopularSearchRepository(es))
+
+
+def get_kis_service(
+    kis_stream: Annotated[KISStreamManager, Depends(get_kis_stream)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> KISService:
+    return KISService(kis_stream=kis_stream, is_configured=settings.kis_configured)
