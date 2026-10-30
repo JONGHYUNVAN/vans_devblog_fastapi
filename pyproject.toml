@@ -1,6 +1,8 @@
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# 설계 문서(agents_design/*.md)의 코드 블록은 주석을 정렬한 예시라 formatter 대상이 아니다.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "B", "UP", "SIM", "G"]
