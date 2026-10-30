@@ -14,7 +14,7 @@
 
 ## 1. 계층과 폴더 구조
 
-계층 우선으로 나눈다. 기능이 5개(health, search, sync, internal, kis)뿐이고 search·sync·internal이 같은 posts 인덱스를 쓰므로, 기능별 폴더보다 계층별 폴더가 import 방향이 단순하다.
+계층 우선으로 나눈다. 기능이 5개(health, search, sync, internal, kis)와 에이전트 파이프라인(설계는 `agents_design/`)이고 search·sync·internal이 같은 posts 인덱스를 쓰므로, 기능별 폴더보다 계층별 폴더가 import 방향이 단순하다. 파이프라인도 같은 계층 폴더에 들어간다(`agents_design/06_fastapi_architecture.md` 2절).
 
 ```
 app/
@@ -27,10 +27,13 @@ app/
 ├─ routers/                 [Controller] HTTP 요청을 서비스 호출로 번역
 ├─ schemas/                 [DTO] API 요청·응답 Pydantic 모델
 ├─ services/                [Service] 비즈니스 로직
+├─ agents/                  [프롬프트 자산] 에이전트 페르소나, 입출력 계약, 프롬프트 빌더·파서, 템플릿
 ├─ repositories/            [Repository] Elasticsearch·MongoDB 조회와 저장
-├─ models/                  [Entity] 저장된 문서의 형태 + ES 인덱스 매핑
-└─ clients/                 [Infrastructure] 연결 생성, 외부 API(KIS)
-   └─ kis/                  외부 시스템 하나 = 하위 패키지 하나
+├─ models/                  [Entity] 저장된 문서의 형태 + ES 인덱스 매핑 + 파이프라인 상태 전이
+└─ clients/                 [Infrastructure] 연결 생성, 외부 API(KIS, LLM 벤더, Post BE)
+   ├─ kis/                  외부 시스템 하나 = 하위 패키지 하나
+   ├─ llm/
+   └─ publisher/
 cli/                        [Controller] typer 명령. 라우터와 같은 규칙(서비스만 호출). 서비스는 dependencies.py 의 open_clients·get_*_service 로 만든다
 tests/                      app/ 구조를 그대로 따른다(7절)
 ```
@@ -39,8 +42,9 @@ tests/                      app/ 구조를 그대로 따른다(7절)
 
 ```
 routers, cli ─→ services ─→ repositories ─→ clients
-                  │   │           │
-                  │   └─→ models ←┘
+                  │ │ │           │
+                  │ │ └─→ models ←┘
+                  │ └─→ agents ─→ models   (에이전트 파이프라인)
                   └─→ schemas
 (모두 core 를 쓸 수 있다)
 ```
@@ -48,7 +52,8 @@ routers, cli ─→ services ─→ repositories ─→ clients
 | 계층 | import 해도 되는 것 | import 하면 안 되는 것 |
 |---|---|---|
 | `routers/`, `cli/` | `services`, `schemas`, `dependencies`, `core` | `repositories`, `models`, `clients`, `elasticsearch`, `pymongo` |
-| `services/` | `repositories`, `models`, `schemas`, `clients/kis`, `core` | `fastapi`, `starlette`(Request·Response·HTTPException), `elasticsearch`, `pymongo` |
+| `services/` | `repositories`, `models`, `schemas`, `agents`, `clients/kis`, `clients/llm`, `clients/publisher`, `core` | `fastapi`, `starlette`(Request·Response·HTTPException), `elasticsearch`, `pymongo` |
+| `agents/` | `models`, `core` | `services`, `repositories`, `clients`, `schemas`, `fastapi` |
 | `repositories/` | `models`, `clients`, `core`, `elasticsearch`, `pymongo` | `services`, `schemas`, `fastapi` |
 | `models/`, `schemas/` | `core` | 그 외 `app` 전부. 서로도 import하지 않는다(변환은 서비스가 한다) |
 | `clients/` | `core` | 그 외 `app` 전부 |
@@ -88,7 +93,7 @@ HTTP를 서비스 호출로 번역만 한다.
 | 리포지토리가 돌려준 엔티티를 응답 스키마로 변환해 반환 | 엔티티나 ES 원본 dict를 그대로 반환 |
 | 실패는 `core/exceptions.py`의 `AppError` 하위 예외로 던진다(`NotFoundError` 등) | `HTTPException` 던지기, 예외를 잡아 `None`으로 바꾸기 |
 | 의존(리포지토리, 설정값)은 생성자로 받는다 | `get_settings()`·클라이언트 생성을 서비스 안에서 직접 호출 |
-| KIS처럼 외부 API가 곧 데이터 원천이면 `clients/kis`를 생성자로 받아 쓴다 | ES 쿼리 DSL 조립(→ 리포지토리) |
+| KIS·LLM 벤더·Post BE처럼 외부 API가 곧 데이터 원천이면 `clients/kis`·`clients/llm`·`clients/publisher`를 생성자로 받아 쓴다 | ES 쿼리 DSL 조립(→ 리포지토리) |
 
 예외를 삼켜도 되는 경우는 계약이 요구할 때뿐이다(헬스체크의 degraded, 인기검색어 갱신 실패, 자동완성·인기검색어 조회 실패의 빈 목록, 동기화 결과를 `SyncResult(status=failed)`·건수 0으로 보고하는 동기화). 그때도 `logger.warning`을 남기고 주석으로 이유를 적는다. 헬스체크와 동기화 상태는 연결 자체를 보고하는 기능이라 예외적으로 `clients`의 연결 확인 함수를 쓴다(`dependencies.py`가 묶어 넘긴다).
 
@@ -113,6 +118,7 @@ HTTP를 서비스 호출로 번역만 한다.
 | 저장된 문서 형태를 Pydantic 모델로 선언. 저장소 필드 이름이 snake_case가 아니면 `alias`(`main_category: str = Field(alias="mainCategory")`) | I/O, 캐시, 설정 읽기 |
 | ES 매핑·분석기 설정을 `UPPER_SNAKE` 상수 dict로 (엔티티와 같은 파일에 둬서 필드와 매핑을 함께 고친다) | 스키마(DTO) 상속, API 응답으로 직접 사용 |
 | I/O 없는 순수 계산(Tiptap JSON → 평문 추출 등) | |
+| 파이프라인 상태 전이를 도메인 메서드로(`PostDraft.submit_version` 등). 잘못된 전이는 `InvalidTransitionError`, 불변식 위반은 `ValueError`. 상한 값은 `Settings`를 읽지 않고 인자로 받는다 | |
 
 ### 스키마 (`schemas/*.py`)
 
@@ -149,7 +155,8 @@ HTTP를 서비스 호출로 번역만 한다.
 - `async def`는 그 안에서 부르는 I/O가 전부 비동기일 때만 쓴다(KIS: `httpx2.AsyncClient`, `websockets`, `asyncio.Queue`).
 - `async def` 안에서 동기 I/O(`time.sleep`, `pymongo`, 동기 `elasticsearch`, 동기 `httpx2.Client`)를 호출하지 않는다. 이벤트 루프 전체가 멈춘다.
 - 새 스레드(`threading`)를 만들지 않는다. 백그라운드 작업은 `BackgroundTasks` 또는 lifespan이 소유한 `asyncio` 태스크로 한다.
-- uvicorn 워커 1개가 전제다(인프로세스 캐시, KIS 매니저). 이 전제에 기대는 코드에는 주석을 단다.
+- uvicorn 워커 1개가 전제다(인프로세스 캐시, KIS 매니저, 에이전트 `PipelineRunner`). 이 전제에 기대는 코드에는 주석을 단다.
+- 에이전트 파이프라인은 I/O가 있는 라우터·서비스·리포지토리·클라이언트가 전부 `async def`다. MongoDB는 검색 경로의 동기 `MongoClient`와 별도로 만든 `pymongo.AsyncMongoClient`, HTTP는 `httpx2.AsyncClient`나 벤더 SDK의 async 인터페이스를 쓴다. 장기 실행 러너는 lifespan이 소유한 `asyncio` 태스크다. 도메인 메서드와 `services/evaluation.py`처럼 I/O가 없는 코드는 `def`다.
 
 ## 4. 이름
 
@@ -222,7 +229,8 @@ PEP 8과 FastAPI 공식 문서의 관례를 따른다. 계층은 패키지 이�
 - **라우터 함수 docstring은 `/docs`에 그대로 노출된다.** API를 부르는 쪽 관점(캐시 시간, 실패 시 응답)으로 쓰고, 내부 구현 이야기는 `#` 주석으로 쓴다. `summary=`는 짧은 한국어 명사구.
 - **Django 원본과 동작이 다른 곳**(버그 수정, 의도적 변경)은 그 자리에 원본 동작과 이유를 주석으로 남긴다. 컷오버(Phase 6) 후 정리한다.
 - **계약 때문에 어색한 코드**(trailing slash, 헬스체크 500 형식, categories fallback 목록)는 계약이라는 사실을 주석으로 밝힌다.
-- **TODO**: `# TODO(Phase N): 내용`. 단계가 정해지지 않은 일은 코드가 아니라 `MIGRATION_PLAN.md`에 적는다.
+- **TODO**: `# TODO(Phase N): 내용`. 단계가 정해지지 않은 일은 코드가 아니라 `MIGRATION_PLAN.md`에 적는다. 에이전트 파이프라인은 `# TODO(로드맵 N단계): 내용`이고, 미정인 일은 `agents_design/07_decisions_and_open_questions.md` 2절에 적는다.
+- **에이전트 파이프라인 코드가 설계와 다르면** 그 자리에 이유를 주석으로 남기고, 같은 커밋에서 `agents_design/` 문서를 고친다.
 - 주석 처리한 코드를 남기지 않는다(git이 기억한다). 쓰지 않는 파일은 지운다.
 - `# noqa`·`# type: ignore`는 규칙 코드와 이유를 같이 쓴다(`# noqa: N815 — ES 필드 이름 그대로`).
 
@@ -241,12 +249,12 @@ class PostIndexRepository:
 
 ## 7. 테스트
 
-- `tests/`는 `app/` 구조를 따른다: `tests/routers/test_search.py`, `tests/services/test_search.py`, `tests/repositories/test_post_index.py`. 하위 폴더마다 빈 `__init__.py`를 둔다 — 없으면 같은 파일 이름(`test_search.py`)이 여러 폴더에 있을 때 pytest가 모듈 이름 충돌로 실패한다. 공용 픽스처는 `tests/conftest.py`. 가짜 구현은 한 파일에서만 쓰면 그 파일에, 여러 파일이 쓰면 `tests/fakes.py`에 둔다.
+- `tests/`는 `app/` 구조를 따른다: `tests/routers/test_search.py`, `tests/services/test_search.py`, `tests/repositories/test_post_index.py`. 하위 폴더마다 빈 `__init__.py`를 둔다 — 없으면 같은 파일 이름(`test_search.py`)이 여러 폴더에 있을 때 pytest가 모듈 이름 충돌로 실패한다. 공용 픽스처는 `tests/conftest.py`. 가짜 구현은 한 파일에서만 쓰면 그 파일에, 여러 파일이 쓰면 `tests/fakes.py`에 둔다. 테스트 데이터를 만드는 함수(`make_draft` 등)는 `tests/factories.py`에 둔다.
 - 이름: 파일 `test_<대상 파일명>.py`, 함수 `test_<대상>_<기대 결과>[_when_<조건>]`(예: `test_health_degraded_when_mongo_down`). 테스트 더블은 손으로 짠 구현이 `Fake<클래스>`, `MagicMock`이 `mock_<대상>`.
 - 단위 테스트는 네트워크·실제 DB 없이 돈다. 서비스는 가짜 리포지토리를 생성자로 넘기고, 라우터는 `app.dependency_overrides`로 서비스를 바꾼다. `monkeypatch`로 모듈 내부 함수를 바꾸지 않는다 — DI로 해결한다.
 - 응답 계약은 `tests/golden/`과 키 구조·상태 코드를 비교한다. 계약이 걸린 엔드포인트는 golden 테스트를 꼭 둔다.
 - 비동기 테스트는 `@pytest.mark.anyio`(anyio pytest 플러그인, `tests/conftest.py`가 asyncio로 고정). pytest-asyncio는 쓰지 않는다.
-- 실제 ES·Mongo·KIS에 붙는 테스트는 `@pytest.mark.e2e`를 달고 기본 실행에서 뺀다. 로컬에 띄운 가짜 서버(WebSocket 등)는 외부 네트워크가 아니므로 기본 실행에 둔다.
+- 실제 ES·Mongo·KIS·LLM 벤더·Post BE에 붙는 테스트는 `@pytest.mark.e2e`를 달고 기본 실행에서 뺀다. 로컬에 띄운 가짜 서버(WebSocket 등)는 외부 네트워크가 아니므로 기본 실행에 둔다.
 - 서비스 메서드마다 정상 1건 + 던지는 예외 종류마다 1건. 버그 수정 커밋에는 그 버그를 재현하는 테스트를 같이 넣는다.
 
 ## 8. Git

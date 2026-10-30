@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-## 에이전트 파이프라인 설계 (임시 보관)
+## 에이전트 파이프라인
 
-`agents_design/`은 별도 서비스 `vans_devblog_agents`의 설계 문서다. 그 저장소를 만들기 전(설계 07 문서 Q-01)까지 여기에 둔다. 이 서비스의 코드와는 관계없다.
+세 LLM 에이전트가 주제 선정·작성·교차 리뷰를 거쳐 블로그 글을 발행하는 파이프라인이 검색 서비스와 같은 앱에 들어간다(설계 07 문서 D-01, 2026-10-30 변경). 설계는 `agents_design/`이다.
 
-- 시작점은 [agents_design/README.md](agents_design/README.md)다. 확정 결정과 미결 사항은 `07_decisions_and_open_questions.md`에 있다.
-- 상태(2026-10-30): 실행 구조 단순화(단일 프로세스, 글마다 코루틴 하나, 글 소프트 예산, 트랜잭션 없음)와 정합성 검토 22건 반영까지 끝났다. 구현 전이다.
-- 남은 일: 미결 Q-14(MAJOR 분쟁도 중재할지)·Q-15(중재자 독립성) 결정, 고친 문서의 정합성 재검토, 로드맵 0단계(Q-01 저장소 생성).
-- 문서끼리 서로 참조한다. 규칙 하나를 바꾸면 02(모델)·03(전이표)·04(오케스트레이션)·06(구조)·07(결정)을 함께 맞춘다.
+- 시작점은 [agents_design/README.md](agents_design/README.md)다. 확정 결정·미결 사항·구현 로드맵은 `07_decisions_and_open_questions.md`에 있다.
+- 진행(2026-10-30): 로드맵 0단계(CONVENTIONS 보강)와 1단계(`app/models/`의 enums·model_binding·topic·agent_call·publishing_round·post_draft, `app/services/evaluation.py`, 테스트)를 마쳤다. 다음은 2단계(async Mongo 리포지토리, `AgentCallService`, `FakeLLMClient`).
+- 남은 결정: Q-14(MAJOR 분쟁도 중재할지)·Q-15(중재자 독립성)는 기본 가정으로 구현했다. Q-16(에이전트 내부 API 키)·Q-17(파이프라인 컬렉션의 Mongo 위치)은 해당 단계 전에 정한다.
+- 문서끼리 서로 참조한다. 규칙 하나를 바꾸면 02(모델)·03(전이표)·04(오케스트레이션)·06(구조)·07(결정)을 함께 맞추고, 코드가 설계와 달라지면 같은 커밋에서 문서를 고친다.

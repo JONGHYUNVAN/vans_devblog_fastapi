@@ -82,6 +82,15 @@ class EscalationReason(StrEnum):
     PUBLISH_UNCERTAIN = "PUBLISH_UNCERTAIN"  # 발행 호출 결과를 모름. 중복 게시를 막으려고 자동 재시도하지 않는다 (04 문서 8절)
 
 
+class EscalationDecisionKind(StrEnum):
+    """ESCALATED 글에 대한 사람의 결정 (03 문서 23~25행)."""
+
+    PUBLISH_AS_IS = "PUBLISH_AS_IS"
+    REVISE = "REVISE"
+    REJECT = "REJECT"
+    CONFIRM_PUBLISHED = "CONFIRM_PUBLISHED"  # PUBLISH_UNCERTAIN 에서만
+
+
 class FailureCode(StrEnum):
     """FAILED 로 들어온 이유. 재개 방식이 갈린다 (03 문서 26행)."""
 
@@ -150,6 +159,8 @@ PostDraft (Aggregate Root, 글 수준)        ◄── 리뷰 결과를 써도 
  │    ├─ item_checks: ItemCheck[]           SPOT_CHECK 전용. FULL 은 빈 목록
  │    ├─ checklist, overall_feedback, call_id
  ├─ arbitrations: Arbitration[]
+ ├─ last_reviewed_version?                  평가(리뷰·중재)를 마친 마지막 버전. FULL·SPOT_CHECK 를 가르고 open_blocking_items 의 기준 (D-21)
+ ├─ rejected_by?, abort_reason?             REJECTED 가 된 사람 결정 또는 라운드 중단 사유
  ├─ publication_intent?: PublicationIntent
  └─ publication?: Publication
 
@@ -378,25 +389,32 @@ class Publication(BaseModel):
 
 | 메서드 | 전제 상태 | 결과 상태 | 설명 |
 |---|---|---|---|
-| `start_drafting()` | `TOPIC_LOCKED`, `REVISING` | `DRAFTING` (14행의 방어 경우 `ESCALATED`) | `revision_cause` 에 따라 iteration 증가 여부가 갈린다 (03 문서 13a~14행). `revision_cause` 는 지우지 않는다 |
-| `submit_version(version)` | `DRAFTING` | `VALIDATING` | 버전 추가. `passed_validation=False`. 새 버전의 `origin_cause` 는 `revision_cause` 로 정한다(`GATE` 면 직전 버전 값, `REVIEW`·`HUMAN` 이면 그 값, 없으면 `None`). `revision_cause`, `approved_by`·`approved_at` 을 지운다 |
-| `pass_validation()` | `VALIDATING` | `READY_TO_PUBLISH` / `IN_REVIEW` / `IN_SPOT_CHECK` | `validation_retries=0`. `origin_cause == HUMAN` 이면 바로 `READY_TO_PUBLISH`. 그 외에는 리뷰 완료 이전 버전이 없으면 `IN_REVIEW`, 있으면 `IN_SPOT_CHECK` |
-| `fail_validation(errors)` | `VALIDATING` | `REVISING` (`cause=GATE`) 또는 `FAILED` | 실패 횟수를 1 올린 값이 상한 미만이면 전자, 같으면 `FailureRecord(GATE_RETRIES_EXHAUSTED)`. `iteration` 과 `origin_cause` 는 유지 |
+| `start_drafting(max_iterations)` | `TOPIC_LOCKED`, `REVISING` | `DRAFTING` (14행의 방어 경우 `ESCALATED`) | `revision_cause` 에 따라 iteration 증가 여부가 갈린다 (03 문서 13a~14행). `revision_cause` 는 지우지 않는다 |
+| `submit_version(title, summary, content_markdown, section_ids, resolutions, author_note, call_id)` | `DRAFTING` | `VALIDATING` | 버전 추가. `passed_validation=False`. 새 버전의 `origin_cause` 는 `revision_cause` 로 정한다(`GATE` 면 직전 버전 값, `REVIEW`·`HUMAN` 이면 그 값, 없으면 `None`). `revision_cause`, `approved_by`·`approved_at` 을 지운다 |
+| `pass_validation()` | `VALIDATING` | `READY_TO_PUBLISH` / `IN_REVIEW` / `IN_SPOT_CHECK` | `validation_retries=0`. `origin_cause == HUMAN` 이면 바로 `READY_TO_PUBLISH`. 그 외에는 리뷰 완료 이전 버전(`last_reviewed_version`)이 없으면 `IN_REVIEW`, 있으면 `IN_SPOT_CHECK` |
+| `fail_validation(errors, max_validation_retries)` | `VALIDATING` | `REVISING` (`cause=GATE`) 또는 `FAILED` | 실패 횟수를 1 올린 값이 상한 미만이면 전자, 같으면 `FailureRecord(GATE_RETRIES_EXHAUSTED)`. `iteration` 과 `origin_cause` 는 유지 |
 | `add_review(review)` | `IN_REVIEW`, `IN_SPOT_CHECK` | 변화 없음 | `derived_verdict` 를 저장. 중복이면 무시 |
 | `open_blocking_items(version)` | – | – | 해당 버전 리뷰·중재 종료 시점의 미결 차단 항목 집합 (04 문서 5절) |
 | `required_reviewers()` | – | – | FULL 은 배정된 두 슬롯. SPOT_CHECK 는 직전 리뷰 완료 버전의 `open_blocking_items` 에 본인 항목이 남아 있는 슬롯 |
-| `is_review_complete()` | – | – | `required_reviewers()` 가 모두 응답. 서비스는 아직 응답하지 않은 슬롯만 호출한다 |
-| `apply_evaluation(outcome)` | 리뷰 완료 또는 중재 완료 | outcome 이 정한 상태 | `REVISING` 이면 `cause=REVIEW` |
+| `pending_reviewers()` | – | – | `required_reviewers()` 중 아직 응답하지 않은 슬롯. 서비스는 이 슬롯만 호출한다 |
+| `is_review_complete()` | – | – | `pending_reviewers()` 가 비었다 |
+| `apply_evaluation(outcome)` | 리뷰 완료 또는 중재 완료 | outcome 이 정한 상태 | `REVISING` 이면 `cause=REVIEW`. `IN_ARBITRATION` 이 아니면 `last_reviewed_version` 을 현재 버전으로 둔다 |
 | `add_arbitration(arb)` | `IN_ARBITRATION` | 변화 없음 | 항목 하나만 도착해도 전이하지 않는다 |
-| `arbitration_complete()` | – | – | 이번 교착 항목마다 `Arbitration` 이 있다 |
+| `deadlocked_items()` | – | – | 현재 버전의 교착 항목(04 문서 5절). 이전 버전에서 중재받은 항목은 빠진다 |
+| `pending_arbitration_items()` | – | – | 교착 항목 중 이번 버전 중재가 없는 것. 서비스는 이 항목만 `ARBITRATE` 를 호출한다 |
+| `arbitration_complete()` | – | – | `pending_arbitration_items()` 가 비었다 |
 | `escalate(reason)` | 종결·`ESCALATED`·`FAILED` 가 아닌 상태 | `ESCALATED` | `escalation_reason`만 기록한다 |
-| `resolve_escalation(decision)` | `ESCALATED` | `READY_TO_PUBLISH` / `REVISING` (`cause=HUMAN`) / `REJECTED` / `PUBLISHED` | 사람 결정. `REVISE` 는 iteration 을 바꾸지 않는다. `PUBLISH_AS_IS` 의 발행본은 마지막 `passed_validation` 버전이고, 그런 버전이 없으면 거절한다. `PUBLISH_AS_IS`·`REVISE` 는 `publish_attempts=0` 으로 두고 `publication_intent` 를 지운다. `CONFIRM_PUBLISHED(external_post_id)` 는 `PUBLISH_UNCERTAIN` 에서만 허용하고 `Publication` 을 기록한다. `PUBLISH_UNCERTAIN` 에서는 어느 결정이든 사람이 블로그를 먼저 확인한다 |
+| `resolve_escalation(decision, decided_by, instruction?, publication?)` | `ESCALATED` | `READY_TO_PUBLISH` / `REVISING` (`cause=HUMAN`) / `REJECTED` / `PUBLISHED` | 사람 결정. `REVISE` 는 iteration 을 바꾸지 않는다. `PUBLISH_AS_IS` 의 발행본은 마지막 `passed_validation` 버전이고, 그런 버전이 없으면 거절한다. `PUBLISH_AS_IS`·`REVISE` 는 `publish_attempts=0` 으로 두고 `publication_intent` 를 지운다. `CONFIRM_PUBLISHED(external_post_id)` 는 `PUBLISH_UNCERTAIN` 에서만 허용하고 `Publication` 을 기록한다. `PUBLISH_UNCERTAIN` 에서는 어느 결정이든 사람이 블로그를 먼저 확인한다 |
 | `reject_by_abort(reason)` | `PUBLISHED`·`REJECTED` 외 전부 (`ESCALATED`, `FAILED` 포함) | `REJECTED` | 라운드 중단. `publication_intent` 는 유지한다. `is_active` 가 거짓인 글도 대상이므로 글 코루틴이 아니라 `abort_round` 가 직접 호출한다 |
-| `mark_failed(record)` | 종결·`ESCALATED`·`FAILED` 가 아닌 상태 | `FAILED` | `FailureRecord(from_status, code)`를 기록한다. 병렬 단계는 서비스가 다른 호출이 끝나기를 기다려 성공한 리뷰·중재를 먼저 넣는다 |
+| `mark_failed(code, message)` | 종결·`ESCALATED`·`FAILED` 가 아닌 상태 | `FAILED` | 현재 상태로 `FailureRecord(from_status, code)`를 만들어 기록한다. 병렬 단계는 서비스가 다른 호출이 끝나기를 기다려 성공한 리뷰·중재를 먼저 넣는다 |
 | `retry_from_failed(token_limit=None)` | `FAILED` | `failure.from_status`. `GATE_RETRIES_EXHAUSTED` 면 `REVISING` (`cause=GATE`) | 게이트 실패면 `validation_retries=0`. 어느 사유든 새 `token_limit` 을 받을 수 있다(병렬 단계는 사유가 여럿일 수 있다). 저장된 리뷰·중재는 그대로라 서비스는 빠진 호출만 한다 |
 | `discard(by)` | `FAILED` | `REJECTED` | 사람이 그 글만 폐기한다. 레지스트리 `RELEASED` 는 서비스가 따라 쓴다 |
 | `record_approval(by)` | `READY_TO_PUBLISH` | 변화 없음 | 승인 토글이 켜진 경우 |
-| `publish(publication)` | `READY_TO_PUBLISH` | `PUBLISHED` | 승인 토글이 켜져 있으면 `approved_by` 가 있어야 한다 |
+| `begin_publish(requires_approval)` | `READY_TO_PUBLISH` | 변화 없음 | 발행 호출 직전 `PublicationIntent(attempt = publish_attempts + 1)` 를 남긴다. 승인 대기이거나 결과를 모르는 의도가 있으면 거절한다 (04 문서 8절 4·6단계) |
+| `fail_publish(max_publish_attempts)` | `READY_TO_PUBLISH` | 변화 없음 / `ESCALATED` | 결과가 확정된 실패. 의도에 `failed_at` 을 쓰고 `publish_attempts` 를 그 `attempt` 로 맞춘다. 상한이면 `PUBLISH_FAILED` (03 문서 28a·28행) |
+| `publish(publication, requires_approval)` | `READY_TO_PUBLISH` | `PUBLISHED` | 승인 토글이 켜져 있으면 `approved_by` 가 있어야 한다 |
+| `has_uncertain_publication` | – | – | `failed_at` 없는 의도가 있다. 서비스는 이때 호출하지 않고 `escalate(PUBLISH_UNCERTAIN)` (03 문서 28b행) |
+| `awaits_approval(requires_approval)` | – | – | `READY_TO_PUBLISH`, 토글 켜짐, `approved_by` 없음. 러너가 이 글을 띄우지 않는다 |
 | `is_active` | – | – | `PUBLISHED`, `REJECTED`, `ESCALATED`, `FAILED` 가 아니면 참. 러너가 이 글만 코루틴으로 돌린다 |
 
 ## 6. 저장 (MongoDB)

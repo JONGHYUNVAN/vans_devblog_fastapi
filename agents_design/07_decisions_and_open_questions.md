@@ -4,7 +4,7 @@
 
 | ID | 결정 | 이유 | 대안 |
 |---|---|---|---|
-| D-01 | 별도 서비스로 구현하고 컨벤션은 공유한다 | 장기 실행 비동기 러너, 벤더 키, 배포 주기가 검색 서비스와 다르다 | 같은 저장소에 추가(구조는 06 문서 그대로 합칠 수 있다) |
+| D-01 | 검색 서비스 `vans_devblog_fastapi`와 같은 저장소·같은 FastAPI 앱에 구현한다(2026-10-30 변경) | 사용자 결정. 컨벤션·설정·배포를 한 곳에서 관리하고, 서비스를 하나 더 띄우지 않는다. 비동기 러너·벤더 키·잦은 배포는 같은 앱 안에서 수용한다(06 문서 1절) | 별도 저장소·서비스 `vans_devblog_agents`(처음 결정. 로드맵 0·1단계를 거기서 시작했다가 같은 날 이 저장소로 옮겼다) |
 | D-02 | `AgentSlot`(A/B/C) + `PersonaProfile` + `ModelBinding` 3분리 | 벤더를 도메인에 박지 않는다. 모델 교체·A/B가 설정 변경으로 끝난다 | `AgentType = CLAUDE\|GEMINI\|GROK` |
 | D-03 | 판정은 `severity` 집계로 결정론적으로 도출. LLM `verdict`는 기록만 | verdict/severity 이중 기준 충돌 제거. 규칙이 한 줄 | verdict 우선, severity 보조 |
 | D-04 | 부분 발행 허용. 한 편의 `ESCALATED`가 나머지 발행을 막지 않는다 | 글 단위 독립 파이프라인 원칙. 라운드는 묶음일 뿐 | 라운드 전체 보류 |
@@ -51,7 +51,6 @@
 
 | ID | 질문 | 영향 | 기본 가정 (결정 전까지) |
 |---|---|---|---|
-| Q-01 | 별도 저장소(`vans_devblog_agents`)를 git 저장소로 초기화할 시점과 원격 호스트 | 로드맵 0단계 | 구현 시작 시 초기화. 호스트는 다른 `vans_*` 저장소와 동일 |
 | Q-03 | 실제 슬롯 ↔ 모델 바인딩과 모델 ID | 설정값. 도메인 영향 없음 | A=architect, B=systems_engineer, C=troubleshooter 페르소나. 모델은 설정 |
 | Q-04 | 단일 인스턴스 전제를 유지할지 | 다중 인스턴스면 글 단위 실행 소유권(lease)과 트랜잭션(replica set)이 다시 필요하다 | 단일 (CONVENTIONS 3절과 동일). 실행 모델 전체가 이 전제에 기댄다(D-25) |
 | Q-05 | 주제 중복 판별에 임베딩을 쓸지 | 임베딩 API 의존 추가 | 1차는 키워드·제목 토큰 유사도만. 임베딩은 2단계 |
@@ -63,6 +62,8 @@
 | Q-11 | 라운드 실행 트리거: 수동(CLI/API)만인지, 주기 스케줄(cron)도 두는지 | 러너 설계 | 1차 수동 |
 | Q-13 | 발행본 본문을 이 서비스가 들고 자기 표절 검사를 할지 | 게이트, 저장 | 1차 게이트에서 제외. 레지스트리에는 제목·키워드만 있다 |
 | Q-14 | MAJOR 분쟁도 중재할지 | 교착은 CRITICAL 한정이라, 작성자가 근거를 들어 기각한 MAJOR를 리뷰어가 받아들이지 않으면 반복 상한까지 돈 뒤 `ESCALATED`다. 덜 심각한 MAJOR가 더 무거운 경로(사람)를 탄다 | 현행(CRITICAL만 중재) |
+| Q-16 | 에이전트 내부 API 키를 검색 내부 API 키(`INTERNAL_API_KEY`, NestJS Post BE와 공유)와 나눌지 | 같은 키면 Post BE가 라운드 생성·결정 API도 부를 수 있다 | 라우터 단계(6) 전까지 정한다. 기본은 별도 `AGENTS_INTERNAL_API_KEY` |
+| Q-17 | 파이프라인 컬렉션을 어느 Mongo에 둘지 | 검색 서비스의 `MONGODB_URI`는 게시글 원본 DB다. 02 문서 6절은 standalone `vans_devblog_mongodb`를 가정했다 | 로드맵 2단계에서 정한다. 기본은 별도 `AGENTS_MONGODB_URI` |
 | Q-15 | 중재자 독립성 | 슬롯이 셋이라 제3 슬롯 중재자는 그 글을 이미 FULL 리뷰한 다른 리뷰어다 | 현행. 독립이 필요하면 중재 전용 바인딩을 설정으로 둔다 |
 
 ## 3. 구현 로드맵
@@ -71,8 +72,8 @@
 
 | 단계 | 내용 | 완료 기준 |
 |---|---|---|
-| 0 | Q-01 결정, 저장소 생성, 컨벤션·ruff·pytest 세팅 | 빈 FastAPI 앱 + health |
-| 1 | `models/` 전부 + `PostDraft` 전이 + `services/evaluation.py` + 단위 테스트 | 전이표 행마다 테스트 통과. DB·LLM 없음 |
+| 0 | CONVENTIONS에 `agents/` 계층·비동기 규칙 추가 | 완료(2026-10-30). 앱·health·ruff·pytest는 기존 것을 쓴다 |
+| 1 | `models/` 전부 + `PostDraft` 전이 + `services/evaluation.py` + 단위 테스트 | 전이표 행마다 테스트 통과. DB·LLM 없음. 완료(2026-10-30) |
 | 2 | `repositories/`(async Mongo) + `AgentCallService`(재시도, 영수증, 소프트 예산) + `FakeLLMClient` | 호출 서비스 테스트 통과 |
 | 3 | `agents/`(페르소나, 계약, 빌더, 파서, 프롬프트 v1) + `models/tiptap.py` + `ValidationGate` | 파서 위반 케이스 테스트, 게이트 테스트, 변환 golden 테스트 |
 | 4 | `TopicSelectionService` + `DraftPipelineService.drive` + `PipelineRunner` + CLI `run` | 가짜 LLM으로 문서 06의 시나리오 ①~⑫ 통과 |

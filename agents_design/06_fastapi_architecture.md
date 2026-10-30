@@ -1,10 +1,10 @@
 # 06. FastAPI 아키텍처
 
-자매 저장소 `vans_devblog_fastapi`의 [CONVENTIONS.md](../../vans_devblog_fastapi/CONVENTIONS.md)의 계층형 구조(routers → services → repositories → clients, 엔티티는 models, DTO는 schemas)를 그대로 따른다. 이 문서는 파이프라인이 그 구조 안에서 어디에 놓이는지, 기존 서비스와 다른 점(비동기 Mongo, 장기 실행 러너, 프롬프트 자산)을 어떻게 수용하는지 정한다.
+이 저장소 [CONVENTIONS.md](../CONVENTIONS.md)의 계층형 구조(routers → services → repositories → clients, 엔티티는 models, DTO는 schemas)를 그대로 따른다. 이 문서는 파이프라인이 그 구조 안에서 어디에 놓이는지, 기존 서비스와 다른 점(비동기 Mongo, 장기 실행 러너, 프롬프트 자산)을 어떻게 수용하는지 정한다.
 
-## 1. 배치: 별도 서비스 (권장)
+## 1. 배치: 검색 서비스와 같은 저장소·같은 앱
 
-기존 `vans_devblog_fastapi`는 검색·동기화·KIS 서빙 서비스다. 파이프라인은 성격이 다르다.
+파이프라인은 검색·동기화·KIS 서빙 서비스인 `vans_devblog_fastapi`의 같은 FastAPI 앱에 들어간다(07 문서 D-01). 성격은 다르다.
 
 | 항목 | 검색 서비스 | 에이전트 파이프라인 |
 |---|---|---|
@@ -14,9 +14,14 @@
 | 비밀 | ES·Mongo·KIS 키 | LLM 벤더 키 3종 + 발행용 에이전트 관리자 계정 비밀번호 |
 | 배포 주기 | 안정 | 프롬프트·페르소나 튜닝으로 잦음 |
 
-따라서 **같은 컨벤션을 따르는 별도 저장소/서비스**(`vans_devblog_agents`, 이 저장소)로 만들고, 발행은 Post BE(`vans_story_be_post`)의 기존 글 생성 API를 `clients/publisher/`로 호출한다. Post BE는 바꾸지 않고, 사람이 쓴 글과 같은 데이터를 보낸다(07 문서 D-01, D-27). 컨벤션 문서는 구현 시작 시 `vans_devblog_fastapi`에서 복사해 와 이 저장소 루트에 둔다.
+차이는 같은 앱 안에서 이렇게 수용한다.
 
-나중에 검색 서비스와 합치기로 결정하더라도 아래 구조를 그쪽 `app/` 아래 그대로 옮길 수 있다. 모듈 이름 충돌은 없다.
+- 비동기 Mongo 클라이언트는 기존 동기 `MongoClient`와 별도로 lifespan이 만든다(5절). 파이프라인 경로만 `async def`다(CONVENTIONS 3절).
+- 러너는 lifespan이 소유한 `asyncio` 태스크다. uvicorn 워커 1개 전제는 KIS 매니저와 같다. 코루틴의 예외는 러너 경계에서 잡으므로 검색 요청으로 번지지 않지만, 메모리와 이벤트 루프는 공유한다.
+- 비밀과 상수는 같은 `Settings`에 더한다(4절). 프롬프트 튜닝도 이 서비스 배포로 나간다.
+- 기존 파일(`main.py`, `dependencies.py`, `core/`, `clients/mongo.py`, `cli/__main__.py`)에는 파이프라인 항목을 덧붙인다. 아래 구조도의 그 파일 설명은 덧붙일 내용이다.
+
+발행은 Post BE(`vans_story_be_post`)의 기존 글 생성 API를 `clients/publisher/`로 호출한다. Post BE는 바꾸지 않고, 사람이 쓴 글과 같은 데이터를 보낸다(07 문서 D-27).
 
 ## 2. 패키지 구조
 
@@ -85,7 +90,7 @@ cli/
 
 ### `agents/`의 위치
 
-CONVENTIONS 1절에 없는 패키지다. 프롬프트 템플릿과 입출력 변환은 서비스 로직도, 외부 연결도 아니다. 의존 규칙에 다음 행을 추가한다.
+파이프라인으로 CONVENTIONS 1절에 더한 패키지다. 프롬프트 템플릿과 입출력 변환은 서비스 로직도, 외부 연결도 아니다. 의존 규칙에 다음 행이 있다.
 
 | 계층 | import 해도 되는 것 | import 하면 안 되는 것 |
 |---|---|---|
