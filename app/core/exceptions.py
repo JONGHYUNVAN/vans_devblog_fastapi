@@ -33,6 +33,13 @@ class AuthenticationError(AppError):
     error = "Authentication failed"
 
 
+class InvalidTransitionError(AppError):
+    """현재 상태에서 허용하지 않는 전이. 에이전트 파이프라인 도메인 모델(PostDraft, PublishingRound) 메서드가 던진다."""
+
+    status_code = 409
+    error = "Invalid state transition"
+
+
 class KISError(AppError):
     """KIS 엔드포인트 오류. 응답 형식이 다르다: {"success": false, "error": {"message", "code"}} (Django kis 앱 계약)."""
 
