@@ -31,7 +31,7 @@ app/
 ├─ dependencies.py             get_round_service, get_draft_decision_service, verify_internal_key
 ├─ core/
 │  ├─ config.py                Settings: 벤더 키, 슬롯 바인딩, 반복·예산 상수, 승인 토글, 발행 계정
-│  └─ exceptions.py            AppError + InvalidTransitionError(409), ConcurrentUpdateError, BudgetExceededError, LLMOutputError, LLMRetriesExhaustedError, PublishFailedError, PublishUncertainError
+│  └─ exceptions.py            AppError + InvalidTransitionError(409), ConcurrentUpdateError(409), BudgetExceededError, LLMTransportError, LLMOutputError, LLMRetriesExhaustedError, PublishFailedError, PublishUncertainError
 ├─ routers/
 │  └─ agent_rounds.py          내부 API (X-Internal-Key)
 ├─ schemas/
@@ -61,6 +61,7 @@ app/
 │     │  └─ arbitrate.md
 │     └─ registry.py           PROMPT_VERSION = "v1", 템플릿 로더
 ├─ repositories/
+│  ├─ optimistic_lock.py       replace_with_revision: revision 조건 저장. agent_round·post_draft 가 같이 쓴다
 │  ├─ agent_round.py           agent_rounds 컬렉션, 주제 선정 라운드 부분 unique 인덱스
 │  ├─ post_draft.py            agent_drafts 컬렉션, revision 기반 낙관적 잠금
 │  ├─ agent_call.py            agent_calls 컬렉션, 글별 usage 합계
@@ -76,7 +77,7 @@ app/
 └─ clients/
    ├─ mongo.py                 create_async_mongo_client
    ├─ llm/                     외부 시스템 하나 = 하위 패키지 하나
-   │  ├─ base.py               LLMClient Protocol: complete(messages, schema, params, timeout) -> LLMResponse(text, usage)
+   │  ├─ base.py               LLMClient Protocol: complete(messages, schema, params, timeout) -> LLMResponse(text, usage). LLMMessage·LLMParams·LLMUsage 도 여기(clients 는 models 를 import 하지 않는다)
    │  ├─ anthropic.py
    │  ├─ google.py
    │  ├─ xai.py
@@ -161,9 +162,9 @@ class DraftPipelineService:
 
 ### `services/agent_calls.py`
 
-- `call(kind, round_id, draft, slot, messages, schema, target_version=None, topic_attempt=None, item_id=None) -> 계약 모델`: 재시도 루프를 이 메서드 안에서 끝낸다. 성공하면 파싱된 계약 모델을 돌려주고, 소진하면 `LLMRetriesExhaustedError`를 던진다.
+- `call(kind, round_id, slot, binding, messages, schema, draft=None, target_version=None, topic_attempt=None, item_id=None) -> 계약 모델`: 재시도 루프를 이 메서드 안에서 끝낸다. 성공하면 파싱된 계약 모델을 돌려주고, 소진하면 `LLMRetriesExhaustedError`를 던진다. `binding`은 호출자가 라운드 스냅샷에서 꺼내 넘긴다(영수증의 `model_binding`). `schema`는 Pydantic 계약 모델 클래스이고 파싱은 `model_validate_json`이다. 입력 문맥이 필요한 의미 검사(카테고리가 목록에 있는지 등)는 3단계 `agents/parsers.py`가 더한다.
 - 시도마다: ① 글 호출이면 소프트 예산 검사. 그 글의 `AgentCall.usage` 합계 + 추정치(메시지 문자 수 + `max_output_tokens`) > `draft.token_limit`이면 호출하지 않고 `BudgetExceededError`. ② 벤더 세마포어 안에서 타임아웃(`review_timeout_s` 또는 `draft_timeout_s`)을 걸고 호출. ③ 성공·실패와 무관하게 `AgentCall`을 insert. ④ `agents/parsers.py`로 파싱.
-- 실패 처리: 네트워크·5xx·429·타임아웃은 지수 백오프 뒤 같은 메시지로, `LLMOutputError`(스키마 위반)는 첫 시도 메시지 뒤에 직전 실패 출력과 오류 안내를 붙여 다시 부른다. 시도 수는 이 메서드의 지역 값이라 재개하면 새로 센다.
+- 실패 처리: 네트워크·5xx·429·타임아웃(클라이언트가 `LLMTransportError`로 던진다)은 지수 백오프 뒤 같은 메시지로, `LLMOutputError`(스키마 위반)는 첫 시도 메시지 뒤에 직전 실패 출력과 오류 안내를 붙여 다시 부른다. 시도 수는 이 메서드의 지역 값이라 재개하면 새로 센다.
 - 주제 제안 호출(`draft=None`)은 예산을 검사하지 않는다(02 문서 3절 예산).
 - 벤더별 `asyncio.Semaphore`는 `clients/llm/registry.py`가 가진다.
 
@@ -286,4 +287,4 @@ class Settings(BaseSettings):
 | `routers/` | `dependency_overrides`로 서비스 교체, `tests/golden/`에 응답 계약 |
 | e2e | `@pytest.mark.e2e`. 실제 벤더 1회 호출로 스키마 호환 확인. 기본 실행 제외 |
 
-`tests/fakes.py`에 `FakeLLMClient`를 두고 `(kind, slot, target_version, item_id | None) → 출력`을 딕셔너리로 스크립트한다. 토큰 사용량도 가짜로 돌려 소프트 예산을 테스트한다.
+`tests/fakes.py`에 `FakeLLMClient`를 두고 응답(본문·`LLMResponse`·예외)을 순서대로 스크립트한다. `LLMClient` 계약에는 호출 종류가 없으므로 `(kind, slot, target_version, item_id)` 키 스크립트는 4단계에서 메시지 내용으로 종류를 가려 더한다. 토큰 사용량도 가짜로 돌려 소프트 예산을 테스트한다. Mongo 리포지토리는 `FakeAsyncCollection`(같음·`$in`·`$gte` 조건, `$group`/`$sum` 집계만)으로 질의·저장 조건을 검사한다.

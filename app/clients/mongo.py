@@ -5,7 +5,7 @@ from typing import Any
 
 import certifi
 import pymongo
-from pymongo import MongoClient
+from pymongo import AsyncMongoClient, MongoClient
 
 from app.core.config import Settings
 
@@ -50,6 +50,24 @@ def create_mongo_client(settings: Settings) -> MongoClient:
     if _uses_tls(url):
         options["tlsCAFile"] = certifi.where()
     return MongoClient(url, connect=False, **options)
+
+
+def create_async_mongo_client(settings: Settings) -> AsyncMongoClient:
+    """에이전트 파이프라인이 쓰는 비동기 클라이언트. 같은 Mongo·같은 DB 를 가리킨다(설계 07 문서 D-43).
+
+    동기 클라이언트와 연결을 공유할 수 없어 따로 만든다. tz_aware 라서 datetime 이 UTC aware 로 돌아온다
+    (CONVENTIONS 4절: naive datetime 금지). 닫기는 lifespan 이 `await client.close()` 로 한다.
+    """
+    url = _connection_url(settings)
+    options: dict[str, Any] = {
+        "serverSelectionTimeoutMS": _SERVER_SELECTION_TIMEOUT_MS,
+        "connectTimeoutMS": _CONNECT_TIMEOUT_MS,
+        "socketTimeoutMS": _SOCKET_TIMEOUT_MS,
+        "tz_aware": True,
+    }
+    if _uses_tls(url):
+        options["tlsCAFile"] = certifi.where()
+    return AsyncMongoClient(url, connect=False, **options)
 
 
 def is_mongo_reachable(mongo_client: MongoClient, timeout: float) -> bool:

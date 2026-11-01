@@ -12,15 +12,20 @@ from typing import Annotated
 from elasticsearch import Elasticsearch
 from fastapi import BackgroundTasks, Depends, Header, Request
 from pymongo import MongoClient
+from pymongo.asynchronous.database import AsyncDatabase
 
 from app.clients.es import create_es, is_es_reachable
 from app.clients.kis.stream import KISStreamManager
 from app.clients.mongo import create_mongo_client, is_mongo_reachable
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
+from app.repositories.agent_call import AgentCallRepository
+from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.popular_search import PopularSearchRepository
 from app.repositories.post import PostRepository
+from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_index import PostIndexRepository
+from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.health import HealthService
 from app.services.index_setup import IndexSetupService
 from app.services.indexing import IndexingService
@@ -103,6 +108,14 @@ def get_sync_service(
 
 def get_index_setup_service(es: Elasticsearch) -> IndexSetupService:
     return IndexSetupService(popular_search_repository=PopularSearchRepository(es))
+
+
+async def ensure_agent_indexes(database: AsyncDatabase) -> None:
+    """에이전트 파이프라인 컬렉션 4개의 인덱스를 만든다. 있으면 그대로 둔다. lifespan 이 부른다."""
+    await PublishingRoundRepository(database).ensure_indexes()
+    await PostDraftRepository(database).ensure_indexes()
+    await AgentCallRepository(database).ensure_indexes()
+    await TopicRegistryRepository(database).ensure_indexes()
 
 
 def get_kis_service(

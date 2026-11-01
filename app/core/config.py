@@ -38,6 +38,20 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = ""
     frontend_hosts: str = ""
 
+    # 에이전트 파이프라인 상수 (설계 03 문서 5절, 06 문서 4절). 벤더 키·슬롯 바인딩·발행 계정은 해당 로드맵 단계에서 더한다.
+    max_iterations: int = 2
+    max_topic_attempts: int = 2
+    max_llm_retries: int = 3
+    max_validation_retries: int = 2
+    max_publish_attempts: int = 3
+    draft_token_limit: int = 300_000  # 글 소프트 상한. 운영 후 조정한다 (설계 07 문서 Q-07)
+    review_temperature: float = 0.2  # REVIEW, ARBITRATE. 작성 호출은 ModelBinding.temperature
+    review_timeout_s: int = 300
+    draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
+    scan_interval_s: int = 15
+    prompt_version: str = "v1"
+    llm_concurrency_per_provider: int = 2
+
     @property
     def elasticsearch_url(self) -> str:
         return f"https://{self.elasticsearch_host}"

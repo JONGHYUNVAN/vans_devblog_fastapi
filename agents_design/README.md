@@ -21,4 +21,5 @@
 - 2026-10-30: 단순화 뒤 정합성 검토 22건을 반영했다. 관리자 수동 격리와 라운드 `OPEN` 상태를 없앴고(D-42), `revision_cause`를 `DRAFTING`까지 유지한다. 사람 결정 뒤 발행 카운터·의도를 지우고, 새 버전이 제출되면 이전 승인을 지운다. 주제 확정은 없을 때만 만들고, 라운드에도 낙관적 잠금을 두며, 정리를 스캔마다 돌린다. 요약 노트의 LLM 텍스트는 이스케이프한다.
 - 2026-10-30: 구현 시작. 별도 저장소로 시작했다가 사용자 결정으로 이 저장소(`vans_devblog_fastapi`)의 같은 앱에 넣었다(07 문서 D-01). 로드맵 0단계(CONVENTIONS 보강)와 1단계(`models/` 전부, `PostDraft`·`PublishingRound` 전이, `services/evaluation.py`, 단위 테스트)를 마쳤다. 구현하며 02 문서에 `last_reviewed_version`·`rejected_by`·`abort_reason` 필드, `EscalationDecisionKind`, 발행 메서드(`begin_publish`·`fail_publish`)를 더했다. 미결 Q-16(내부 API 키)·Q-17(Mongo 위치)을 더했다.
 - 2026-11-02: Q-17을 정했다. 파이프라인 컬렉션은 검색 서비스와 같은 Mongo·같은 DB에 두고 비동기 클라이언트만 따로 만든다(07 문서 D-43).
+- 2026-11-02: 로드맵 2단계를 마쳤다. `repositories/` 4개(async, revision 잠금, 멱등 생성), `clients/llm/`(계약·레지스트리), `services/agent_calls.py`(예산·재시도·영수증), `FakeLLMClient`·`FakeAsyncCollection`. lifespan 이 비동기 클라이언트를 만들고 인덱스를 보장한다.
 - 코드 컨벤션은 이 저장소의 [CONVENTIONS.md](../CONVENTIONS.md)다.

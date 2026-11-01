@@ -40,6 +40,41 @@ class InvalidTransitionError(AppError):
     error = "Invalid state transition"
 
 
+class ConcurrentUpdateError(AppError):
+    """revision 낙관적 잠금 충돌. 저장하려던 문서가 읽은 뒤 다른 쓰기로 바뀌었다 (설계 02 문서 6절)."""
+
+    status_code = 409
+    error = "Concurrent update"
+
+
+class LLMTransportError(AppError):
+    """LLM 벤더 호출이 응답을 받지 못했다: 네트워크, 5xx, 429, 타임아웃. 같은 메시지로 재시도할 수 있다."""
+
+    status_code = 503
+    error = "LLM call failed"
+
+
+class LLMOutputError(AppError):
+    """LLM 응답이 계약(스키마·의미 규칙)에 맞지 않는다. 직전 출력과 오류 안내를 붙여 재시도한다."""
+
+    status_code = 502
+    error = "LLM output invalid"
+
+
+class LLMRetriesExhaustedError(AppError):
+    """한 단계의 호출이 MAX_LLM_RETRIES 만큼 실패했다. 글은 FAILED(LLM_RETRIES_EXHAUSTED), 주제 선정은 ABORTED(LLM_FAILED)."""
+
+    status_code = 502
+    error = "LLM retries exhausted"
+
+
+class BudgetExceededError(AppError):
+    """글 소프트 예산 초과. 사용량 합계 + 추정치가 token_limit 을 넘어 호출하지 않았다 (설계 07 문서 D-33)."""
+
+    status_code = 409
+    error = "Token budget exceeded"
+
+
 class KISError(AppError):
     """KIS 엔드포인트 오류. 응답 형식이 다르다: {"success": false, "error": {"message", "code"}} (Django kis 앱 계약)."""
 

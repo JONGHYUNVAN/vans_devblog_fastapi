@@ -1,16 +1,20 @@
 """테스트 데이터 생성 함수. 모델 테스트와 서비스 테스트가 함께 쓴다."""
 
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 
+from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
 from app.models.enums import (
     AgentSlot,
     ArbitrationOutcome,
+    CallKind,
     IssueSeverity,
     ResolutionStatus,
     ReviewLens,
     ReviewScope,
     ReviewVerdict,
 )
+from app.models.model_binding import ModelBinding
 from app.models.post_draft import (
     Arbitration,
     DraftVersion,
@@ -22,7 +26,8 @@ from app.models.post_draft import (
     VerificationChecklist,
     build_review_assignments,
 )
-from app.models.topic import TopicProposal
+from app.models.publishing_round import PublishingRound
+from app.models.topic import CategoryOption, TopicProposal, TopicRegistryEntry
 from app.services.evaluation import derive_verdict
 
 # 기본 바인딩의 주 렌즈 (설계 03 문서 4절 표)
@@ -163,3 +168,75 @@ def make_arbitration(draft: PostDraft, item: ReviewItem, outcome: ArbitrationOut
         reasoning="판단 근거",
         call_id=f"call-arb-{item.item_id}",
     )
+
+
+# ---------- 라운드·영수증·레지스트리 (로드맵 2단계) ----------
+
+
+def make_binding(**overrides) -> ModelBinding:
+    fields = {
+        "provider": "fake",
+        "model_id": "fake-1",
+        "persona_id": "architect",
+        "temperature": 0.7,
+        "max_output_tokens": 1000,
+    }
+    return ModelBinding(**(fields | overrides))
+
+
+def make_category() -> CategoryOption:
+    return CategoryOption(
+        main_category_id="main-1", main_label="Backend", sub_category_id="sub-1", sub_label="Database"
+    )
+
+
+def make_round(round_id: str = "round-1", round_seq: int = 1, **overrides) -> PublishingRound:
+    fields = {
+        "round_id": round_id,
+        "round_seq": round_seq,
+        "slot_bindings": {slot: make_binding(persona_id=f"persona-{slot}") for slot in AgentSlot},
+        "categories": [make_category()],
+    }
+    return PublishingRound(**(fields | overrides))
+
+
+def make_call(
+    call_id: str = "call-1",
+    draft_id: str | None = "round-1:A",
+    kind: CallKind = CallKind.WRITE_DRAFT,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    output_parsed_ok: bool = True,
+    started_second: int = 0,
+) -> AgentCall:
+    started_at = datetime(2026, 11, 2, 0, 0, started_second, tzinfo=UTC)
+    return AgentCall(
+        call_id=call_id,
+        round_id="round-1",
+        draft_id=draft_id,
+        kind=kind,
+        slot=AgentSlot.A,
+        model_binding=make_binding(),
+        prompt_template_version="v1",
+        attempt_number=1,
+        messages=[ChatMessage(role="user", content="써라")],
+        output_raw="{}" if output_parsed_ok else None,
+        output_parsed_ok=output_parsed_ok,
+        usage=TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+        latency_ms=10,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+
+def make_registry_entry(
+    entry_id: str = "round-1:A", title: str = "MongoDB 낙관적 잠금 실전", **overrides
+) -> TopicRegistryEntry:
+    fields = {
+        "entry_id": entry_id,
+        "title": title,
+        "keywords": ["mongodb", "concurrency", "locking"],
+        "draft_id": entry_id,
+        "round_id": entry_id.split(":")[0],
+    }
+    return TopicRegistryEntry(**(fields | overrides))

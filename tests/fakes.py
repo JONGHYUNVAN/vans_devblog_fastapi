@@ -1,12 +1,18 @@
 """여러 테스트 파일이 쓰는 가짜 구현과 KIS 샘플 데이터."""
 
 import asyncio
-from collections.abc import Iterator
+import copy
+from collections.abc import Iterable, Iterator
 from datetime import datetime
 from typing import Any
 
+from pymongo.errors import DuplicateKeyError
+
+from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse, LLMUsage
+from app.models.agent_call import AgentCall, TokenUsage
 from app.models.popular_search import PopularSearch
 from app.models.post import Post, PostSearchCriteria, PostSearchPage
+from tests.factories import make_call
 
 
 class FakePostIndexRepository:
@@ -154,3 +160,181 @@ class FakeKISStream:
 
     def unsubscribe(self, symbol: str, queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
         self.unsubscribed.append(symbol)
+
+
+# ---------- 에이전트 파이프라인 (로드맵 2단계) ----------
+
+
+class _WriteResult:
+    def __init__(self, matched_count: int) -> None:
+        self.matched_count = matched_count
+
+
+def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
+    """리포지토리가 쓰는 조건만 지원한다: 같음, $in, $gte."""
+    for key, condition in query.items():
+        value = doc.get(key)
+        if isinstance(condition, dict):
+            if "$in" in condition and value not in condition["$in"]:
+                return False
+            if "$gte" in condition and not (value is not None and value >= condition["$gte"]):
+                return False
+        elif value != condition:
+            return False
+    return True
+
+
+class FakeAsyncCursor:
+    def __init__(self, docs: list[dict[str, Any]]) -> None:
+        self._docs = docs
+
+    def sort(self, key: str, direction: int = 1) -> "FakeAsyncCursor":
+        self._docs.sort(key=lambda doc: doc.get(key), reverse=direction < 0)
+        return self
+
+    async def to_list(self) -> list[dict[str, Any]]:
+        return self._docs
+
+
+class FakeAsyncCollection:
+    """pymongo AsyncCollection 대역. 문서를 깊은 복사로 넣고 꺼내 테스트가 참조를 공유하지 않게 한다."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.docs: list[dict[str, Any]] = []
+        self.indexes: list[tuple[Any, dict[str, Any]]] = []
+
+    async def create_index(self, keys: Any, **options: Any) -> None:
+        self.indexes.append((keys, options))
+
+    async def insert_one(self, doc: dict[str, Any]) -> None:
+        if any(existing["_id"] == doc["_id"] for existing in self.docs):
+            raise DuplicateKeyError(f"E11000 duplicate key: {doc['_id']}")
+        self.docs.append(copy.deepcopy(doc))
+
+    async def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
+        return next((copy.deepcopy(doc) for doc in self.docs if _matches(doc, query)), None)
+
+    def find(self, query: dict[str, Any]) -> FakeAsyncCursor:
+        return FakeAsyncCursor([copy.deepcopy(doc) for doc in self.docs if _matches(doc, query)])
+
+    async def replace_one(self, query: dict[str, Any], replacement: dict[str, Any]) -> _WriteResult:
+        for index, doc in enumerate(self.docs):
+            if _matches(doc, query):
+                self.docs[index] = copy.deepcopy(replacement)
+                return _WriteResult(1)
+        return _WriteResult(0)
+
+    async def update_one(self, query: dict[str, Any], update: dict[str, Any]) -> _WriteResult:
+        for doc in self.docs:
+            if _matches(doc, query):
+                doc.update(copy.deepcopy(update["$set"]))
+                return _WriteResult(1)
+        return _WriteResult(0)
+
+    async def aggregate(self, pipeline: list[dict[str, Any]]) -> FakeAsyncCursor:
+        """$match 하나와 $group(_id: None, 필드: {$sum: "$a.b"}) 하나만 지원한다 (AgentCallRepository.sum_usage)."""
+        docs = [doc for doc in self.docs if _matches(doc, pipeline[0]["$match"])]
+        if not docs:
+            return FakeAsyncCursor([])
+        row: dict[str, Any] = {"_id": None}
+        for field, spec in pipeline[1]["$group"].items():
+            if field == "_id":
+                continue
+            path = spec["$sum"].lstrip("$").split(".")
+            row[field] = sum(_dig(doc, path) for doc in docs)
+        return FakeAsyncCursor([row])
+
+
+def _dig(doc: dict[str, Any], path: list[str]) -> int:
+    value: Any = doc
+    for part in path:
+        value = value[part]
+    return value
+
+
+class FakeAsyncDatabase:
+    def __init__(self) -> None:
+        self._collections: dict[str, FakeAsyncCollection] = {}
+
+    def __getitem__(self, name: str) -> FakeAsyncCollection:
+        return self._collections.setdefault(name, FakeAsyncCollection(name))
+
+    def __getattr__(self, name: str) -> FakeAsyncCollection:
+        return self[name]
+
+
+class FakeLLMCall:
+    def __init__(self, messages: list[LLMMessage], schema: dict[str, Any], params: LLMParams, timeout: float) -> None:
+        self.messages = messages
+        self.schema = schema
+        self.params = params
+        self.timeout = timeout
+
+
+class FakeLLMClient:
+    """outcomes 를 순서대로 돌려준다: str 은 본문(JSON), LLMResponse 는 그대로, Exception 은 던진다.
+
+    호출마다 FakeLLMCall 을 남기고, delay_s 동안 기다려 동시 호출 수(max_active)를 잴 수 있게 한다.
+    스크립트가 모자라면 AssertionError.
+    """
+
+    def __init__(self, outcomes: Iterable[str | LLMResponse | Exception], delay_s: float = 0.0) -> None:
+        self.outcomes = list(outcomes)
+        self.delay_s = delay_s
+        self.calls: list[FakeLLMCall] = []
+        self.active = 0
+        self.max_active = 0
+
+    @staticmethod
+    def response(text: str, prompt_tokens: int = 100, completion_tokens: int = 50) -> LLMResponse:
+        return LLMResponse(text=text, usage=LLMUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens))
+
+    async def complete(
+        self, messages: list[LLMMessage], schema: dict[str, Any], params: LLMParams, timeout: float
+    ) -> LLMResponse:
+        self.calls.append(FakeLLMCall(messages, schema, params, timeout))
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            if self.delay_s:
+                await asyncio.sleep(self.delay_s)
+            if not self.outcomes:
+                raise AssertionError("FakeLLMClient has no scripted outcome left")
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return self.response(outcome) if isinstance(outcome, str) else outcome
+        finally:
+            self.active -= 1
+
+
+class FakeAgentCallRepository:
+    """AgentCallRepository 대역. 메모리 목록에 쌓고 usage 를 더한다."""
+
+    def __init__(self) -> None:
+        self.calls: list[AgentCall] = []
+
+    def preload(self, draft_id: str, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
+        """이미 쓴 토큰을 영수증 하나로 넣는다 (예산 테스트)."""
+        self.calls.append(
+            make_call(
+                call_id=f"preload-{len(self.calls)}",
+                draft_id=draft_id,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+        )
+
+    async def add(self, call: AgentCall) -> None:
+        self.calls.append(call)
+
+    async def list_by_draft(self, draft_id: str) -> list[AgentCall]:
+        return [call for call in self.calls if call.draft_id == draft_id]
+
+    async def sum_usage(self, draft_id: str) -> TokenUsage:
+        usage = TokenUsage()
+        for call in await self.list_by_draft(draft_id):
+            usage.prompt_tokens += call.usage.prompt_tokens
+            usage.completion_tokens += call.usage.completion_tokens
+        return usage

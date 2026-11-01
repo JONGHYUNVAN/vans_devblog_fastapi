@@ -9,11 +9,13 @@ from elasticsearch import Elasticsearch
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from pymongo import AsyncMongoClient
 
 from app.clients.kis.stream import create_kis_stream
+from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
-from app.dependencies import get_index_setup_service, open_clients
+from app.dependencies import ensure_agent_indexes, get_index_setup_service, open_clients
 from app.routers import health, internal, kis, search, sync
 
 logging.basicConfig(
@@ -39,12 +41,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     with open_clients(settings) as (es, mongo_client):
         app.state.es = es
         app.state.mongo_client = mongo_client
+        # 에이전트 파이프라인은 같은 DB 를 비동기 클라이언트로 쓴다 (설계 07 문서 D-43)
+        app.state.async_mongo_client = create_async_mongo_client(settings)
         app.state.kis_stream = create_kis_stream(settings)
         await _ensure_popular_index(es)
+        await _ensure_agent_indexes(app.state.async_mongo_client, settings.mongodb_db_name)
         try:
             yield
         finally:
             await app.state.kis_stream.close()
+            await app.state.async_mongo_client.close()
 
 
 async def _ensure_popular_index(es: Elasticsearch) -> None:
@@ -58,6 +64,15 @@ async def _ensure_popular_index(es: Elasticsearch) -> None:
     else:
         if created:
             logger.info("인기 검색어 인덱스를 만들었다")
+
+
+async def _ensure_agent_indexes(async_mongo_client: AsyncMongoClient, db_name: str) -> None:
+    # Mongo 가 내려가 있거나 DB 이름이 비어 있어도 앱은 떠야 한다.
+    # 인덱스가 없으면 주제 선정 라운드 단일 보장(부분 unique)이 빠지므로 경고를 남긴다.
+    try:
+        await ensure_agent_indexes(async_mongo_client[db_name])
+    except Exception as exc:  # 기동 경계
+        logger.warning("에이전트 파이프라인 인덱스 확인 실패: %s", exc)
 
 
 app = FastAPI(
