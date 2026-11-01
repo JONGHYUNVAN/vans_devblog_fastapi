@@ -174,7 +174,7 @@ AgentCall (독립 컬렉션, LLM 호출 1회의 영수증. insert 만 한다)
  └─ started_at, finished_at
 
 TopicRegistryEntry (독립 컬렉션 agent_topics, 라운드 간 중복 방지)
- └─ title, keywords[], embedding?, draft_id?, round_id, status, published_at?
+ └─ title, keywords[], embedding?, draft_id, round_id, status, published_at?   _id 는 draft_id 와 같다(D-28)
 ```
 
 ## 3. 값 객체
@@ -391,10 +391,10 @@ class Publication(BaseModel):
 |---|---|---|---|
 | `start_drafting(max_iterations)` | `TOPIC_LOCKED`, `REVISING` | `DRAFTING` (14행의 방어 경우 `ESCALATED`) | `revision_cause` 에 따라 iteration 증가 여부가 갈린다 (03 문서 13a~14행). `revision_cause` 는 지우지 않는다 |
 | `submit_version(title, summary, content_markdown, section_ids, resolutions, author_note, call_id)` | `DRAFTING` | `VALIDATING` | 버전 추가. `passed_validation=False`. 새 버전의 `origin_cause` 는 `revision_cause` 로 정한다(`GATE` 면 직전 버전 값, `REVIEW`·`HUMAN` 이면 그 값, 없으면 `None`). `revision_cause`, `approved_by`·`approved_at` 을 지운다 |
-| `pass_validation()` | `VALIDATING` | `READY_TO_PUBLISH` / `IN_REVIEW` / `IN_SPOT_CHECK` | `validation_retries=0`. `origin_cause == HUMAN` 이면 바로 `READY_TO_PUBLISH`. 그 외에는 리뷰 완료 이전 버전(`last_reviewed_version`)이 없으면 `IN_REVIEW`, 있으면 `IN_SPOT_CHECK` |
+| `pass_validation()` | `VALIDATING` | `READY_TO_PUBLISH` / `IN_REVIEW` / `IN_SPOT_CHECK` | `validation_retries=0`. `origin_cause == HUMAN` 이면 바로 `READY_TO_PUBLISH`. 그 외에는 리뷰 완료 이전 버전(`last_reviewed_version`)이 없으면 `IN_REVIEW`, 있으면 `IN_SPOT_CHECK`. `IN_SPOT_CHECK` 인데 미결 항목을 가진 리뷰어가 없으면 `ValueError`(정상 흐름에서는 생기지 않는 방어) |
 | `fail_validation(errors, max_validation_retries)` | `VALIDATING` | `REVISING` (`cause=GATE`) 또는 `FAILED` | 실패 횟수를 1 올린 값이 상한 미만이면 전자, 같으면 `FailureRecord(GATE_RETRIES_EXHAUSTED)`. `iteration` 과 `origin_cause` 는 유지 |
 | `add_review(review)` | `IN_REVIEW`, `IN_SPOT_CHECK` | 변화 없음 | `derived_verdict` 를 저장. 중복이면 무시 |
-| `open_blocking_items(version)` | – | – | 해당 버전 리뷰·중재 종료 시점의 미결 차단 항목 집합 (04 문서 5절) |
+| `open_blocking_items(version)` | – | – | 해당 버전의 미결 차단 항목 집합 (04 문서 5절). 현재 이력으로 다시 계산하므로 나중 버전의 `UPHOLD_AUTHOR` 중재가 이전 버전의 집합도 줄인다. 흐름은 `last_reviewed_version` 의 집합만 쓴다 |
 | `required_reviewers()` | – | – | FULL 은 배정된 두 슬롯. SPOT_CHECK 는 직전 리뷰 완료 버전의 `open_blocking_items` 에 본인 항목이 남아 있는 슬롯 |
 | `pending_reviewers()` | – | – | `required_reviewers()` 중 아직 응답하지 않은 슬롯. 서비스는 이 슬롯만 호출한다 |
 | `is_review_complete()` | – | – | `pending_reviewers()` 가 비었다 |
@@ -412,7 +412,7 @@ class Publication(BaseModel):
 | `record_approval(by)` | `READY_TO_PUBLISH` | 변화 없음 | 승인 토글이 켜진 경우 |
 | `begin_publish(requires_approval)` | `READY_TO_PUBLISH` | 변화 없음 | 발행 호출 직전 `PublicationIntent(attempt = publish_attempts + 1)` 를 남긴다. 승인 대기이거나 결과를 모르는 의도가 있으면 거절한다 (04 문서 8절 4·6단계) |
 | `fail_publish(max_publish_attempts)` | `READY_TO_PUBLISH` | 변화 없음 / `ESCALATED` | 결과가 확정된 실패. 의도에 `failed_at` 을 쓰고 `publish_attempts` 를 그 `attempt` 로 맞춘다. 상한이면 `PUBLISH_FAILED` (03 문서 28a·28행) |
-| `publish(publication, requires_approval)` | `READY_TO_PUBLISH` | `PUBLISHED` | 승인 토글이 켜져 있으면 `approved_by` 가 있어야 한다 |
+| `publish(publication, requires_approval)` | `READY_TO_PUBLISH` | `PUBLISHED` | 승인 토글이 켜져 있으면 `approved_by` 가 있어야 한다. `begin_publish` 가 남긴 의도가 있어야 하고 `publication.final_version` 은 그 의도의 버전과 같아야 한다 |
 | `has_uncertain_publication` | – | – | `failed_at` 없는 의도가 있다. 서비스는 이때 호출하지 않고 `escalate(PUBLISH_UNCERTAIN)` (03 문서 28b행) |
 | `awaits_approval(requires_approval)` | – | – | `READY_TO_PUBLISH`, 토글 켜짐, `approved_by` 없음. 러너가 이 글을 띄우지 않는다 |
 | `is_active` | – | – | `PUBLISHED`, `REJECTED`, `ESCALATED`, `FAILED` 가 아니면 참. 러너가 이 글만 코루틴으로 돌린다 |

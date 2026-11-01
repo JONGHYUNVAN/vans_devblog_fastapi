@@ -167,8 +167,13 @@ class PeerReview(BaseModel):
             raise ValueError(f"review {self.review_id} has duplicate item ids")
         if len({check.item_id for check in self.item_checks}) != len(self.item_checks):
             raise ValueError(f"review {self.review_id} has duplicate item checks")
-        if self.scope == ReviewScope.FULL and self.item_checks:
-            raise ValueError("FULL review has no item checks")
+        if self.scope == ReviewScope.FULL:
+            if self.item_checks:
+                raise ValueError("FULL review has no item checks")
+            if self.reported_verdict is None:
+                raise ValueError("FULL review needs a reported verdict")
+            if any(item.is_new_in_version for item in self.items):
+                raise ValueError("FULL review items are not new in version")
         if self.scope == ReviewScope.SPOT_CHECK:
             if self.reported_verdict is not None:
                 raise ValueError("SPOT_CHECK review has no reported verdict")
@@ -357,6 +362,10 @@ class PostDraft(BaseModel):
 
         FULL 버전은 차단 등급 항목, SPOT_CHECK 버전은 resolved=False 이월 항목 ∪ 신규 CRITICAL 이고,
         어느 쪽이든 UPHOLD_AUTHOR 로 종결된 항목은 뺀다. 수정 입력·게이트·다음 SPOT_CHECK 가 이 집합을 공유한다.
+
+        현재 이력으로 다시 계산하므로 리뷰 종료 시점의 스냅샷이 아니다. 나중 버전의 중재가 UPHOLD_AUTHOR 로 끝나면
+        이전 버전의 집합도 줄어든다. 흐름은 last_reviewed_version 의 집합만 쓰므로 문제없고, 이력을 보여주는 곳
+        (격리 요약)은 이 점을 감안한다.
         """
         reviews = self.reviews_of(version_number)
         if any(review.scope == ReviewScope.FULL for review in reviews):
@@ -520,6 +529,10 @@ class PostDraft(BaseModel):
         elif self.last_reviewed_version is None:
             self.status = PostStatus.IN_REVIEW
         else:
+            if not self.required_reviewers():
+                # 정상 흐름에서는 못 온다. REVISING(REVIEW) 는 미결 차단 항목이 있을 때만 생기므로 SPOT_CHECK 리뷰어가
+                # 적어도 하나 있다. 생기면 리뷰 0건으로 발행되는 대신 여기서 멈춘다(러너가 FAILED(INTERNAL_ERROR) 로 둔다).
+                raise ValueError(f"draft {self.draft_id} enters SPOT_CHECK with no reviewer holding an open item")
             self.status = PostStatus.IN_SPOT_CHECK
 
     def fail_validation(self, errors: list[str], max_validation_retries: int) -> None:
@@ -600,6 +613,8 @@ class PostDraft(BaseModel):
                 self.revision_cause = RevisionCause.REVIEW
                 self.status = PostStatus.REVISING
             case PostStatus.ESCALATED:
+                if outcome.escalation_reason is None:  # EvaluationOutcome 검증기가 보장한다. 타입을 좁히려고 둔다
+                    raise ValueError("escalation needs a reason")
                 self.escalate(outcome.escalation_reason)
 
     def escalate(self, reason: EscalationReason) -> None:
@@ -723,19 +738,32 @@ class PostDraft(BaseModel):
         self.publication_intent = intent
         return intent
 
-    def fail_publish(self, max_publish_attempts: int) -> None:
-        """결과가 확정된 발행 실패 (03 문서 28a·28행). 상한 미만이면 READY_TO_PUBLISH 로 남아 다시 호출한다."""
-        self._require(PostStatus.READY_TO_PUBLISH)
+    def _intent_in_flight(self) -> PublicationIntent:
+        """결과를 아직 반영하지 않은 발행 의도. begin_publish 뒤, fail_publish·publish 전에만 있다."""
         intent = self.publication_intent
         if intent is None or intent.failed_at is not None:
             raise InvalidTransitionError(f"draft {self.draft_id} has no publication in flight")
+        return intent
+
+    def fail_publish(self, max_publish_attempts: int) -> None:
+        """결과가 확정된 발행 실패 (03 문서 28a·28행). 상한 미만이면 READY_TO_PUBLISH 로 남아 다시 호출한다."""
+        self._require(PostStatus.READY_TO_PUBLISH)
+        intent = self._intent_in_flight()
         intent.failed_at = _now()
         self.publish_attempts = intent.attempt
         if self.publish_attempts >= max_publish_attempts:
             self.escalate(EscalationReason.PUBLISH_FAILED)
 
     def publish(self, publication: Publication, requires_approval: bool) -> None:
-        """발행 성공 (03 문서 27행). 승인 토글이 켜져 있으면 승인이 있어야 한다."""
+        """발행 성공 (03 문서 27행). 승인 토글이 켜져 있으면 승인이 있어야 한다.
+
+        begin_publish 가 남긴 의도가 있어야 하고, publication 의 버전은 그 의도의 버전(실제로 보낸 본문)과 같아야 한다.
+        """
         self._require_publishable(requires_approval)
+        intent = self._intent_in_flight()
+        if publication.final_version != intent.final_version:
+            raise InvalidTransitionError(
+                f"publication final_version {publication.final_version} differs from the intent's {intent.final_version}"
+            )
         self.publication = publication
         self.status = PostStatus.PUBLISHED

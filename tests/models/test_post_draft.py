@@ -24,6 +24,7 @@ from app.models.post_draft import (
     EvaluationOutcome,
     ItemCheck,
     ItemResolution,
+    PeerReview,
     PostDraft,
     Publication,
     ReviewAssignment,
@@ -150,6 +151,22 @@ def test_empty_checklist_is_invalid():
         VerificationChecklist()
 
 
+def test_full_review_requires_reported_verdict():
+    # 05 문서 ReviewOutput.verdict 는 필수다. 판정에는 쓰지 않지만 reported ≠ derived 지표(07 문서 4절)의 입력이다
+    review = make_review(_in_review(), B)
+
+    with pytest.raises(ValidationError, match="reported verdict"):
+        PeerReview(**(review.model_dump() | {"reported_verdict": None}))
+
+
+def test_full_review_items_cannot_be_new_in_version():
+    fields = make_review(_in_review(), B, [MINOR]).model_dump()
+    fields["items"][0]["is_new_in_version"] = True
+
+    with pytest.raises(ValidationError, match="not new in version"):
+        PeerReview(**fields)
+
+
 @pytest.mark.parametrize(
     ("status", "is_active"),
     [
@@ -244,6 +261,19 @@ def test_pass_validation_goes_to_spot_check_when_reviewed_version_exists():
 
     assert draft.status == PostStatus.IN_SPOT_CHECK
     assert draft.current_review_scope == ReviewScope.SPOT_CHECK
+
+
+def test_pass_validation_raises_when_spot_check_has_no_reviewer():
+    # 정상 흐름에서는 못 온다(REVISING(REVIEW) 는 미결 차단 항목이 있을 때만 생긴다). 상태를 강제해 가드만 확인한다.
+    # 가드가 없으면 리뷰 0건인 SPOT_CHECK 가 evaluate 에서 바로 READY_TO_PUBLISH 가 된다.
+    draft = _ready()
+    draft.status = PostStatus.REVISING
+    draft.revision_cause = RevisionCause.REVIEW
+    draft.start_drafting(MAX_ITERATIONS)
+    submit(draft)
+
+    with pytest.raises(ValueError, match="no reviewer"):
+        draft.pass_validation()
 
 
 def test_human_revision_skips_review_and_needs_new_approval():
@@ -573,6 +603,28 @@ def test_add_arbitration_raises_when_arbiter_is_the_reviewer():
         draft.add_arbitration(arbitration)
 
 
+def test_add_arbitration_raises_when_item_is_not_deadlocked():
+    # 기각된 MAJOR 는 미해소여도 교착이 아니다(07 문서 Q-14 현행)
+    draft, items = _in_arbitration(CRITICAL, MAJOR)
+    major = next(item for item in items if item.severity == MAJOR)
+
+    with pytest.raises(ValueError, match="not deadlocked"):
+        draft.add_arbitration(make_arbitration(draft, major, ArbitrationOutcome.UPHOLD_AUTHOR))
+
+
+def test_retry_from_failed_in_arbitration_keeps_saved_arbitrations():
+    # 시나리오 ⑪의 중재 버전: 하나가 재시도를 소진해도 저장된 중재는 남고, 재개하면 빠진 항목만 호출한다
+    draft, items = _in_arbitration(CRITICAL, CRITICAL)
+    draft.add_arbitration(make_arbitration(draft, items[0], ArbitrationOutcome.UPHOLD_AUTHOR))
+    draft.mark_failed(FailureCode.LLM_RETRIES_EXHAUSTED, "두 번째 중재 실패")
+
+    draft.retry_from_failed()
+
+    assert draft.status == PostStatus.IN_ARBITRATION
+    assert len(draft.arbitrations) == 1
+    assert draft.pending_arbitration_items() == [items[1]]
+
+
 # ── 23~25행: 사람 결정 ─────────────────────────────────────────────
 
 
@@ -750,6 +802,22 @@ def test_begin_publish_refuses_when_previous_result_is_unknown():
         draft.begin_publish(requires_approval=False)
 
 
+def test_publish_raises_when_publication_version_differs_from_intent():
+    draft = _ready()
+    draft.begin_publish(requires_approval=False)
+
+    with pytest.raises(InvalidTransitionError, match="differs from the intent"):
+        draft.publish(_publication(version=2), requires_approval=False)
+    assert draft.status == PostStatus.READY_TO_PUBLISH
+
+
+def test_publish_raises_without_publication_in_flight():
+    draft = _ready()
+
+    with pytest.raises(InvalidTransitionError, match="in flight"):
+        draft.publish(_publication(), requires_approval=False)
+
+
 # ── 30행: 라운드 중단 ──────────────────────────────────────────────
 
 
@@ -771,6 +839,7 @@ def test_reject_by_abort_rejects_halted_draft_and_keeps_intent(halt):
 
 def test_reject_by_abort_raises_when_published():
     draft = _ready()
+    draft.begin_publish(requires_approval=False)
     draft.publish(_publication(), requires_approval=False)
 
     with pytest.raises(InvalidTransitionError):
