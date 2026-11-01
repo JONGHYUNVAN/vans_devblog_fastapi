@@ -60,6 +60,7 @@ class AgentCallService:
         binding: ModelBinding,
         messages: list[ChatMessage],
         schema: type[T],
+        check: Callable[[T], None] | None = None,
         draft: PostDraft | None = None,
         target_version: int | None = None,
         topic_attempt: int | None = None,
@@ -68,6 +69,7 @@ class AgentCallService:
         """messages 를 binding 의 모델에 보내 schema 로 파싱한 결과를 돌려준다.
 
         draft 가 None 이면 주제 제안 호출이라 예산을 검사하지 않는다 (설계 02 문서 3절).
+        check 는 입력 문맥이 필요한 검사(agents/parsers)다. 파싱된 모델을 받아 위반이면 LLMOutputError 를 던진다.
         네트워크·5xx·429·타임아웃(LLMTransportError)은 지수 백오프 뒤 같은 메시지로,
         계약 위반(ValidationError·LLMOutputError)은 직전 출력과 안내를 붙여 다시 부른다.
         """
@@ -99,11 +101,14 @@ class AgentCallService:
             else:
                 try:
                     parsed = schema.model_validate_json(response.text)
+                    if check is not None:
+                        check(parsed)
                 except ValidationError as exc:
                     error = "output: " + "; ".join(
                         f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in exc.errors()
                     )
                 except LLMOutputError as exc:
+                    parsed = None
                     error = f"output: {exc.message}"
             finished_at = datetime.now(UTC)
 

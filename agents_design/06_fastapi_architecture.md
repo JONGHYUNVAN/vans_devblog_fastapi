@@ -41,7 +41,7 @@ app/
 │  ├─ topic_selection.py       TopicSelectionService.drive(round_id): 제안 수집, 중복 판별, 배정, 확정 (Phase 1)
 │  ├─ draft_pipeline.py        DraftPipelineService.drive(draft_id): 글 하나를 사람 대기나 종결까지 진행
 │  ├─ draft_decision.py        DraftDecisionService: 사람 결정(승인, 격리 해소, 재개, 폐기)
-│  ├─ validation.py            ValidationGate: 결정론적 검사 (LLM 없음). Tiptap 변환 가능 여부 포함
+│  ├─ validation.py            ValidationGate(min_chars, max_chars, min_code_blocks).validate(draft) -> list[str]: 결정론적 검사 (LLM 없음). Tiptap 변환 가능 여부 포함. 전이는 호출자가 한다
 │  ├─ evaluation.py            EvaluationEngine: derived_verdict, evaluate 규칙 (순수 함수)
 │  ├─ publishing.py            PublishingService: 승인 확인, 요약 노트 생성, Tiptap 변환·CreatePostDto 매핑, 결과 불명 판정, Publisher 호출
 │  ├─ runner.py                PipelineRunner: 코루틴 표, 주기 스캔, 기동·종료
@@ -49,8 +49,8 @@ app/
 ├─ agents/                     [프롬프트 자산 계층] 도메인 → 프롬프트 입력, LLM 출력 → 도메인
 │  ├─ personas.py              PersonaProfile 상수 3종, 렌즈 정의
 │  ├─ contracts.py             05 문서의 입출력 Pydantic 모델
-│  ├─ builders.py              build_review_input(draft, slot) 등. 블라인드 처리와 결정론적 메시지 렌더링
-│  ├─ parsers.py               LLM 원문 → 계약 모델. 실패는 LLMOutputError
+│  ├─ builders.py              build_*_input(draft, round, …) 가 입력 모델을 만들고 render_messages(model, prompt_version) 가 [system=템플릿, user=입력 JSON] 을 만든다. 블라인드 처리 포함
+│  ├─ parsers.py               문맥 검사(*_check 클로저 → AgentCallService.call 의 check 인자, 위반은 LLMOutputError 로 재시도)와 출력 → ReviewItem 변환(review_items, spot_check_items)
 │  └─ prompts/
 │     ├─ v1/
 │     │  ├─ propose_topic.md
@@ -59,7 +59,7 @@ app/
 │     │  ├─ review_full.md
 │     │  ├─ review_spot_check.md
 │     │  └─ arbitrate.md
-│     └─ registry.py           PROMPT_VERSION = "v1", 템플릿 로더
+│     └─ registry.py           PROMPT_VERSION = "v1", 템플릿 로더(load_template). 템플릿은 string.Template($display_name, $writer_bias)이고 .dockerignore 의 *.md 에서 예외다
 ├─ repositories/
 │  ├─ optimistic_lock.py       replace_with_revision: revision 조건 저장. agent_round·post_draft 가 같이 쓴다
 │  ├─ agent_round.py           agent_rounds 컬렉션, 주제 선정 라운드 부분 unique 인덱스
@@ -72,7 +72,8 @@ app/
 │  ├─ post_draft.py            PostDraft + 도메인 메서드, DraftVersion, PeerReview, ReviewItem, ItemResolution, Arbitration, PublicationIntent, Publication, FailureRecord, EvaluationOutcome
 │  ├─ agent_call.py            AgentCall, TokenUsage
 │  ├─ topic.py                 TopicProposal, CategoryOption, TopicRegistryEntry
-│  ├─ tiptap.py                markdown_to_tiptap: 04 문서 8절 변환표. 순수 함수. 변환 불가는 ValueError
+│  ├─ sections.py              섹션 앵커 찾기·지우기·자르기(find_anchors, strip_anchors, section_text). 빌더·게이트·변환이 같이 쓴다
+│  ├─ tiptap.py                markdown_to_tiptap: 04 문서 8절 변환표. markdown-it-py(commonmark + table·strikethrough)로 파싱한다. 순수 함수. 변환 불가는 ValueError
 │  └─ model_binding.py         ModelBinding
 └─ clients/
    ├─ mongo.py                 create_async_mongo_client
@@ -275,7 +276,7 @@ class Settings(BaseSettings):
 |---|---|
 | `models/post_draft.py` | 전이표(03 문서) 행마다 테스트 1개. 허용되지 않는 전이가 `InvalidTransitionError`를 던지는지. DB 없음 |
 | `services/evaluation.py` | 순수 함수. fast-track, 차단 1건, SPOT_CHECK 해소/미해소/교착, 중재 결과별 케이스 |
-| `models/tiptap.py` | 변환표 행마다 1건, 앵커 제거, soft break → 공백, `python-snippet` → `python`, 금지 문법 각각 `ValueError`. 변환 결과의 노드·마크 이름과 attrs 키가 기존 사람 글 `content`(`tests/golden/`)에 나오는 것 안에 있는지 비교 |
+| `models/tiptap.py` | 변환표 행마다 1건, 앵커 제거, soft break → 공백, `python-snippet` → `python`, 금지 문법 각각 `ValueError`. 변환 결과의 노드·마크 이름이 에디터 스키마(vans_story EditorExtensions: StarterKit·Link·CodeBlockLowlight·Table) 안에 있는지 비교. 사람 글 golden 은 없어 `tests/golden/tiptap_sample.md → .json` 을 golden 으로 둔다 |
 | `services/validation.py` | 앵커 누락, 코드 문법 오류, 길이, 차단 항목 누락·중복·리뷰에 없는 ID, `MINOR`의 `DEFERRED`는 통과, 차단 항목의 `DEFERRED`는 실패, 변환 불가 문법(HTML·이미지·각주·`mermaid`), 앵커 소실 각 1건 |
 | `services/topic_selection.py` | 충돌 없음, 1쌍 충돌 후 순위 조합, `LockedTopic`의 이전 시도 스냅샷 유지, 상한 미달 시 `ABORTED`, 제안 호출 재시도 소진은 다른 호출을 기다린 뒤 `ABORTED(LLM_FAILED)`, 두 번째 `TOPIC_SELECTION` 라운드 생성은 409이고 문서가 남지 않음, 확정 쓰기 도중 끊고 다시 돌리면 같은 ID로 글 3편·레지스트리 3건만 남고 자기 레지스트리와 충돌하지 않음, 중단과 겹친 확정이 정리된 문서를 되살리지 않음 |
 | `services/draft_pipeline.py` | `FakeLLMClient` 와 `FakePostDraftRepository` 로 ① fast-track ② 수정 1회 후 승인 ③ 교착 2건 동시 발생 → `item_id` 별 `ARBITRATE` 2건 호출 및 `UPHOLD_AUTHOR` ④ `UPHOLD_REVIEWER` 판정된 v1 항목이 v3 `open_blocking_items` 에 유지되고 기각 시 게이트 실패 ⑤ 게이트 실패는 `iteration` 유지, v1 재작성 뒤에도 FULL 리뷰, 통과하면 `validation_retries=0` ⑥ 사람 `REVISE(instruction)` 이 게이트 통과 후 `IN_SPOT_CHECK` 없이 `READY_TO_PUBLISH` 직행, 이전 승인은 지워져 다시 승인을 기다림 ⑦ `save` 충돌이면 결과를 버리고 다시 읽음 ⑧ 단계 중간에 끊고 다시 `drive`하면 마지막 저장 상태부터 이어 가고 끊긴 단계의 호출만 다시 함. `DRAFTING`에서 끊겨도 `revision_cause`로 같은 호출 종류·입력을 만듦 ⑨ `abort_round` 가 `ESCALATED`·`FAILED` 글까지 `REJECTED` 로 바꾸고 `PUBLISHED` 는 유지 ⑩ 중단과 `close_if_complete` 가 겹치면 라운드는 `ABORTED` 이고 `COMPLETED` 가 되지 않음 ⑪ 리뷰 1건이 재시도를 소진하면 다른 리뷰는 저장되고, 재개하면 빠진 리뷰만 호출 ⑫ 예상하지 못한 예외는 `FAILED(INTERNAL_ERROR)` 이고 스캔이 다시 띄우지 않음 |

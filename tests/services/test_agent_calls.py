@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app.clients.llm.base import LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.core.config import Settings
-from app.core.exceptions import BudgetExceededError, LLMRetriesExhaustedError, LLMTransportError
+from app.core.exceptions import BudgetExceededError, LLMOutputError, LLMRetriesExhaustedError, LLMTransportError
 from app.models.agent_call import ChatMessage
 from app.models.enums import AgentSlot, CallKind
 from app.services.agent_calls import AgentCallService
@@ -202,3 +202,29 @@ async def test_calls_to_one_provider_are_limited_by_semaphore():
     await asyncio.gather(*(harness.call() for _ in range(4)))
 
     assert harness.llm.max_active == 2
+
+
+async def test_check_hook_failure_retries_like_a_schema_violation():
+    harness = Harness([GOOD, GOOD])
+    seen: list[Answer] = []
+
+    def check(answer: Answer) -> None:
+        seen.append(answer)
+        if len(seen) == 1:
+            raise LLMOutputError("score must be 5")
+
+    answer = await harness.service.call(
+        kind=CallKind.WRITE_DRAFT,
+        round_id="round-1",
+        slot=AgentSlot.A,
+        binding=make_binding(),
+        messages=MESSAGES,
+        schema=Answer,
+        check=check,
+    )
+
+    assert answer.score == 3 and len(seen) == 2
+    first, second = harness.calls.calls
+    assert (first.output_parsed_ok, first.error) == (False, "output: score must be 5")
+    assert second.output_parsed_ok is True
+    assert "score must be 5" in harness.llm.calls[1].messages[-1].content

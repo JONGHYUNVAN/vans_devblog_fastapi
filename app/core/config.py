@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     max_validation_retries: int = 2
     max_publish_attempts: int = 3
     draft_token_limit: int = 300_000  # 글 소프트 상한. 운영 후 조정한다 (설계 07 문서 Q-07)
+    draft_min_chars: int = 4000  # 본문 길이 범위 (설계 07 문서 Q-08)
+    draft_max_chars: int = 12000
     review_temperature: float = 0.2  # REVIEW, ARBITRATE. 작성 호출은 ModelBinding.temperature
     review_timeout_s: int = 300
     draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT

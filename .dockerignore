@@ -8,3 +8,4 @@ __pycache__
 .pytest_cache
 tests
 *.md
+!app/agents/prompts/**/*.md
