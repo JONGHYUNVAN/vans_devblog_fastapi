@@ -46,6 +46,7 @@
 | D-40 | Post BE 인증은 에이전트 전용 관리자 계정으로 발행마다 `vans_story_be`에 로그인해 받은 토큰을 쓴다. 게시글 작성자는 이 계정이다 | Post BE 글 생성은 관리자 JWT(HS512, `sub`=이메일)를 요구한다. `JWT_SECRET`을 공유해 직접 서명하면 이 서비스가 어떤 사용자로든 위장할 수 있다 | `JWT_SECRET` 공유 후 직접 서명 |
 | D-41 | 카테고리는 주제 제안이 라운드 스냅샷(`PublishingRound.categories`)에서 한 쌍을 고르고, 파서가 목록에 있는지 검사한다 | 승인 토글을 끈 뒤에도 사람 없이 정해져야 한다. 잘못 고른 카테고리는 발행 후 관리자가 블로그 에디터에서 고친다 | 승인 때 사람이 지정 |
 | D-42 | 관리자 수동 격리(`escalate(MANUAL)`)를 두지 않는다. 라운드 상태에서도 `OPEN`을 없애 라운드는 `TOPIC_SELECTION`으로 생긴다 | 수동 격리는 거는 API·CLI가 없었고, 발행 호출과 겹치면 이미 올라간 게시글을 놓쳤으며, 원래 상태로 돌아갈 경로도 없었다. 글은 상한으로 반드시 멈추고, 승인 토글이 발행을 막으며, 버릴 때는 `ESCALATED`·`FAILED`의 폐기나 라운드 중단을 쓴다. `OPEN`은 생성 API가 거치지 않는 상태였다 | `escalate(MANUAL)` + API·CLI + 복귀 경로, `OPEN → start_round` |
+| D-43 | 파이프라인 컬렉션 4개(`agent_rounds`·`agent_drafts`·`agent_calls`·`agent_topics`)는 검색 서비스와 같은 Mongo, 같은 DB(`MONGODB_URI`·`mongodb_db_name`)에 둔다. 비동기 클라이언트만 별도로 만든다 | 사용자 결정(2026-11-02). 개인 블로그라 Mongo 인스턴스를 더 띄울 비용을 늘리지 않는다. 컬렉션 이름의 `agent_` 접두로 게시글 컬렉션과 구분한다 | 별도 `AGENTS_MONGODB_URI`로 standalone `vans_devblog_mongodb`를 가리키기 |
 
 ## 2. 미결 사항
 
@@ -63,7 +64,6 @@
 | Q-13 | 발행본 본문을 이 서비스가 들고 자기 표절 검사를 할지 | 게이트, 저장 | 1차 게이트에서 제외. 레지스트리에는 제목·키워드만 있다 |
 | Q-14 | MAJOR 분쟁도 중재할지 | 교착은 CRITICAL 한정이라, 작성자가 근거를 들어 기각한 MAJOR를 리뷰어가 받아들이지 않으면 반복 상한까지 돈 뒤 `ESCALATED`다. 덜 심각한 MAJOR가 더 무거운 경로(사람)를 탄다 | 현행(CRITICAL만 중재) |
 | Q-16 | 에이전트 내부 API 키를 검색 내부 API 키(`INTERNAL_API_KEY`, NestJS Post BE와 공유)와 나눌지 | 같은 키면 Post BE가 라운드 생성·결정 API도 부를 수 있다 | 라우터 단계(6) 전까지 정한다. 기본은 별도 `AGENTS_INTERNAL_API_KEY` |
-| Q-17 | 파이프라인 컬렉션을 어느 Mongo에 둘지 | 검색 서비스의 `MONGODB_URI`는 게시글 원본 DB다. 02 문서 6절은 standalone `vans_devblog_mongodb`를 가정했다 | 로드맵 2단계에서 정한다. 기본은 별도 `AGENTS_MONGODB_URI` |
 | Q-15 | 중재자 독립성 | 슬롯이 셋이라 제3 슬롯 중재자는 그 글을 이미 FULL 리뷰한 다른 리뷰어다 | 현행. 독립이 필요하면 중재 전용 바인딩을 설정으로 둔다 |
 
 ## 3. 구현 로드맵

@@ -263,8 +263,8 @@ class Settings(BaseSettings):
 ## 5. 비동기 모델
 
 - 이 기능의 라우터·서비스·리포지토리는 전부 `async def`. 동기 I/O 호출 금지.
-- MongoDB는 `pymongo.AsyncMongoClient`(pymongo ≥ 4.13). 기존 검색 서비스의 동기 `MongoClient`와 같은 프로세스에 두게 되면 연결을 별도로 만든다(`create_async_mongo_client`).
-- 다중 문서 트랜잭션을 쓰지 않으므로 standalone MongoDB(현재 `vans_devblog_mongodb`)에서 돈다. 여러 문서를 고치는 동작의 순서와 정리는 04 문서 1절.
+- MongoDB는 `pymongo.AsyncMongoClient`(pymongo ≥ 4.13). 검색 서비스와 같은 `MONGODB_URI`·`mongodb_db_name`을 쓰고(07 문서 D-43), 연결만 동기 `MongoClient`와 별도로 만든다(`create_async_mongo_client`). 새 환경 변수는 없다.
+- 다중 문서 트랜잭션을 쓰지 않으므로 standalone MongoDB여도 된다. 여러 문서를 고치는 동작의 순서와 정리는 04 문서 1절.
 - LLM 클라이언트는 벤더 공식 SDK의 async 인터페이스 또는 `httpx2.AsyncClient`. 타임아웃 필수.
 - 코드 블록 문법 검사 등 CPU 작업은 짧으므로 인라인. 외부 언어 체커를 subprocess 로 돌린다면 `asyncio.create_subprocess_exec`.
 
