@@ -33,6 +33,7 @@ from app.schemas.agent_pipeline import (
     RoundPublic,
 )
 from app.services.draft_decision import DraftDecisionService
+from app.services.metrics import PipelineMetrics, compute_metrics
 from app.services.round import RoundService
 
 router = APIRouter(prefix="/api/v1/agents", tags=["Agents"], dependencies=[Depends(verify_agents_key)])
@@ -136,6 +137,25 @@ async def list_calls(
     else:
         raise InvalidRequestError("draft_id or round_id is required")
     return [CallPublic.from_call(call) for call in rows]
+
+
+@router.get("/metrics/", summary="운영 지표")
+async def get_metrics(
+    round_service: RoundServiceDep,
+    drafts: DraftRepositoryDep,
+    calls: Annotated[AgentCallRepository, Depends(get_agent_call_repository)],
+    round_id: Annotated[str | None, Query()] = None,
+) -> PipelineMetrics:
+    """07 문서 4절 지표. round_id 가 없으면 모든 라운드."""
+    if round_id:
+        if await round_service.get(round_id) is None:
+            raise NotFoundError(f"round {round_id} does not exist")
+        round_ids = [round_id]
+    else:
+        round_ids = [each.round_id for each in await round_service.list_rounds()]
+    all_drafts = [draft for each in round_ids for draft in await drafts.list_by_round(each)]
+    all_calls = [call for each in round_ids for call in await calls.list_by_round(each)]
+    return compute_metrics(all_drafts, all_calls)
 
 
 async def _draft(drafts: PostDraftRepository, draft_id: str):

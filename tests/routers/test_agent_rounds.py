@@ -251,3 +251,14 @@ def test_calls_match_golden_and_require_a_filter(client, database):
     by_draft = client.get("/api/v1/agents/calls/", headers=KEY, params={"draft_id": f"{ROUND}:A"}).json()
     assert [call["call_id"] for call in by_draft] == ["call-1"]
     assert client.get("/api/v1/agents/calls/", headers=KEY).status_code == 400
+
+
+def test_metrics_cover_the_round_and_404_for_unknown_round(client, database):
+    response = client.get("/api/v1/agents/metrics/", headers=KEY, params={"round_id": ROUND})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["drafts"], body["status_counts"]) == (3, {"ESCALATED": 1, "FAILED": 1, "TOPIC_LOCKED": 1})
+    assert body["tokens_by_kind"] == {"WRITE_DRAFT": 240}
+    assert client.get("/api/v1/agents/metrics/", headers=KEY).json()["drafts"] == 3
+    assert client.get("/api/v1/agents/metrics/", headers=KEY, params={"round_id": "nope"}).status_code == 404

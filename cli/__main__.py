@@ -11,6 +11,7 @@ from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.dependencies import (
     build_draft_decision_service,
+    build_llm_registry,
     build_pipeline_runner,
     build_round_service,
     ensure_agent_indexes,
@@ -23,6 +24,8 @@ from app.repositories.agent_call import AgentCallRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.schemas.agent_pipeline import DraftPublic
 from app.schemas.sync import SyncOptions
+from app.services.agent_calls import AgentCallService
+from app.services.metrics import compute_metrics
 
 cli = typer.Typer(help="VansDevBlog 검색 서비스 운영 명령", no_args_is_help=True)
 agents = typer.Typer(help="에이전트 파이프라인 (설계 agents_design/06 문서 3절 cli)", no_args_is_help=True)
@@ -282,6 +285,68 @@ def discard(draft_id: str, decided_by: Annotated[str, typer.Option()] = "cli") -
         _echo_draft(await build_draft_decision_service(database, settings).discard(draft_id, decided_by=decided_by))
 
     _run_agents(_discard)
+
+
+@agents.command()
+def replay(
+    call_id: str,
+    provider: Annotated[str | None, typer.Option(help="다른 벤더로 보낸다. --model 과 함께")] = None,
+    model: Annotated[str | None, typer.Option(help="다른 모델 ID 로 보낸다")] = None,
+) -> None:
+    """영수증의 메시지를 그대로 다시 보내 응답을 찍는다(프롬프트 튜닝용). 영수증·상태는 바꾸지 않는다."""
+
+    async def _replay(database, settings):
+        call = await AgentCallRepository(database).get(call_id)
+        if call is None:
+            typer.echo(f"호출 {call_id} 가 없다.", err=True)
+            raise typer.Exit(1)
+        binding = call.model_binding.model_copy(
+            update={key: value for key, value in (("provider", provider), ("model_id", model)) if value}
+        )
+        service = AgentCallService(AgentCallRepository(database), build_llm_registry(settings), settings)
+        result = await service.replay(call, binding=binding)
+        typer.echo(
+            json.dumps(
+                {
+                    "call_id": call_id,
+                    "kind": call.kind,
+                    "model": f"{binding.provider}/{binding.model_id}",
+                    "parsed_ok": result.parsed_ok,
+                    "error": result.error,
+                    "usage": result.usage.model_dump(),
+                    "latency_ms": result.latency_ms,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        typer.echo(f"\n===== 응답 =====\n{result.text}")
+
+    _run_agents(_replay)
+
+
+@agents.command()
+def metrics(round_id: Annotated[str | None, typer.Option(help="없으면 모든 라운드")] = None) -> None:
+    """운영 지표(설계 07 문서 4절): fast-track 비율, 평균 iteration, 격리·실패 사유, 판정 불일치, 게이트 실패, 글당 토큰."""
+
+    async def _metrics(database, settings):
+        round_service = build_round_service(database, settings)
+        if round_id:
+            if await round_service.get(round_id) is None:
+                typer.echo(f"라운드 {round_id} 가 없다.", err=True)
+                raise typer.Exit(1)
+            round_ids = [round_id]
+        else:
+            round_ids = [each.round_id for each in await round_service.list_rounds()]
+        drafts = PostDraftRepository(database)
+        calls = AgentCallRepository(database)
+        result = compute_metrics(
+            [draft for each in round_ids for draft in await drafts.list_by_round(each)],
+            [call for each in round_ids for call in await calls.list_by_round(each)],
+        )
+        typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
+
+    _run_agents(_metrics)
 
 
 @agents.command()

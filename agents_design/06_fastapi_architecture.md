@@ -45,7 +45,8 @@ app/
 │  ├─ evaluation.py            EvaluationEngine: derived_verdict, evaluate 규칙 (순수 함수)
 │  ├─ publishing.py            PublishingService(DraftPublisher 구현): 결과 불명 판정, 백오프, build_peer_review_note(요약 노트, 순수 함수), build_payload(Tiptap 변환·CreatePostDto 매핑), 의도 저장, Publisher 호출, 결과 반영과 레지스트리 PUBLISHED
 │  ├─ runner.py                PipelineRunner: 코루틴 표(running), 주기 스캔, 기동·종료, 코루틴 경계의 INTERNAL_ERROR 처리
-│  └─ agent_calls.py           AgentCallService.call -> CallResult(output, call_id): 예산 검사, 호출, 재시도, 영수증
+│  ├─ metrics.py               compute_metrics(drafts, calls) -> PipelineMetrics: 07 문서 4절 지표 (순수 함수)
+│  └─ agent_calls.py           AgentCallService.call -> CallResult(output, call_id): 예산 검사, 호출, 재시도, 영수증. replay(call, binding?) -> ReplayResult: 영수증 메시지 재전송(영수증·재시도 없음)
 ├─ agents/                     [프롬프트 자산 계층] 도메인 → 프롬프트 입력, LLM 출력 → 도메인
 │  ├─ personas.py              PersonaProfile 상수 3종, 렌즈 정의
 │  ├─ contracts.py             05 문서의 입출력 Pydantic 모델
@@ -88,7 +89,7 @@ app/
       ├─ base.py               Publisher Protocol: list_categories() -> list[PostCategory], publish(PostCreatePayload) -> PublishResult. PostCreatePayload 는 CreatePostDto(camelCase alias)
       └─ post_be.py            PostBEPublisher: GET /api/v1/categories?activeOnly=true, 발행마다 vans_story_be POST /api/v1/auth/login(토큰은 응답 Authorization 헤더) → POST /api/v1/posts(Bearer). 실패 분류는 3절
 cli/
-└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard. replay 는 7단계
+└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics
 ```
 
 ### `agents/`의 위치
@@ -218,6 +219,7 @@ class DraftPipelineService:
 | `POST` | `/api/v1/agents/drafts/{draft_id}/retry/` | `FAILED` 재개. 바디 `DraftRetry(token_limit?)`. `token_limit`은 어느 사유든 받을 수 있고, 현재 사용량보다 커야 한다 |
 | `POST` | `/api/v1/agents/drafts/{draft_id}/discard/` | `FAILED` 글 하나만 폐기. 바디 `DraftDiscard(decided_by)` |
 | `GET` | `/api/v1/agents/calls/` | `draft_id` 또는 `round_id` 필터(둘 다 없으면 400), 토큰·지연 조회. 메시지 본문은 뺀다 |
+| `GET` | `/api/v1/agents/metrics/` | 07 문서 4절 지표(`PipelineMetrics`). `round_id` 가 없으면 모든 라운드 |
 
 경로는 trailing slash 포함(CONVENTIONS 2절). 상태 전이 위반은 409 `InvalidTransitionError`.
 
@@ -234,7 +236,8 @@ class DraftPipelineService:
 | `agents retry <draft_id> [--token-limit N]` | `FAILED` 재개 |
 | `agents discard <draft_id> [--decided-by]` | `FAILED` 글 폐기 |
 | `agents abort <round_id>` | 중단 |
-| `agents replay <call_id>` | 저장된 메시지로 호출을 다시 실행(프롬프트 튜닝용, 상태 변경 없음) |
+| `agents replay <call_id> [--provider] [--model]` | 영수증의 메시지를 그대로 다시 보내 응답·파싱 결과·토큰을 찍는다(프롬프트 튜닝용, 영수증·상태 변경 없음). 다른 모델로 보낼 수 있다. 파싱은 스키마까지만 본다 |
+| `agents metrics [--round-id]` | 07 문서 4절 지표를 JSON 으로 찍는다 |
 
 ## 4. 설정 (`core/config.py`)
 
@@ -302,6 +305,8 @@ class Settings(BaseSettings):
 | `services/agent_calls.py` | 시도마다 `AgentCall` 1건과 비용 합산, 스키마 위반 재시도의 메시지 구성(첫 메시지 + 직전 실패 출력 + 오류 안내), 5xx·429·타임아웃 백오프 재시도, 소진 시 `LLMRetriesExhaustedError`, 글 사용량 + 추정치가 상한을 넘으면 호출 전에 `BudgetExceededError`, 주제 제안은 예산을 검사하지 않음 |
 | `services/runner.py` | 같은 글에 코루틴이 둘 생기지 않음, 승인 대기·`ESCALATED`·`FAILED` 글은 띄우지 않음, 스캔마다 정리가 `ABORTED` 라운드의 남은 글·레지스트리와 `PUBLISHED`·`REJECTED` 글의 레지스트리를 맞춤 |
 | `services/draft_decision.py` | 결정마다 전제 상태 검사와 409, 충돌 시 다시 읽어 재적용, 종결 결정 뒤 레지스트리와 `close_if_complete`, 재개의 `token_limit` 검사 |
+| `services/metrics.py` | 순수 함수. fast-track·iteration·격리·실패 사유·중재·판정 불일치(슬롯별)·게이트 실패 종류·`REJECTED_WITH_REASON`·종류별·글별 토큰. 빈 입력은 비율이 `None` |
+| `AgentCallService.replay` | 영수증 메시지를 그대로 보내고 새 영수증을 남기지 않음, 바인딩 덮어쓰기, `REVIEW` 영수증의 scope 로 출력 계약 선택 |
 | `services/publishing.py` | `CreatePostDto` 매핑. 외부 호출 후 로컬 반영 전 장애를 재현하면 다시 `drive`해도 호출하지 않고 `PUBLISH_UNCERTAIN`. `PublishFailedError`는 재시도 후 상한에서 `PUBLISH_FAILED`, `PublishUncertainError`는 즉시 `PUBLISH_UNCERTAIN`. `CONFIRM_PUBLISHED`는 호출 없이 `PUBLISHED`, `PUBLISH_AS_IS`·`REVISE`는 카운터·의도를 지움. 로그인 단계 실패는 결과 확정. 요약 노트에 HTML·여러 줄이 든 지적이 있어도 변환 성공. 응답 반영 전에 `REJECTED`이면 `PUBLISHED`로 쓰지 않고 `external_post_id`만 의도에 남긴다 |
 | `agents/parsers.py` | 없는 앵커·빈 체크리스트는 `LLMOutputError`. SPOT_CHECK의 MAJOR는 버리고 로그. `item_checks` 누락·중복·입력 외 ID·미해소 빈 note는 오류. 제안 카테고리가 입력 목록에 없음, 제목 100자 초과, 빈 `summary`는 오류 |
 | `clients/publisher/post_be.py` | `httpx2.MockTransport`. 로그인 요청·토큰 추출, `CreatePostDto` 전송, 로그인 단계의 어떤 실패(401·5xx·토큰 없음·타임아웃)든 `PublishFailedError`, 글 생성의 4xx·연결 거부·연결 타임아웃은 `PublishFailedError`, 5xx·읽기 타임아웃·연결 끊김·`_id` 없는 응답은 `PublishUncertainError`, 계정 설정 없음은 `ValueError` |

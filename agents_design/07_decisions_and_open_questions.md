@@ -80,7 +80,7 @@
 | 4 | `TopicSelectionService` + `DraftPipelineService.drive` + `PipelineRunner` + CLI `run` | 가짜 LLM으로 문서 06의 시나리오 ①~⑫ 통과. 완료(2026-11-02). `RoundService`도 여기서 만들었고 `DraftDecisionService`는 6단계로 미뤘다 |
 | 5 | `clients/llm/` 벤더 3종 + Post BE 카테고리 조회 + e2e 1회 호출 테스트 | 실제 모델로 라운드 1회 완주 (발행은 dry-run). 코드·단위 테스트 완료(2026-11-02). 실제 벤더 e2e 와 라운드 완주는 키를 넣고 사용자가 돌린다(`pytest -m e2e tests/e2e/test_llm_vendors.py`, `agents start-round --wait` + `agents run`) |
 | 6 | `PublishingService` + `clients/publisher/` 발행(봇 계정 로그인, 실패 분류) + 요약 노트 + 승인 토글 + `PUBLISH_UNCERTAIN` 해소 + `DraftDecisionService` + 라우터·golden + 결정 CLI | 에이전트 전용 관리자 계정을 만들고, 승인 후 Post BE 에 발행해 블로그에서 사람이 쓴 글과 같게 보인다. 코드·단위 테스트 완료(2026-11-02). 계정을 만들어 `.env`에 넣고(`USER_SERVICE_URL`·`PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD`·`AGENTS_INTERNAL_API_KEY`) `pytest -m e2e tests/e2e/test_post_be.py` → 라운드 1회 → `agents approve` → 블로그 확인은 사용자가 한다 |
-| 7 | 운영: 토큰 측정 → Q-07 확정, 프롬프트 튜닝(`reported_verdict`·`derived_verdict` 불일치 지표), `replay` 명령 | 라운드 3회 이상 운영 후 승인 토글 해제 검토 |
+| 7 | 운영: 토큰 측정 → Q-07 확정, 프롬프트 튜닝(`reported_verdict`·`derived_verdict` 불일치 지표), `replay` 명령 | 라운드 3회 이상 운영 후 승인 토글 해제 검토. 도구는 완료(2026-11-02): `services/metrics.py` + `agents metrics` + `GET /api/v1/agents/metrics/`(4절 지표 전부), `AgentCallService.replay` + `agents replay`. Q-07 확정·프롬프트 튜닝·토글 해제는 실제 라운드를 돌린 뒤 사용자가 한다 |
 
 ## 4. 측정 지표 (운영 후 튜닝 입력)
 

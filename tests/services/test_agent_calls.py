@@ -230,3 +230,43 @@ async def test_check_hook_failure_retries_like_a_schema_violation():
     assert (first.output_parsed_ok, first.error) == (False, "output: score must be 5")
     assert second.output_parsed_ok is True
     assert "score must be 5" in harness.llm.calls[1].messages[-1].content
+
+
+# ---------- replay (로드맵 7단계) ----------
+
+
+async def test_replay_resends_the_receipt_messages_without_a_new_receipt():
+    harness = Harness([GOOD, '{"title": "다시"}'])
+    await harness.service.call(
+        kind=CallKind.WRITE_DRAFT,
+        round_id="round-1",
+        slot=AgentSlot.A,
+        binding=make_binding(),
+        messages=MESSAGES,
+        schema=Answer,
+        draft=make_draft(),
+    )
+    [call] = harness.calls.calls
+    other = make_binding(provider="fake", model_id="fake-2", temperature=0.1)
+
+    result = await harness.service.replay(call, binding=other)
+
+    assert (result.parsed_ok, result.text) == (False, '{"title": "다시"}')  # DraftOutput 스키마로 검사한다
+    assert result.error and "content_markdown" in result.error
+    assert len(harness.calls.calls) == 1
+    replayed = harness.llm.calls[-1]
+    assert [message.content for message in replayed.messages] == [message.content for message in MESSAGES]
+    assert (replayed.params.model_id, replayed.params.temperature) == ("fake-2", 0.1)
+
+
+def test_output_schema_of_review_receipts_depends_on_scope():
+    from app.agents.contracts import ReviewOutput, SpotCheckOutput
+    from app.services.agent_calls import output_schema_of
+    from tests.factories import make_call
+
+    full = make_call(kind=CallKind.REVIEW)
+    full.messages = [ChatMessage(role="user", content='입력(JSON):\n{\n  "scope": "FULL"\n}')]
+    spot = make_call(kind=CallKind.REVIEW)
+    spot.messages = [ChatMessage(role="user", content='입력(JSON):\n{\n  "scope": "SPOT_CHECK"\n}')]
+
+    assert (output_schema_of(full), output_schema_of(spot)) == (ReviewOutput, SpotCheckOutput)

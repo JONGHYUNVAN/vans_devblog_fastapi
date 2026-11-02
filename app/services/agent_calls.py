@@ -9,6 +9,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
+from app.agents.contracts import (
+    ArbitrateOutput,
+    DraftOutput,
+    ProposeTopicOutput,
+    ReviewOutput,
+    RevisionOutput,
+    SpotCheckOutput,
+)
 from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse
 from app.clients.llm.registry import LLMClientRegistry
 from app.core.config import Settings
@@ -23,6 +31,25 @@ logger = logging.getLogger(__name__)
 
 _BACKOFF_BASE_S = 1.0
 _REVIEW_KINDS = frozenset({CallKind.REVIEW, CallKind.ARBITRATE})
+_OUTPUT_SCHEMAS: dict[CallKind, type[BaseModel]] = {
+    CallKind.PROPOSE_TOPIC: ProposeTopicOutput,
+    CallKind.WRITE_DRAFT: DraftOutput,
+    CallKind.REVISE_DRAFT: RevisionOutput,
+    CallKind.ARBITRATE: ArbitrateOutput,
+}
+
+
+@dataclass(frozen=True)
+class ReplayResult:
+    """replay 한 호출의 응답. 영수증은 남기지 않는다."""
+
+    text: str
+    usage: TokenUsage
+    parsed_ok: bool
+    error: str | None
+    latency_ms: int
+
+
 # 스키마 위반 재시도 때 첫 시도 메시지 뒤에 붙이는 안내. 직전 출력은 assistant 메시지로 그 앞에 둔다.
 _RETRY_GUIDANCE = (
     "직전 응답이 출력 계약에 맞지 않았다: {error}\n같은 요청에 대해 계약에 맞는 JSON 객체 하나만 다시 출력하라."
@@ -161,6 +188,40 @@ class AgentCallService:
 
         raise LLMRetriesExhaustedError(f"{kind} for {round_id}/{slot} failed {max_attempts} times: {last_error}")
 
+    async def replay(self, call: AgentCall, *, binding: ModelBinding | None = None) -> ReplayResult:
+        """영수증의 메시지를 그대로 다시 보낸다(프롬프트 튜닝용, 설계 07 문서 로드맵 7단계).
+
+        영수증을 남기지 않고 재시도·예산 검사도 하지 않는다. binding 으로 다른 모델에 같은 메시지를 보낼 수 있다.
+        파싱은 스키마까지만 본다(문맥 검사 check 는 원래 입력이 필요해 생략). 전송 실패는 LLMTransportError 그대로다.
+        """
+        binding = binding or call.model_binding
+        is_review = call.kind in _REVIEW_KINDS
+        params = LLMParams(
+            model_id=binding.model_id,
+            temperature=self._settings.review_temperature if is_review else binding.temperature,
+            max_output_tokens=binding.max_output_tokens,
+        )
+        timeout = float(self._settings.review_timeout_s if is_review else self._settings.draft_timeout_s)
+        schema = output_schema_of(call)
+        started_at = datetime.now(UTC)
+        async with self._llm.semaphore(binding.provider):
+            response = await self._llm.get(binding.provider).complete(
+                _to_llm_messages(call.messages), schema.model_json_schema(), params, timeout
+            )
+        latency_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        error: str | None = None
+        try:
+            schema.model_validate_json(response.text)
+        except ValidationError as exc:
+            error = "; ".join(f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in exc.errors())
+        return ReplayResult(
+            text=response.text,
+            usage=TokenUsage(**response.usage.model_dump()),
+            parsed_ok=error is None,
+            error=error,
+            latency_ms=latency_ms,
+        )
+
     async def _check_budget(self, draft: PostDraft, messages: list[ChatMessage], binding: ModelBinding) -> None:
         # 추정치는 메시지 문자 수 + max_output_tokens. 폭주를 멈추는 장치라 정확할 필요가 없다 (설계 07 문서 D-33).
         used = (await self._calls.sum_usage(draft.draft_id)).total_tokens
@@ -169,6 +230,14 @@ class AgentCallService:
             raise BudgetExceededError(
                 f"draft {draft.draft_id} used {used} + estimated {estimate} tokens exceeds limit {draft.token_limit}"
             )
+
+
+def output_schema_of(call: AgentCall) -> type[BaseModel]:
+    """영수증의 종류로 출력 계약을 고른다. REVIEW 는 입력 JSON 의 scope 로 FULL·SPOT_CHECK 를 가른다."""
+    if call.kind != CallKind.REVIEW:
+        return _OUTPUT_SCHEMAS[call.kind]
+    user_input = next((message.content for message in call.messages if message.role == "user"), "")
+    return SpotCheckOutput if '"scope": "SPOT_CHECK"' in user_input else ReviewOutput
 
 
 def _to_llm_messages(messages: list[ChatMessage]) -> list[LLMMessage]:
