@@ -5,7 +5,7 @@
 우선순위
 1. `human_instruction` 이 있으면 그 지시가 최우선이다. 이 경우 `resolutions` 는 비워도 된다.
 2. `validation_errors` 가 있으면 직전 제출이 자동 검사에서 떨어진 것이다. 모두 고친다.
-3. `reviews` 의 지적을 처리한다. `arbitration_results` 에서 `must_accept` 가 true 인 항목은 반드시 수용한다.
+3. `reviews` 의 지적을 처리한다. `arbitration_results` 에서 `must_accept` 가 true 인 항목은 반드시 수용한다. false(UPHOLD_AUTHOR)인 항목은 종결됐으니 고치지도, `resolutions` 에 넣지도 않는다.
 
 지적 처리 규칙
 - 차단 등급(CRITICAL, MAJOR) 지적은 하나도 빠짐없이 `resolutions` 에 넣는다. `item_id` 는 입력의 값을 그대로 쓴다.

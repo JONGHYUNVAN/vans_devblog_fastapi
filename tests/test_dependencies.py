@@ -46,12 +46,16 @@ def test_build_publisher_carries_the_publishing_account():
     )
 
 
-def test_build_pipeline_runner_publishes_through_publishing_service_only_with_post_be_url():
+def test_build_pipeline_runner_publishes_through_publishing_service_only_when_fully_configured():
     database = FakeAsyncDatabase()
+    account = {"user_service_url": "https://user.test", "publisher_email": "bot@x.io", "publisher_password": "pw"}
 
-    with_post_be = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test"))
+    configured = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test", **account))
+    url_only = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test"))
     without = build_pipeline_runner(database, Settings(_env_file=None))
 
-    assert isinstance(with_post_be._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
+    assert isinstance(configured._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
+    # 계정이 비면 발행 의도를 저장하기 전에 멈춘다(재개 때 PUBLISH_UNCERTAIN 으로 격리되지 않게)
+    assert not isinstance(url_only._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
     assert not isinstance(without._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
     assert isinstance(build_draft_decision_service(database, Settings(_env_file=None)), DraftDecisionService)

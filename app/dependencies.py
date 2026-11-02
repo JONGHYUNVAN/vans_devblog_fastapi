@@ -223,10 +223,15 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
 
 
 class _UnconfiguredDraftPublisher:
-    """POST_BE_URL 이 없다. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다(새 라운드는 start-round 가 먼저 거절한다)."""
+    """발행 설정(POST_BE_URL 또는 발행 계정)이 비어 있다. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다.
+
+    발행 의도를 저장하기 전에 멈춰야 설정을 고치고 재개했을 때 결과 불명(PUBLISH_UNCERTAIN)으로 격리되지 않는다.
+    """
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        raise ValueError("no Post BE publisher is configured (POST_BE_URL)")
+        raise ValueError(
+            "Post BE publishing is not configured (POST_BE_URL, USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)"
+        )
 
 
 def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> PipelineRunner:
@@ -237,6 +242,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     publisher = build_publisher(settings)
     round_service = RoundService(round_repository, draft_repository, topic_registry_repository, publisher=publisher)
     agent_call_service = AgentCallService(AgentCallRepository(database), build_llm_registry(settings), settings)
+    account_ready = bool(settings.user_service_url and settings.publisher_email and settings.publisher_password)
     draft_publisher: DraftPublisher = (
         PublishingService(
             draft_repository=draft_repository,
@@ -244,7 +250,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             publisher=publisher,
             settings=settings,
         )
-        if publisher is not None
+        if publisher is not None and account_ready
         else _UnconfiguredDraftPublisher()
     )
     return PipelineRunner(

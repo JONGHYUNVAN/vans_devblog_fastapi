@@ -58,3 +58,14 @@ class TopicRegistryRepository:
             {"_id": entry_id}, {"$set": {"status": status.value, "published_at": published_at}}
         )
         return result.matched_count > 0
+
+    async def release_unless_published(self, entry_id: str) -> bool:
+        """PUBLISHED 가 아닐 때만 RELEASED 로 바꾼다. 라운드 중단이 쓴다 (설계 04 문서 1절 표).
+
+        조건을 DB 에 걸어, 읽은 뒤 발행이 끼어들어 PUBLISHED 가 된 항목을 덮어쓰지 않는다. 바꿨으면 True.
+        """
+        result = await self._topics.update_one(
+            {"_id": entry_id, "status": {"$ne": TopicRegistryStatus.PUBLISHED.value}},
+            {"$set": {"status": TopicRegistryStatus.RELEASED.value, "published_at": None}},
+        )
+        return result.matched_count > 0

@@ -108,7 +108,12 @@ def build_revise_draft_input(
             items = [item for item in blocking if item.reviewer_slot == review.reviewer_slot]
             if is_full:
                 items += [item for item in review.items if not item.severity.is_blocking]
-            unresolved = {check.item_id: check.note for check in review.item_checks if not check.resolved}
+            # 아직 열려 있는 항목만. 중재에서 작성자가 이긴 항목(UPHOLD_AUTHOR)은 종결이라 미해소 노트에서 뺀다
+            unresolved = {
+                check.item_id: check.note
+                for check in review.item_checks
+                if not check.resolved and check.item_id in blocking_ids
+            }
             reviews.append(
                 ReviewForAuthor(
                     reviewer_label=reviewer_label(draft, review.reviewer_slot),
@@ -126,7 +131,8 @@ def build_revise_draft_input(
                 must_accept=arbitration.outcome == ArbitrationOutcome.UPHOLD_REVIEWER,
             )
             for arbitration in draft.arbitrations
-            if arbitration.item_id in blocking_ids
+            # 열린 항목의 판정(UPHOLD_REVIEWER, 수용 필수)과 이번 리뷰 버전의 판정 전부(UPHOLD_AUTHOR 는 종결 안내)
+            if arbitration.item_id in blocking_ids or arbitration.target_version == reviewed
         ]
     human_revision = draft.revision_cause == RevisionCause.HUMAN or (
         draft.revision_cause == RevisionCause.GATE and previous.origin_cause == RevisionCause.HUMAN

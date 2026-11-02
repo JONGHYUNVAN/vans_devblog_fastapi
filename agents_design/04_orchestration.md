@@ -286,9 +286,9 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
 | GFM 표 | `table` → `tableRow` → 첫 행은 `tableHeader`, 나머지는 `tableCell`. 셀 내용은 `paragraph` |
 | `---` | `horizontalRule` |
 | 줄 끝 `\` 또는 공백 두 칸 | `hardBreak` |
-| `**` `*` `~~` `` ` `` | `bold`, `italic`, `strike`, `code` 마크 |
+| `**` `*` `~~` `` ` `` | `bold`, `italic`, `strike`, `code` 마크. 인라인 코드는 `code` 마크만 갖는다(에디터의 Code 마크가 다른 마크를 모두 배제한다). bold·link 안의 코드는 code 만 남는다 |
 | `[text](url)` | `link` 마크 (`href`) |
-| `<!-- sec:id -->` | 지운다 |
+| `<!-- sec:id -->` | 지운다. 앵커만 있던 줄은 빈 줄로 남겨 앞뒤 문단이 합쳐지지 않게 한다. 코드 펜스 안의 앵커 문자열은 코드 내용이라 지우지도 세지도 않는다(`models/sections.py`가 펜스 안을 가린 뒤 찾는다) |
 | 그 외 HTML, 이미지, 각주, `mermaid` 코드 블록 | 변환 실패 (`ValueError`). 게이트가 `validation_errors`로 바꾼다 |
 
 노트 템플릿은 05 문서 5절. 노트도 이 변환표로 본문과 함께 변환한다.

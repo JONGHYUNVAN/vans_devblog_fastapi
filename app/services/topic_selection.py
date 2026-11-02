@@ -270,8 +270,11 @@ def _conflict_feedback(previous: TopicAttempt | None, slot: AgentSlot) -> str | 
         title = previous.proposals[slot][conflict.proposal_index].title
         if conflict.registry_title is not None:
             other = f'이미 다룬 주제 "{conflict.registry_title}"'
-        elif conflict.other_slot is not None and conflict.other_index is not None:
+        elif conflict.other_slot in previous.proposals and conflict.other_index is not None:
             other = f'다른 작성자의 주제 "{previous.proposals[conflict.other_slot][conflict.other_index].title}"'
+        elif conflict.other_slot in previous.locked:
+            # 이전 시도에서 잠긴 주제와 겹쳤다. 잠긴 슬롯은 그 시도에 제안이 없다
+            other = f'다른 작성자의 주제 "{previous.locked[conflict.other_slot].proposal.title}"'
         else:
             other = "다른 작성자의 주제"
         lines.append(f'이전 제안 "{title}" 은(는) {other} 와 {conflict.kind} 기준으로 겹쳤다')

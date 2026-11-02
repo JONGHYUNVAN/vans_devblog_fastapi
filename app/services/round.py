@@ -179,8 +179,8 @@ class RoundService:
             if not draft.is_terminal:
                 await self._reject_by_abort(draft, reason)
         for entry in await self._topics.list_by_round(publishing_round.round_id):
-            if entry.status != TopicRegistryStatus.PUBLISHED:
-                await self._topics.set_status(entry.entry_id, TopicRegistryStatus.RELEASED)
+            # 조건부 갱신: 목록을 읽은 뒤 발행이 끼어들어 PUBLISHED 가 된 항목은 건드리지 않는다
+            await self._topics.release_unless_published(entry.entry_id)
 
     async def _reject_by_abort(self, draft: PostDraft, reason: RoundAbortReason) -> None:
         draft.reject_by_abort(reason)

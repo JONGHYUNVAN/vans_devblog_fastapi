@@ -160,7 +160,7 @@ class DraftPipelineService:
             case PostStatus.READY_TO_PUBLISH:                    await self._publisher.publish(draft, round); return draft
 ```
 
-- `POST_BE_URL`이 없으면 `dependencies.py`의 `_UnconfiguredDraftPublisher`가 `ValueError`를 던져 발행 단계에 닿은 글을 러너가 `FAILED(INTERNAL_ERROR)`로 멈춘다(새 라운드는 `start-round`가 먼저 거절한다).
+- `POST_BE_URL`이나 발행 계정(`USER_SERVICE_URL`·`PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD`)이 없으면 `dependencies.build_pipeline_runner`가 `PublishingService` 대신 `_UnconfiguredDraftPublisher`를 꽂아 발행 단계에 닿은 글을 `ValueError` → `FAILED(INTERNAL_ERROR)`로 멈춘다. 발행 의도를 저장하기 전에 멈추므로 설정을 고치고 재개하면 바로 발행한다(의도 뒤에 멈추면 `PUBLISH_UNCERTAIN`으로 격리된다).
 
 - `_should_run`은 라운드가 `IN_PROGRESS`이고, 글이 `is_active`이며, 승인 대기(`READY_TO_PUBLISH`, 승인 토글 켜짐, `approved_by` 없음)가 아닐 때만 참이다. 거짓이면 루프를 끝낸다. 사람 결정이 상태를 바꾸면 다음 스캔이 다시 띄운다.
 - `_write`는 `revision_cause`(없으면 v1 작성)로 호출 종류(`WRITE_DRAFT`·`REVISE_DRAFT`)와 입력을 정한다. 새 버전·리뷰·중재의 `call_id`는 `CallResult.call_id`다. 새 버전의 `origin_cause`가 `HUMAN`이면 게이트 재작성이어도 `human_instruction`을 넣는다. `DRAFTING`에서 재시작해도 같은 호출을 만든다.
@@ -178,6 +178,7 @@ class DraftPipelineService:
 
 - 사람 결정 API·CLI(승인, 격리 해소, 재개, 폐기)를 맡는다. 글을 읽어 도메인 메서드를 부르고 `revision` 조건으로 저장한다. 충돌이면 다시 읽어 전제 상태가 여전히 맞을 때만 재적용하고, 아니면 409 `InvalidTransitionError`다. 도메인의 `ValueError`(지시문 없음 등)와 사용량 이하의 `token_limit`은 400 `InvalidRequestError`다.
 - 글을 종결로 보낸 결정(`REJECT`, `discard`, `CONFIRM_PUBLISHED`)은 이어서 레지스트리를 따라 쓰고 `RoundService.close_if_complete`를 부른다(04 문서 1절 표). `CONFIRM_PUBLISHED`의 `Publication`은 의도의 `final_version`과 다시 만든 요약 노트로 채운다.
+- 라운드 중단의 레지스트리 `RELEASED`는 `TopicRegistryRepository.release_unless_published`(조건 `status != PUBLISHED`를 DB에 건 갱신)로 쓴다. 목록을 읽은 뒤 발행이 끼어들어 `PUBLISHED`가 된 항목을 덮어쓰지 않기 위해서다.
 - 진행은 하지 않는다. 다음 스캔이 글 코루틴을 띄운다.
 
 ### `services/agent_calls.py`

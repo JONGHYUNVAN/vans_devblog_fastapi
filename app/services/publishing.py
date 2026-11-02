@@ -47,7 +47,8 @@ _OUTCOME_TEXT = {
 }
 _SEVERITY_ORDER = {severity: index for index, severity in enumerate(IssueSeverity)}
 # 노트에 넣는 LLM 텍스트는 문단 텍스트로만 들어가야 한다. ASCII 구두점을 백슬래시로 이스케이프하면 CommonMark 가 글자로 읽는다
-_MARKDOWN_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+\-.!<>&|~])")
+# ^ 도 넣는다: 정규식 얘기([^a-z])가 각주 패턴([^n])에 걸려 변환이 거부되지 않게
+_MARKDOWN_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+\-.!<>&|~^])")
 
 
 def build_peer_review_note(draft: PostDraft, publishing_round: PublishingRound) -> str:

@@ -219,3 +219,29 @@ def test_render_messages_substitutes_persona_and_dumps_input_json():
     assert "실용주의 트러블슈터" in messages[0].content and "$" not in messages[0].content
     payload = json.loads(messages[1].content.removeprefix("입력(JSON):\n"))
     assert payload["topic"]["title"] == draft.topic.title
+
+
+def test_revise_input_drops_items_closed_by_uphold_author_and_lists_their_verdict():
+    """작성자가 이긴 항목은 미해소 노트에서 빠지고, 판정은 must_accept=False 로 알린다. 다시 고치거나 해소를 넣지 않게."""
+    draft = make_draft(A)
+    write_next_version(draft)
+    add_reviews(draft, {B: [IssueSeverity.CRITICAL], C: [IssueSeverity.CRITICAL]})
+    draft.apply_evaluation(evaluate(draft, MAX_ITERATIONS))
+    won, lost = draft.open_blocking_items(1)
+    write_next_version(draft, reject(won, lost))
+    add_reviews(draft, resolved={won.item_id: False, lost.item_id: False})
+    draft.apply_evaluation(evaluate(draft, MAX_ITERATIONS))
+    draft.add_arbitration(make_arbitration(draft, won, ArbitrationOutcome.UPHOLD_AUTHOR))
+    draft.add_arbitration(make_arbitration(draft, lost, ArbitrationOutcome.UPHOLD_REVIEWER))
+    draft.apply_evaluation(evaluate(draft, MAX_ITERATIONS))
+    assert draft.status == PostStatus.REVISING
+
+    payload = build_revise_draft_input(draft, ROUND, RULES, max_iterations=MAX_ITERATIONS)
+
+    notes = {item_id for review in payload.reviews for item_id in review.unresolved_notes}
+    assert notes == {lost.item_id}
+    assert [item.item_id for review in payload.reviews for item in review.items] == [lost.item_id]
+    assert {(result.item_id, result.must_accept) for result in payload.arbitration_results} == {
+        (won.item_id, False),
+        (lost.item_id, True),
+    }

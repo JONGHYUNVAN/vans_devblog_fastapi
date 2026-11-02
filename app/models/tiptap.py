@@ -141,7 +141,8 @@ def _inline_nodes(children: list[Token]) -> list[dict[str, Any]]:
             case "hardbreak":
                 nodes.append({"type": "hardBreak"})
             case "code_inline":
-                _append_text(nodes, token.content, [*marks, {"type": "code"}])
+                # 에디터의 Code 마크는 다른 마크를 모두 배제한다(excludes "_"). bold·link 안의 코드는 code 만 남는다
+                _append_text(nodes, token.content, [{"type": "code"}])
             case "strong_open" | "em_open" | "s_open":
                 marks.append({"type": _MARK_BY_TOKEN[token.type.removesuffix("_open")]})
             case "strong_close" | "em_close" | "s_close":

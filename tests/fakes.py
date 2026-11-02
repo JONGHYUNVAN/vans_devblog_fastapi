@@ -191,13 +191,15 @@ class _WriteResult:
 
 
 def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
-    """리포지토리가 쓰는 조건만 지원한다: 같음, $in, $gte."""
+    """리포지토리가 쓰는 조건만 지원한다: 같음, $in, $gte, $ne."""
     for key, condition in query.items():
         value = doc.get(key)
         if isinstance(condition, dict):
             if "$in" in condition and value not in condition["$in"]:
                 return False
             if "$gte" in condition and not (value is not None and value >= condition["$gte"]):
+                return False
+            if "$ne" in condition and value == condition["$ne"]:
                 return False
         elif value != condition:
             return False

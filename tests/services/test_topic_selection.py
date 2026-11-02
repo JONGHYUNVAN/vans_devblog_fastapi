@@ -6,7 +6,7 @@ from app.core.exceptions import LLMTransportError
 from app.models.enums import AgentSlot, PostStatus, RoundAbortReason, RoundStatus
 from app.models.publishing_round import PublishingRound
 from app.repositories.agent_round import PublishingRoundRepository
-from tests.factories import make_registry_entry, make_round, proposals_output
+from tests.factories import make_registry_entry, make_round, make_topic, proposals_output
 from tests.fakes import FakeAsyncDatabase, PipelineHarness, call_input_of
 
 pytestmark = pytest.mark.anyio
@@ -222,3 +222,31 @@ async def test_abort_during_commit_does_not_resurrect_cleaned_documents():
     assert (publishing_round.status, publishing_round.abort_reason) == (RoundStatus.ABORTED, RoundAbortReason.MANUAL)
     assert {draft.status for draft in await harness.drafts.list_by_round("round-1")} == {PostStatus.REJECTED}
     assert {entry.status for entry in await harness.topics.list_by_round("round-1")} == {"RELEASED"}
+
+
+def test_conflict_feedback_names_a_topic_locked_in_an_earlier_attempt():
+    """잠긴 슬롯은 그 시도에 제안이 없다. 잠긴 주제와 겹친 충돌의 상대 제목은 locked 에서 읽는다."""
+    from app.models.publishing_round import LockedTopic, TopicAttempt, TopicConflict
+    from app.services.topic_selection import _conflict_feedback
+
+    locked = make_topic(title="잠긴 주제")
+    previous = TopicAttempt(
+        attempt_number=2,
+        proposals={AgentSlot.C: [make_topic(title="C 의 제안")]},
+        locked={AgentSlot.A: LockedTopic(slot=AgentSlot.A, source_attempt=1, proposal_index=0, proposal=locked)},
+        conflicts=[
+            TopicConflict(
+                slot=AgentSlot.C,
+                proposal_index=0,
+                other_slot=AgentSlot.A,
+                other_index=0,
+                registry_title=None,
+                kind="keyword",
+                score=0.8,
+            )
+        ],
+    )
+
+    feedback = _conflict_feedback(previous, AgentSlot.C)
+
+    assert feedback is not None and '"C 의 제안"' in feedback and '"잠긴 주제"' in feedback

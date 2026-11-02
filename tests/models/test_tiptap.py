@@ -180,3 +180,17 @@ def _mark_types(node: dict) -> set[str]:
 
 def test_golden_file_is_valid_json():
     json.loads(Path(GOLDEN_DIR / "tiptap_sample.json").read_text(encoding="utf-8"))
+
+
+def test_anchor_lines_between_paragraphs_keep_them_separate():
+    document = markdown_to_tiptap("<!-- sec:intro -->\n문단 A\n<!-- sec:body-1 -->\n문단 B\n")
+
+    assert [node["content"][0]["text"] for node in document["content"]] == ["문단 A", "문단 B"]
+
+
+def test_inline_code_carries_only_the_code_mark():
+    """에디터의 Code 마크는 다른 마크를 모두 배제한다. bold·link 안의 코드는 code 만 남는다."""
+    document = markdown_to_tiptap("**`x`** [`f()`](https://a.io)")
+
+    nodes = document["content"][0]["content"]
+    assert [[mark["type"] for mark in node.get("marks", [])] for node in nodes] == [["code"], [], ["code"]]

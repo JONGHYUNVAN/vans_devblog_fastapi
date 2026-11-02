@@ -237,3 +237,13 @@ async def test_round_closes_when_the_last_draft_publishes():
 
     assert draft.status == PostStatus.PUBLISHED
     assert (await harness.rounds.get(draft.round_id)).status == RoundStatus.COMPLETED
+
+
+def test_note_escapes_caret_so_regex_text_is_not_taken_for_a_footnote():
+    from app.services.publishing import _plain
+
+    text = _plain("정규식 [^a-z]+ 를 쓰라")
+
+    document = markdown_to_tiptap(f"> **지적**: {text}")
+    [paragraph] = document["content"][0]["content"]
+    assert paragraph["content"][-1]["text"] == ": 정규식 [^a-z]+ 를 쓰라"

@@ -54,3 +54,20 @@ async def test_set_status_updates_and_reports_match():
 
     entry = await repository.get("round-1:A")
     assert (entry.status, entry.published_at) == (TopicRegistryStatus.PUBLISHED, published_at)
+
+
+async def test_release_unless_published_leaves_published_entries_alone():
+    database = FakeAsyncDatabase()
+    repository = TopicRegistryRepository(database)
+    await repository.add_if_missing(make_registry_entry(entry_id="r1:A"))
+    published_at = datetime.now(UTC)
+    await repository.add_if_missing(make_registry_entry(entry_id="r1:B"))
+    await repository.set_status("r1:B", TopicRegistryStatus.PUBLISHED, published_at)
+
+    assert await repository.release_unless_published("r1:A") is True
+    assert await repository.release_unless_published("r1:B") is False  # 중단이 읽은 뒤 발행된 항목을 덮어쓰지 않는다
+    assert await repository.release_unless_published("nope") is False
+
+    assert (await repository.get("r1:A")).status == TopicRegistryStatus.RELEASED
+    published = await repository.get("r1:B")
+    assert (published.status, published.published_at) == (TopicRegistryStatus.PUBLISHED, published_at)

@@ -9,8 +9,19 @@ def test_find_anchors_keeps_order_and_duplicates():
     assert find_anchors(BODY) == ["intro", "body-1", "code-1", "intro"]
 
 
-def test_strip_anchors_removes_anchor_lines_and_inline_anchors():
-    assert strip_anchors(BODY) == "서론\n\n본론 \n```python\nx = 1\n```\n다시"
+def test_strip_anchors_removes_anchor_text_but_keeps_line_breaks():
+    # 앵커만 있던 줄은 빈 줄로 남아 앞뒤 문단이 합쳐지지 않는다
+    assert strip_anchors(BODY) == "\n서론\n\n\n본론 \n```python\nx = 1\n```\n\n다시"
+
+
+def test_anchors_inside_code_fences_are_code_not_anchors():
+    body = "<!-- sec:intro -->\n서론\n```python\n# <!-- sec:intro -->\nx = 1\n```\n<!-- sec:body-1 -->\n본론"
+
+    assert find_anchors(body) == ["intro", "body-1"]
+    assert strip_anchors(body) == "\n서론\n```python\n# <!-- sec:intro -->\nx = 1\n```\n\n본론"
+    assert section_text(body, "intro") == "서론\n```python\n# <!-- sec:intro -->\nx = 1\n```"
+    tilde = "~~~\n<!-- sec:intro -->\n~~~\n<!-- sec:intro -->\n"
+    assert find_anchors(tilde) == ["intro"]
 
 
 def test_section_text_returns_first_match_until_next_anchor():
