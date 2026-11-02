@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from uuid import uuid4
 
 from app.agents.personas import get_persona
+from app.clients.publisher.base import PostCategory, Publisher
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError
 from app.models.enums import AgentSlot, PostStatus, RoundAbortReason, RoundStatus, TopicRegistryStatus
 from app.models.model_binding import ModelBinding
@@ -34,13 +35,29 @@ class RoundService:
         round_repository: PublishingRoundRepository,
         draft_repository: PostDraftRepository,
         topic_registry_repository: TopicRegistryRepository,
+        publisher: Publisher | None = None,
     ) -> None:
         self._rounds = round_repository
         self._drafts = draft_repository
         self._topics = topic_registry_repository
+        self._publisher = publisher
 
     async def get(self, round_id: str) -> PublishingRound | None:
         return await self._rounds.get(round_id)
+
+    async def start_round(
+        self, *, theme_keyword: str | None, slot_bindings: Mapping[AgentSlot, ModelBinding]
+    ) -> PublishingRound:
+        """Post BE 활성 카테고리를 읽어 스냅샷을 만들고 라운드를 만든다 (설계 06 문서 3절 라우터 표).
+
+        조회 실패(PublishFailedError)나 활성 서브 카테고리가 없으면 라운드를 만들지 않는다.
+        """
+        if self._publisher is None:
+            raise ValueError("no Post BE publisher is configured (POST_BE_URL)")
+        categories = category_options(await self._publisher.list_categories())
+        if not categories:
+            raise ValueError("Post BE has no active sub category under an active main category")
+        return await self.create_round(theme_keyword=theme_keyword, slot_bindings=slot_bindings, categories=categories)
 
     async def create_round(
         self,
@@ -166,3 +183,18 @@ class RoundService:
         except ConcurrentUpdateError:
             # 글 코루틴이 방금 저장했다. 다음 스캔의 정리가 다시 거둔다
             logger.info("draft %s changed while aborting; reconcile will retry", draft.draft_id)
+
+
+def category_options(categories: list[PostCategory]) -> list[CategoryOption]:
+    """평평한 카테고리 목록을 (활성 메인, 활성 서브) 쌍으로 묶는다. 응답 순서를 지킨다."""
+    mains = {category.id: category for category in categories if category.parent_id is None and category.is_active}
+    return [
+        CategoryOption(
+            main_category_id=category.parent_id,
+            main_label=mains[category.parent_id].label,
+            sub_category_id=category.id,
+            sub_label=category.label,
+        )
+        for category in categories
+        if category.parent_id in mains and category.is_active
+    ]

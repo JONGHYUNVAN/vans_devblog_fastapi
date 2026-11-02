@@ -16,8 +16,13 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 from app.clients.es import create_es, is_es_reachable
 from app.clients.kis.stream import KISStreamManager
+from app.clients.llm.anthropic import AnthropicClient
+from app.clients.llm.base import LLMClient
+from app.clients.llm.google import GoogleClient
 from app.clients.llm.registry import LLMClientRegistry
+from app.clients.llm.xai import XAIClient
 from app.clients.mongo import create_mongo_client, is_mongo_reachable
+from app.clients.publisher.post_be import PostBEPublisher
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
 from app.models.post_draft import PostDraft
@@ -128,11 +133,34 @@ async def ensure_agent_indexes(database: AsyncDatabase) -> None:
 
 
 def build_llm_registry(settings: Settings) -> LLMClientRegistry:
-    # TODO(로드맵 5단계): 벤더 키가 있는 provider 마다 clients/llm 의 클라이언트를 만든다. 지금은 비어 있어 모든 호출이 KeyError 다.
-    return LLMClientRegistry({}, concurrency_per_provider=settings.llm_concurrency_per_provider)
+    """키가 있는 벤더만 넣는다. 바인딩이 키 없는 provider 를 가리키면 호출이 KeyError 라 러너가 INTERNAL_ERROR 로 멈춘다."""
+    clients: dict[str, LLMClient] = {}
+    if settings.anthropic_api_key:
+        clients["anthropic"] = AnthropicClient(settings.anthropic_api_key.get_secret_value())
+    if settings.google_api_key:
+        clients["google"] = GoogleClient(settings.google_api_key.get_secret_value())
+    if settings.xai_api_key:
+        clients["xai"] = XAIClient(settings.xai_api_key.get_secret_value())
+    return LLMClientRegistry(clients, concurrency_per_provider=settings.llm_concurrency_per_provider)
 
 
-class _UnavailablePublisher:
+def build_publisher(settings: Settings) -> PostBEPublisher | None:
+    """POST_BE_URL 이 없으면 None. 라운드 생성이 카테고리를 읽을 수 없어 ValueError 로 거절한다."""
+    if not settings.post_be_url:
+        return None
+    return PostBEPublisher(settings.post_be_url, settings.publish_timeout_s)
+
+
+def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundService:
+    return RoundService(
+        PublishingRoundRepository(database),
+        PostDraftRepository(database),
+        TopicRegistryRepository(database),
+        publisher=build_publisher(settings),
+    )
+
+
+class _UnavailableDraftPublisher:
     """발행은 6단계 PublishingService 가 맡는다. 그 전에는 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다."""
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
@@ -145,7 +173,9 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     round_repository = PublishingRoundRepository(database)
     draft_repository = PostDraftRepository(database)
     topic_registry_repository = TopicRegistryRepository(database)
-    round_service = RoundService(round_repository, draft_repository, topic_registry_repository)
+    round_service = RoundService(
+        round_repository, draft_repository, topic_registry_repository, publisher=build_publisher(settings)
+    )
     agent_call_service = AgentCallService(AgentCallRepository(database), build_llm_registry(settings), settings)
     return PipelineRunner(
         round_repository=round_repository,
@@ -164,7 +194,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             round_service=round_service,
             agent_call_service=agent_call_service,
             gate=ValidationGate(min_chars=settings.draft_min_chars, max_chars=settings.draft_max_chars),
-            publisher=_UnavailablePublisher(),
+            publisher=_UnavailableDraftPublisher(),
             settings=settings,
         ),
         settings=settings,

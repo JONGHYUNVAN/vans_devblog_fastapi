@@ -75,6 +75,20 @@ class BudgetExceededError(AppError):
     error = "Token budget exceeded"
 
 
+class PublishFailedError(AppError):
+    """Post BE 호출이 결과가 확정된 채 실패했다: 로그인 실패, 4xx, 연결 거부. 카테고리 조회 실패도 여기다 (설계 04 문서 8절)."""
+
+    status_code = 502
+    error = "Post BE call failed"
+
+
+class PublishUncertainError(AppError):
+    """글 생성 호출의 결과를 모른다: 응답 전 타임아웃·연결 끊김·5xx. 다시 호출하면 중복 게시가 될 수 있다."""
+
+    status_code = 502
+    error = "Post BE result unknown"
+
+
 class KISError(AppError):
     """KIS 엔드포인트 오류. 응답 형식이 다르다: {"success": false, "error": {"message", "code"}} (Django kis 앱 계약)."""
 

@@ -11,11 +11,15 @@ from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.dependencies import (
     build_pipeline_runner,
+    build_round_service,
     ensure_agent_indexes,
     get_index_setup_service,
     get_sync_service,
     open_clients,
 )
+from app.models.enums import RoundStatus
+from app.repositories.agent_call import AgentCallRepository
+from app.repositories.post_draft import PostDraftRepository
 from app.schemas.sync import SyncOptions
 
 cli = typer.Typer(help="VansDevBlog 검색 서비스 운영 명령", no_args_is_help=True)
@@ -76,30 +80,126 @@ def setup_popular(
             typer.echo("인기 검색어 인덱스가 이미 있다.")
 
 
-@agents.command()
-def run() -> None:
-    """서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 띄우지 않는다(같은 글을 두 프로세스가 돌린다). Ctrl+C 로 끝낸다."""
+def _run_agents(coroutine_factory):
+    """비동기 Mongo 클라이언트를 열고 코루틴을 돌린 뒤 닫는다. agents 명령이 같이 쓴다."""
     settings = get_settings()
     if not settings.mongodb_db_name:
         typer.echo("MongoDB DB 이름(MONGODB_DATABASE 또는 URI 경로)이 없다.", err=True)
         raise typer.Exit(1)
 
-    async def _run() -> None:
+    async def _main():
         async_mongo_client = create_async_mongo_client(settings)
         try:
-            database = async_mongo_client[settings.mongodb_db_name]
-            await ensure_agent_indexes(database)
-            runner = build_pipeline_runner(database, settings)
-            runner.start()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                await runner.stop()
+            return await coroutine_factory(async_mongo_client[settings.mongodb_db_name], settings)
         finally:
             await async_mongo_client.close()
 
+    return asyncio.run(_main())
+
+
+async def _round_status(database, round_id: str) -> dict:
+    round_service = build_round_service(database, get_settings())
+    publishing_round = await round_service.get(round_id)
+    if publishing_round is None:
+        typer.echo(f"라운드 {round_id} 가 없다.", err=True)
+        raise typer.Exit(1)
+    calls = AgentCallRepository(database)
+    drafts = []
+    for draft in await PostDraftRepository(database).list_by_round(round_id):
+        usage = await calls.sum_usage(draft.draft_id)
+        drafts.append(
+            {
+                "draft_id": draft.draft_id,
+                "status": draft.status,
+                "iteration": draft.iteration,
+                "versions": len(draft.versions),
+                "title": draft.current_version.title if draft.versions else None,
+                "escalation_reason": draft.escalation_reason,
+                "failure": draft.failure.code if draft.failure else None,
+                "tokens": usage.total_tokens,
+            }
+        )
+    return {
+        "round_id": round_id,
+        "status": publishing_round.status,
+        "abort_reason": publishing_round.abort_reason,
+        "topic_attempts": len(publishing_round.topic_attempts),
+        "drafts": drafts,
+    }
+
+
+def _is_waiting_on_human(status: dict) -> bool:
+    """러너가 더 할 일이 없는지: 라운드가 끝났거나, 글이 모두 승인·사람 결정 대기·종결이다."""
+    if status["status"] in (RoundStatus.COMPLETED, RoundStatus.ABORTED):
+        return True
+    if status["status"] == RoundStatus.TOPIC_SELECTION or not status["drafts"]:
+        return False
+    halted = {"READY_TO_PUBLISH", "ESCALATED", "FAILED", "PUBLISHED", "REJECTED"}
+    return all(draft["status"] in halted for draft in status["drafts"])
+
+
+@agents.command()
+def start_round(
+    theme: Annotated[str | None, typer.Option(help="세 슬롯 모두 이 범위 안에서 주제를 제안한다")] = None,
+    wait: Annotated[
+        bool, typer.Option(help="러너가 더 할 일이 없을 때(종결·사람 대기)까지 폴링하며 상태를 찍는다")
+    ] = False,
+) -> None:
+    """Post BE 카테고리를 읽어 라운드를 TOPIC_SELECTION 으로 만든다. 진행은 러너(서버 또는 `agents run`)가 한다."""
+
+    async def _start(database, settings):
+        publishing_round = await build_round_service(database, settings).start_round(
+            theme_keyword=theme, slot_bindings=settings.agent_slot_bindings
+        )
+        typer.echo(
+            json.dumps({"round_id": publishing_round.round_id, "status": publishing_round.status}, ensure_ascii=False)
+        )
+        while wait:
+            await asyncio.sleep(settings.scan_interval_s)
+            status = await _round_status(database, publishing_round.round_id)
+            typer.echo(json.dumps(status, ensure_ascii=False))
+            if _is_waiting_on_human(status):
+                break
+
+    _run_agents(_start)
+
+
+@agents.command()
+def status(round_id: str) -> None:
+    """라운드와 글 3편의 상태·iteration·토큰."""
+
+    async def _status(database, settings):
+        typer.echo(json.dumps(await _round_status(database, round_id), ensure_ascii=False, indent=2))
+
+    _run_agents(_status)
+
+
+@agents.command()
+def abort(round_id: str) -> None:
+    """라운드를 중단한다. PUBLISHED 외 글은 REJECTED, 레지스트리는 RELEASED 다."""
+
+    async def _abort(database, settings):
+        await build_round_service(database, settings).abort_round(round_id)
+        typer.echo(f"라운드 {round_id} 를 중단했다.")
+
+    _run_agents(_abort)
+
+
+@agents.command()
+def run() -> None:
+    """서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 띄우지 않는다(같은 글을 두 프로세스가 돌린다). Ctrl+C 로 끝낸다."""
+
+    async def _run(database, settings) -> None:
+        await ensure_agent_indexes(database)
+        runner = build_pipeline_runner(database, settings)
+        runner.start()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await runner.stop()
+
     try:
-        asyncio.run(_run())
+        _run_agents(_run)
     except KeyboardInterrupt:
         typer.echo("러너를 멈췄다.")
 

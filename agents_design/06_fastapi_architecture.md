@@ -78,16 +78,17 @@ app/
 └─ clients/
    ├─ mongo.py                 create_async_mongo_client
    ├─ llm/                     외부 시스템 하나 = 하위 패키지 하나
-   │  ├─ base.py               LLMClient Protocol: complete(messages, schema, params, timeout) -> LLMResponse(text, usage). LLMMessage·LLMParams·LLMUsage 도 여기(clients 는 models 를 import 하지 않는다)
-   │  ├─ anthropic.py
-   │  ├─ google.py
-   │  ├─ xai.py
-   │  └─ registry.py           provider 문자열 → 클라이언트. 세마포어 보관
+   │  ├─ base.py               LLMClient Protocol: complete(messages, schema, params, timeout) -> LLMResponse(text, usage). LLMParams 는 model_id·temperature·max_output_tokens(레지스트리는 provider 만 알므로 모델은 호출마다 받는다). 네트워크·429·5xx·타임아웃은 LLMTransportError, 그 밖의 4xx 는 ValueError(설정 오류, 재시도 없음). LLMMessage·LLMUsage 도 여기(clients 는 models 를 import 하지 않는다)
+   │  ├─ anthropic.py          공식 SDK(anthropic 2.x, httpx2 기반) AsyncAnthropic + output_config.format=json_schema(transform_schema). SDK 재시도 off. 현행 API(2026-10-21)가 sampling 을 거부해 temperature 는 보내지 않는다
+   │  ├─ google.py             REST generateContent + responseMimeType=application/json·responseJsonSchema. thoughtsTokenCount 도 completion 에 더한다
+   │  ├─ xai.py                REST chat/completions(OpenAI 호환) + response_format=json_schema
+   │  ├─ http.py               google·xai 가 같이 쓰는 post_json: httpx2 호출과 실패 분류
+   │  └─ registry.py           provider 문자열 → 클라이언트. 세마포어 보관. dependencies.build_llm_registry 가 키 있는 벤더만 넣는다
    └─ publisher/
-      ├─ base.py               Publisher Protocol: list_categories() -> list[PostCategory], publish(PostCreatePayload) -> PublishResult
-      └─ post_be.py            vans_story_be 로그인(봇 계정, 발행마다) + vans_story_be_post GET /api/v1/categories, POST /api/v1/posts
+      ├─ base.py               Publisher Protocol: list_categories() -> list[PostCategory] (5단계), publish(PostCreatePayload) -> PublishResult (6단계)
+      └─ post_be.py            PostBEPublisher: vans_story_be_post GET /api/v1/categories?activeOnly=true (5단계). 로그인(봇 계정, 발행마다)·POST /api/v1/posts 는 6단계
 cli/
-└─ __main__.py                 typer `agents` 하위 명령: start-round, status, show, run(4단계), resolve, approve, retry, discard, abort, replay
+└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run(4~5단계), show, resolve, approve, retry, discard, replay(6단계 이후)
 ```
 
 ### `agents/`의 위치
@@ -190,7 +191,7 @@ class DraftPipelineService:
 
 ### `clients/publisher/`
 
-- `PostCreatePayload`·`PostCategory`는 `base.py`에 둔다(`clients`는 `models`를 import 하지 않는다). JSON 필드 이름은 `CreatePostDto` 그대로(camelCase)다. 평평한 카테고리 목록을 메인·서브 쌍(`CategoryOption`)으로 묶는 일은 서비스가 한다.
+- `PostCreatePayload`·`PostCategory`는 `base.py`에 둔다(`clients`는 `models`를 import 하지 않는다). JSON 필드 이름은 `CreatePostDto` 그대로(camelCase)다. 평평한 카테고리 목록을 메인·서브 쌍(`CategoryOption`)으로 묶는 일은 서비스가 한다(`services/round.py` 의 `category_options`: 활성 메인 아래 활성 서브만, 응답 순서 유지. `RoundService.start_round` 가 조회→묶기→`create_round` 를 잇는다).
 - 실패 계약: 로그인 단계의 모든 실패와 글 생성 호출의 4xx 응답·연결 거부는 `PublishFailedError`, 글 생성 호출의 응답 전 타임아웃·연결 끊김·5xx는 `PublishUncertainError`를 던진다. 로그인에서는 글이 생기지 않기 때문이다. 분류 근거는 04 문서 8절.
 - 로그인 응답은 본문이 비어 있고 토큰을 `HttpServletResponse`로 내려준다(`vans_story_be`의 `AuthController.login`). 쿠키인지 헤더인지는 구현 때 확인한다. 토큰은 저장하지 않고 발행마다 받는다. 모든 호출에 `publish_timeout_s`를 건다.
 
@@ -218,7 +219,7 @@ class DraftPipelineService:
 
 | 명령 | 동작 |
 |---|---|
-| `agents start-round [--theme]` | 라운드 생성 후 종료(진행은 러너). `--wait`면 완료까지 폴링 |
+| `agents start-round [--theme] [--wait]` | Post BE 카테고리를 읽어 라운드 생성 후 종료(진행은 러너). `--wait`면 러너가 더 할 일이 없을 때(라운드 종결, 또는 글이 모두 승인·사람 결정 대기·종결)까지 `SCAN_INTERVAL_S` 마다 상태를 찍는다 |
 | `agents run` | 서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 쓰지 않는다 |
 | `agents status <round_id>` | 글 3편 상태·iteration·토큰 |
 | `agents show <draft_id> [--version N]` | 본문·리뷰·결정 출력 |
@@ -239,7 +240,7 @@ class Settings(BaseSettings):
     xai_api_key: SecretStr | None = None
 
     # 슬롯 바인딩. JSON 문자열. 예: {"A": {"provider": "anthropic", "model_id": "...", "persona_id": "architect"}, ...}
-    agent_slot_bindings: dict[AgentSlot, ModelBinding]
+    agent_slot_bindings: dict[AgentSlot, ModelBinding] = {}   # 비어 있으면 start-round 가 거절한다
 
     # 파이프라인 상수 (03 문서 5절)
     max_iterations: int = 2
@@ -259,7 +260,7 @@ class Settings(BaseSettings):
     scan_interval_s: int = 15
 
     # 발행 (07 문서 D-27, D-40)
-    post_be_url: str
+    post_be_url: str = ""                 # 비어 있으면 publisher 가 None 이라 start-round 가 거절한다
     user_service_url: str                 # vans_story_be. 봇 계정 로그인
     publisher_email: str                  # 에이전트 전용 관리자 계정
     publisher_password: SecretStr
@@ -278,7 +279,7 @@ class Settings(BaseSettings):
 - 이 기능의 라우터·서비스·리포지토리는 전부 `async def`. 동기 I/O 호출 금지.
 - MongoDB는 `pymongo.AsyncMongoClient`(pymongo ≥ 4.13). 검색 서비스와 같은 `MONGODB_URI`·`mongodb_db_name`을 쓰고(07 문서 D-43), 연결만 동기 `MongoClient`와 별도로 만든다(`create_async_mongo_client`). 새 환경 변수는 없다.
 - 다중 문서 트랜잭션을 쓰지 않으므로 standalone MongoDB여도 된다. 여러 문서를 고치는 동작의 순서와 정리는 04 문서 1절.
-- LLM 클라이언트는 벤더 공식 SDK의 async 인터페이스 또는 `httpx2.AsyncClient`. 타임아웃 필수.
+- LLM 클라이언트는 벤더 공식 SDK의 async 인터페이스(Anthropic) 또는 `httpx2.AsyncClient`(Google·xAI). 타임아웃 필수. 재시도는 호출 서비스가 하므로 SDK 재시도는 끈다.
 - 코드 블록 문법 검사 등 CPU 작업은 짧으므로 인라인. 외부 언어 체커를 subprocess 로 돌린다면 `asyncio.create_subprocess_exec`.
 
 ## 6. 테스트 전략
@@ -297,6 +298,6 @@ class Settings(BaseSettings):
 | `services/publishing.py` | `CreatePostDto` 매핑. 외부 호출 후 로컬 반영 전 장애를 재현하면 다시 `drive`해도 호출하지 않고 `PUBLISH_UNCERTAIN`. `PublishFailedError`는 재시도 후 상한에서 `PUBLISH_FAILED`, `PublishUncertainError`는 즉시 `PUBLISH_UNCERTAIN`. `CONFIRM_PUBLISHED`는 호출 없이 `PUBLISHED`, `PUBLISH_AS_IS`·`REVISE`는 카운터·의도를 지움. 로그인 단계 실패는 결과 확정. 요약 노트에 HTML·여러 줄이 든 지적이 있어도 변환 성공. 응답 반영 전에 `REJECTED`이면 `PUBLISHED`로 쓰지 않고 `external_post_id`만 의도에 남긴다 |
 | `agents/parsers.py` | 없는 앵커·빈 체크리스트는 `LLMOutputError`. SPOT_CHECK의 MAJOR는 버리고 로그. `item_checks` 누락·중복·입력 외 ID·미해소 빈 note는 오류. 제안 카테고리가 입력 목록에 없음, 제목 100자 초과, 빈 `summary`는 오류 |
 | `routers/` | `dependency_overrides`로 서비스 교체, `tests/golden/`에 응답 계약 |
-| e2e | `@pytest.mark.e2e`. 실제 벤더 1회 호출로 스키마 호환 확인. 기본 실행 제외 |
+| e2e | `@pytest.mark.e2e`. `tests/e2e/test_llm_vendors.py` 가 키 있는 벤더마다 1회 호출해 스키마 호환을 확인하고, `tests/e2e/test_post_be.py` 가 `POST_BE_URL` 의 활성 카테고리가 메인·서브 쌍을 이루는지 본다. 키·URL 이 없으면 건너뛴다. 기본 실행 제외 |
 
 `tests/fakes.py`에 `FakeLLMClient`를 두고 응답(본문·`LLMResponse`·예외)을 순서대로 스크립트한다. `LLMClient` 계약에는 호출 종류가 없으므로 `ScriptedLLMClient`(4단계)가 시스템 프롬프트의 템플릿 문구로 종류(`PROPOSE_TOPIC`·`WRITE_DRAFT`·`REVISE_DRAFT`·`REVIEW_FULL`·`SPOT_CHECK`·`ARBITRATE`)를 가려 종류별 스크립트를 소비한다. 값이 callable 이면 입력 JSON 을 받아 응답을 만든다(SPOT_CHECK 의 `item_checks` 처럼 입력에 따라 달라지는 응답). 슬롯은 입력의 페르소나로 가린다. 파이프라인 테스트는 `FakePostDraftRepository` 대신 `FakeAsyncDatabase` 위의 실제 리포지토리를 써서 저장 조건(revision)까지 같이 검사한다. 토큰 사용량도 가짜로 돌려 소프트 예산을 테스트한다. Mongo 리포지토리는 `FakeAsyncCollection`(같음·`$in`·`$gte` 조건, `$group`/`$sum` 집계만)으로 질의·저장 조건을 검사한다.

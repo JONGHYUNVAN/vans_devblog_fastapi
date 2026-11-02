@@ -82,6 +82,7 @@ class AgentCallService:
         client = self._llm.get(binding.provider)
         is_review = kind in _REVIEW_KINDS
         params = LLMParams(
+            model_id=binding.model_id,
             temperature=self._settings.review_temperature if is_review else binding.temperature,
             max_output_tokens=binding.max_output_tokens,
         )

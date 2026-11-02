@@ -3,7 +3,11 @@
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.models.enums import AgentSlot
+from app.models.model_binding import ModelBinding
 
 
 class Settings(BaseSettings):
@@ -38,7 +42,14 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = ""
     frontend_hosts: str = ""
 
-    # 에이전트 파이프라인 상수 (설계 03 문서 5절, 06 문서 4절). 벤더 키·슬롯 바인딩·발행 계정은 해당 로드맵 단계에서 더한다.
+    # 에이전트 파이프라인 (설계 06 문서 4절). 벤더 키는 로그에 남기지 않는다. 발행 계정은 6단계에서 더한다.
+    anthropic_api_key: SecretStr | None = None
+    google_api_key: SecretStr | None = None
+    xai_api_key: SecretStr | None = None
+    # 슬롯 바인딩. JSON 문자열. 예: {"A": {"provider": "anthropic", "model_id": "...", "persona_id": "architect", "max_output_tokens": 16000}, ...}
+    agent_slot_bindings: dict[AgentSlot, ModelBinding] = {}
+    post_be_url: str = ""  # vans_story_be_post. 카테고리 조회·발행
+    publish_timeout_s: int = 30
     max_iterations: int = 2
     max_topic_attempts: int = 2
     max_llm_retries: int = 3
