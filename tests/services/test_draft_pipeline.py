@@ -46,7 +46,7 @@ async def test_fast_track_reaches_ready_to_publish_and_waits_for_approval():  # 
     assert (draft.iteration, draft.last_reviewed_version, draft.approved_by) == (0, 1, None)
     assert {review.reviewer_slot for review in draft.reviews} == {B, C}
     assert draft.current_version.call_id == (await harness.calls.list_by_draft(draft.draft_id))[0].call_id
-    assert harness.publisher.published == []
+    assert harness.publisher.payloads == []
 
 
 async def test_one_revision_then_approval_publishes():  # ②
@@ -76,7 +76,7 @@ async def test_one_revision_then_approval_publishes():  # ②
     draft = await harness.drive(A)
 
     assert draft.status == PostStatus.PUBLISHED
-    assert harness.publisher.published == [draft.draft_id]
+    assert [payload.title for payload in harness.publisher.payloads] == [draft.current_version.title]
     assert draft.publication is not None and draft.publication.approved_by == "사람"
 
 

@@ -33,6 +33,13 @@ class AuthenticationError(AppError):
     error = "Authentication failed"
 
 
+class InvalidRequestError(AppError):
+    """요청 값이 현재 데이터와 맞지 않는다(재개 상한이 사용량 이하, 결정에 필요한 값 누락 등). 형식 오류(RequestValidationError)와 구분한다."""
+
+    status_code = 400
+    error = "Invalid request"
+
+
 class InvalidTransitionError(AppError):
     """현재 상태에서 허용하지 않는 전이. 에이전트 파이프라인 도메인 모델(PostDraft, PublishingRound) 메서드가 던진다."""
 

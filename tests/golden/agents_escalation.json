@@ -1,0 +1,39 @@
+{
+  "draft_id": "round-1:A",
+  "status": "ESCALATED",
+  "escalation_reason": "MAX_ITERATIONS_REACHED",
+  "failure": null,
+  "publication_intent": null,
+  "human_instruction": null,
+  "final_version": 2,
+  "title": "제목 v2",
+  "summary": "요약",
+  "content_markdown": "<!-- sec:intro -->\n본문\n수정한 문단",
+  "diff": "--- v1\n+++ v2\n@@ -1,2 +1,3 @@\n <!-- sec:intro -->\n-본문+본문\n+수정한 문단",
+  "open_blocking_items": [
+    {
+      "item_id": "round-1:A:v1:B:FULL:1",
+      "reviewer_slot": "B",
+      "section_id": "body-1",
+      "severity": "CRITICAL",
+      "comment": "지적",
+      "suggested_fix": null,
+      "resolution": "REJECTED_WITH_REASON",
+      "resolution_reason": "근거가 있다",
+      "arbitration": "UPHOLD_REVIEWER"
+    }
+  ],
+  "rejected_items": [
+    {
+      "item_id": "round-1:A:v1:B:FULL:1",
+      "reviewer_slot": "B",
+      "section_id": "body-1",
+      "severity": "CRITICAL",
+      "comment": "지적",
+      "suggested_fix": null,
+      "resolution": "REJECTED_WITH_REASON",
+      "resolution_reason": "근거가 있다",
+      "arbitration": "UPHOLD_REVIEWER"
+    }
+  ]
+}

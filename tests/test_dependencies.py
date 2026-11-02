@@ -1,9 +1,12 @@
-"""dependencies 조립 테스트: 벤더 키가 있는 provider 만 LLM 레지스트리에 들어간다."""
+"""dependencies 조립 테스트: 벤더 키가 있는 provider 만 LLM 레지스트리에 들어가고, 발행 계정·PublishingService 가 조립된다."""
 
 from app.clients.llm.google import GoogleClient
 from app.clients.llm.xai import XAIClient
 from app.core.config import Settings
-from app.dependencies import build_llm_registry, build_publisher
+from app.dependencies import build_draft_decision_service, build_llm_registry, build_pipeline_runner, build_publisher
+from app.services.draft_decision import DraftDecisionService
+from app.services.publishing import PublishingService
+from tests.fakes import FakeAsyncDatabase
 
 
 def test_build_llm_registry_includes_only_providers_with_keys():
@@ -22,3 +25,33 @@ def test_build_llm_registry_is_empty_without_keys():
 def test_build_publisher_requires_post_be_url():
     assert build_publisher(Settings(_env_file=None)) is None
     assert build_publisher(Settings(_env_file=None, post_be_url="https://post.test")) is not None
+
+
+def test_build_publisher_carries_the_publishing_account():
+    settings = Settings(
+        _env_file=None,
+        post_be_url="https://post.test",
+        user_service_url="https://user.test",
+        publisher_email="bot@example.com",
+        publisher_password="Password1!",
+    )
+
+    publisher = build_publisher(settings)
+
+    assert publisher is not None
+    assert (publisher._user_service_url, publisher._email, publisher._password) == (  # noqa: SLF001
+        "https://user.test",
+        "bot@example.com",
+        "Password1!",
+    )
+
+
+def test_build_pipeline_runner_publishes_through_publishing_service_only_with_post_be_url():
+    database = FakeAsyncDatabase()
+
+    with_post_be = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test"))
+    without = build_pipeline_runner(database, Settings(_env_file=None))
+
+    assert isinstance(with_post_be._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
+    assert not isinstance(without._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
+    assert isinstance(build_draft_decision_service(database, Settings(_env_file=None)), DraftDecisionService)

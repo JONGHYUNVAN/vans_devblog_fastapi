@@ -20,6 +20,15 @@ FastAPI 전환 후 같은 요청의 응답 형식을 비교하는 기준으로 �
 | kis_snapshot_invalid.json | GET /api/kis/snapshot/12345/ | 400 |
 | kis_stream.txt | GET /api/kis/stream/005930/ | 200, 본문 없음 |
 
+에이전트 내부 API(2026-11-02)는 Django 캡처가 아니라 설계 06 문서 라우터 표의 계약이다. `tests/routers/test_agent_rounds.py` 의 시드로 만들고, 시각이 고정이라 값까지 비교한다.
+
+| 파일 | 요청 | 상태 |
+|---|---|---|
+| agents_round_detail.json | GET /api/v1/agents/rounds/round-1/ | 200 |
+| agents_escalation.json | GET /api/v1/agents/drafts/round-1:A/escalation/ | 200 |
+| agents_calls.json | GET /api/v1/agents/calls/?round_id=round-1 | 200 |
+| tiptap_sample.json | `tiptap_sample.md` 의 변환 결과 (3단계) | – |
+
 관찰 사항:
 - 슬래시 없는 경로(`/api/v1/search/popular`)는 301로 슬래시 경로에 리다이렉트된다.
 - KIS 스트림은 헤더만 오고 25초간 본문이 없었다. 운영에서 이미 동작하지 않는 상태.

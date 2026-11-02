@@ -32,6 +32,8 @@ class Settings(BaseSettings):
 
     # 내부 API (NestJS -> 검색 서비스)
     internal_api_key: str = ""
+    # 에이전트 내부 API (/api/v1/agents/). 검색 내부 키와 나눈다 (설계 07 문서 D-44). 비어 있으면 모두 403
+    agents_internal_api_key: str = ""
 
     # KIS OpenAPI
     kis_app_key: str = ""
@@ -42,13 +44,16 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = ""
     frontend_hosts: str = ""
 
-    # 에이전트 파이프라인 (설계 06 문서 4절). 벤더 키는 로그에 남기지 않는다. 발행 계정은 6단계에서 더한다.
+    # 에이전트 파이프라인 (설계 06 문서 4절). 벤더 키·발행 계정 비밀번호는 로그에 남기지 않는다.
     anthropic_api_key: SecretStr | None = None
     google_api_key: SecretStr | None = None
     xai_api_key: SecretStr | None = None
     # 슬롯 바인딩. JSON 문자열. 예: {"A": {"provider": "anthropic", "model_id": "...", "persona_id": "architect", "max_output_tokens": 16000}, ...}
     agent_slot_bindings: dict[AgentSlot, ModelBinding] = {}
     post_be_url: str = ""  # vans_story_be_post. 카테고리 조회·발행
+    user_service_url: str = ""  # vans_story_be. 발행 계정 로그인 (설계 07 문서 D-40)
+    publisher_email: str = ""  # 에이전트 전용 관리자 계정. 게시글 작성자가 된다
+    publisher_password: SecretStr | None = None
     publish_timeout_s: int = 30
     max_iterations: int = 2
     max_topic_attempts: int = 2

@@ -47,6 +47,7 @@
 | D-41 | 카테고리는 주제 제안이 라운드 스냅샷(`PublishingRound.categories`)에서 한 쌍을 고르고, 파서가 목록에 있는지 검사한다 | 승인 토글을 끈 뒤에도 사람 없이 정해져야 한다. 잘못 고른 카테고리는 발행 후 관리자가 블로그 에디터에서 고친다 | 승인 때 사람이 지정 |
 | D-42 | 관리자 수동 격리(`escalate(MANUAL)`)를 두지 않는다. 라운드 상태에서도 `OPEN`을 없애 라운드는 `TOPIC_SELECTION`으로 생긴다 | 수동 격리는 거는 API·CLI가 없었고, 발행 호출과 겹치면 이미 올라간 게시글을 놓쳤으며, 원래 상태로 돌아갈 경로도 없었다. 글은 상한으로 반드시 멈추고, 승인 토글이 발행을 막으며, 버릴 때는 `ESCALATED`·`FAILED`의 폐기나 라운드 중단을 쓴다. `OPEN`은 생성 API가 거치지 않는 상태였다 | `escalate(MANUAL)` + API·CLI + 복귀 경로, `OPEN → start_round` |
 | D-43 | 파이프라인 컬렉션 4개(`agent_rounds`·`agent_drafts`·`agent_calls`·`agent_topics`)는 검색 서비스와 같은 Mongo, 같은 DB(`MONGODB_URI`·`mongodb_db_name`)에 둔다. 비동기 클라이언트만 별도로 만든다 | 사용자 결정(2026-11-02). 개인 블로그라 Mongo 인스턴스를 더 띄울 비용을 늘리지 않는다. 컬렉션 이름의 `agent_` 접두로 게시글 컬렉션과 구분한다 | 별도 `AGENTS_MONGODB_URI`로 standalone `vans_devblog_mongodb`를 가리키기 |
+| D-44 | 에이전트 내부 API(`/api/v1/agents/`)의 `X-Internal-Key`는 검색 내부 키(`INTERNAL_API_KEY`)와 별개인 `AGENTS_INTERNAL_API_KEY`다 | Q-16 해소(2026-11-02). 검색 키는 NestJS Post BE와 공유하는데, 같은 키면 Post BE 설정이 새면 라운드 생성·발행 승인까지 열린다. 에이전트 API는 사람(CLI·curl)만 부른다 | `INTERNAL_API_KEY` 공유 |
 
 ## 2. 미결 사항
 
@@ -63,7 +64,7 @@
 | Q-11 | 라운드 실행 트리거: 수동(CLI/API)만인지, 주기 스케줄(cron)도 두는지 | 러너 설계 | 1차 수동 |
 | Q-13 | 발행본 본문을 이 서비스가 들고 자기 표절 검사를 할지 | 게이트, 저장 | 1차 게이트에서 제외. 레지스트리에는 제목·키워드만 있다 |
 | Q-14 | MAJOR 분쟁도 중재할지 | 교착은 CRITICAL 한정이라, 작성자가 근거를 들어 기각한 MAJOR를 리뷰어가 받아들이지 않으면 반복 상한까지 돈 뒤 `ESCALATED`다. 덜 심각한 MAJOR가 더 무거운 경로(사람)를 탄다 | 현행(CRITICAL만 중재) |
-| Q-16 | 에이전트 내부 API 키를 검색 내부 API 키(`INTERNAL_API_KEY`, NestJS Post BE와 공유)와 나눌지 | 같은 키면 Post BE가 라운드 생성·결정 API도 부를 수 있다 | 라우터 단계(6) 전까지 정한다. 기본은 별도 `AGENTS_INTERNAL_API_KEY` |
+| Q-16 | 에이전트 내부 API 키를 검색 내부 API 키(`INTERNAL_API_KEY`, NestJS Post BE와 공유)와 나눌지 | 같은 키면 Post BE가 라운드 생성·결정 API도 부를 수 있다 | 해소(2026-11-02, D-44): 별도 `AGENTS_INTERNAL_API_KEY` |
 | Q-15 | 중재자 독립성 | 슬롯이 셋이라 제3 슬롯 중재자는 그 글을 이미 FULL 리뷰한 다른 리뷰어다 | 현행. 독립이 필요하면 중재 전용 바인딩을 설정으로 둔다 |
 
 ## 3. 구현 로드맵
@@ -78,7 +79,7 @@
 | 3 | `agents/`(페르소나, 계약, 빌더, 파서, 프롬프트 v1) + `models/tiptap.py` + `ValidationGate` | 파서 위반 케이스 테스트, 게이트 테스트, 변환 golden 테스트. 완료(2026-11-02) |
 | 4 | `TopicSelectionService` + `DraftPipelineService.drive` + `PipelineRunner` + CLI `run` | 가짜 LLM으로 문서 06의 시나리오 ①~⑫ 통과. 완료(2026-11-02). `RoundService`도 여기서 만들었고 `DraftDecisionService`는 6단계로 미뤘다 |
 | 5 | `clients/llm/` 벤더 3종 + Post BE 카테고리 조회 + e2e 1회 호출 테스트 | 실제 모델로 라운드 1회 완주 (발행은 dry-run). 코드·단위 테스트 완료(2026-11-02). 실제 벤더 e2e 와 라운드 완주는 키를 넣고 사용자가 돌린다(`pytest -m e2e tests/e2e/test_llm_vendors.py`, `agents start-round --wait` + `agents run`) |
-| 6 | `PublishingService` + `clients/publisher/` 발행(봇 계정 로그인, 실패 분류) + 요약 노트 + 승인 토글 + `PUBLISH_UNCERTAIN` 해소 + 라우터·golden | 에이전트 전용 관리자 계정을 만들고, 승인 후 Post BE 에 발행해 블로그에서 사람이 쓴 글과 같게 보인다 |
+| 6 | `PublishingService` + `clients/publisher/` 발행(봇 계정 로그인, 실패 분류) + 요약 노트 + 승인 토글 + `PUBLISH_UNCERTAIN` 해소 + `DraftDecisionService` + 라우터·golden + 결정 CLI | 에이전트 전용 관리자 계정을 만들고, 승인 후 Post BE 에 발행해 블로그에서 사람이 쓴 글과 같게 보인다. 코드·단위 테스트 완료(2026-11-02). 계정을 만들어 `.env`에 넣고(`USER_SERVICE_URL`·`PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD`·`AGENTS_INTERNAL_API_KEY`) `pytest -m e2e tests/e2e/test_post_be.py` → 라운드 1회 → `agents approve` → 블로그 확인은 사용자가 한다 |
 | 7 | 운영: 토큰 측정 → Q-07 확정, 프롬프트 튜닝(`reported_verdict`·`derived_verdict` 불일치 지표), `replay` 명령 | 라운드 3회 이상 운영 후 승인 토글 해제 검토 |
 
 ## 4. 측정 지표 (운영 후 튜닝 입력)

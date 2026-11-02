@@ -4,19 +4,20 @@ import asyncio
 import copy
 import json
 from collections.abc import Callable, Iterable, Iterator
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
 from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
+from app.clients.publisher.base import PostCategory, PostCreatePayload, Publisher, PublishResult
 from app.core.config import Settings
 from app.models.agent_call import AgentCall, TokenUsage
 from app.models.enums import AgentSlot, PostStatus
 from app.models.popular_search import PopularSearch
 from app.models.post import Post, PostSearchCriteria, PostSearchPage
-from app.models.post_draft import PostDraft, Publication
+from app.models.post_draft import PostDraft
 from app.models.publishing_round import LockedTopic, PublishingRound, TopicAttempt
 from app.models.topic import TopicRegistryEntry
 from app.repositories.agent_call import AgentCallRepository
@@ -24,7 +25,9 @@ from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
+from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService
+from app.services.publishing import PublishingService
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
 from app.services.topic_selection import TopicSelectionService
@@ -421,28 +424,31 @@ class FakeAgentCallRepository:
 # ---------- 파이프라인 하네스 (로드맵 4단계) ----------
 
 
-class FakePublisher:
-    """DraftPublisher 대역. 승인된 글을 바로 PUBLISHED 로 쓴다. 6단계 PublishingService 가 들어오기 전까지 쓴다."""
+class FakePostBE:
+    """Publisher 대역. list_categories 는 고정 목록, publish 는 outcomes 를 순서대로 쓴다(비면 성공).
 
-    def __init__(self, draft_repository: PostDraftRepository, requires_approval: bool) -> None:
-        self._drafts = draft_repository
-        self._requires_approval = requires_approval
-        self.published: list[str] = []
+    outcome: str 은 게시글 id, Exception 은 던진다, callable 은 payload 를 받아 둘 중 하나를 돌려준다(호출 중 사고를 흉내 낸다).
+    """
 
-    async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        intent = draft.begin_publish(self._requires_approval)
-        draft.publish(
-            Publication(
-                published_at=datetime.now(UTC),
-                final_version=intent.final_version,
-                external_post_id=f"post-{draft.draft_id}",
-                peer_review_note="",
-                approved_by=draft.approved_by,
-            ),
-            self._requires_approval,
-        )
-        await self._drafts.save(draft)
-        self.published.append(draft.draft_id)
+    def __init__(self, outcomes: Iterable[Any] = (), categories: list[PostCategory] | None = None) -> None:
+        self.outcomes = list(outcomes)
+        self.categories = categories or []
+        self.payloads: list[PostCreatePayload] = []
+        self.published: list[str] = []  # 돌려준 게시글 id
+
+    async def list_categories(self) -> list[PostCategory]:
+        return self.categories
+
+    async def publish(self, payload: PostCreatePayload) -> PublishResult:
+        self.payloads.append(payload)
+        outcome = self.outcomes.pop(0) if self.outcomes else None
+        if callable(outcome):
+            outcome = outcome(payload)
+        if isinstance(outcome, Exception):
+            raise outcome
+        post_id = outcome or f"post-{len(self.payloads)}"
+        self.published.append(post_id)
+        return PublishResult(external_post_id=post_id)
 
 
 async def _no_sleep(seconds: float) -> None:
@@ -450,7 +456,7 @@ async def _no_sleep(seconds: float) -> None:
 
 
 class PipelineHarness:
-    """FakeAsyncDatabase 위에 실제 리포지토리·서비스를 조립한다. LLM 은 ScriptedLLMClient 다.
+    """FakeAsyncDatabase 위에 실제 리포지토리·서비스를 조립한다. LLM 은 ScriptedLLMClient, Post BE 는 FakePostBE 다.
 
     settings 기본: 본문 길이 하한 1, 호출 재시도 2, 백오프 없음, 승인 토글 켬.
     """
@@ -462,6 +468,7 @@ class PipelineHarness:
         delay_s: float = 0.0,
         database: FakeAsyncDatabase | None = None,
         round_repository: PublishingRoundRepository | None = None,
+        publisher: Publisher | None = None,
         **settings_overrides: Any,
     ) -> None:
         self.database = database or FakeAsyncDatabase()
@@ -474,20 +481,34 @@ class PipelineHarness:
         self.drafts = PostDraftRepository(self.database)
         self.topics = TopicRegistryRepository(self.database)
         self.calls = AgentCallRepository(self.database)
-        self.round_service = RoundService(self.rounds, self.drafts, self.topics)
+        self.publisher = publisher or FakePostBE()
+        self.round_service = RoundService(self.rounds, self.drafts, self.topics, publisher=self.publisher)
         self.call_service = AgentCallService(
             self.calls,
             LLMClientRegistry({"fake": self.llm}, concurrency_per_provider=3),
             self.settings,
             sleep=_no_sleep,
         )
-        self.publisher = FakePublisher(self.drafts, self.settings.publish_requires_approval)
+        self.publishing = PublishingService(
+            draft_repository=self.drafts,
+            topic_registry_repository=self.topics,
+            publisher=self.publisher,
+            settings=self.settings,
+            sleep=_no_sleep,
+        )
+        self.decisions = DraftDecisionService(
+            draft_repository=self.drafts,
+            agent_call_repository=self.calls,
+            topic_registry_repository=self.topics,
+            round_service=self.round_service,
+            settings=self.settings,
+        )
         self.draft_pipeline = DraftPipelineService(
             draft_repository=self.drafts,
             round_service=self.round_service,
             agent_call_service=self.call_service,
             gate=ValidationGate(min_chars=self.settings.draft_min_chars, max_chars=self.settings.draft_max_chars),
-            publisher=self.publisher,
+            publisher=self.publishing,
             settings=self.settings,
         )
         self.topic_selection = TopicSelectionService(

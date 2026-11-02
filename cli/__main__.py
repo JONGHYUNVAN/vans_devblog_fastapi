@@ -10,6 +10,7 @@ import typer
 from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.dependencies import (
+    build_draft_decision_service,
     build_pipeline_runner,
     build_round_service,
     ensure_agent_indexes,
@@ -17,9 +18,10 @@ from app.dependencies import (
     get_sync_service,
     open_clients,
 )
-from app.models.enums import RoundStatus
+from app.models.enums import EscalationDecisionKind, RoundStatus
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.post_draft import PostDraftRepository
+from app.schemas.agent_pipeline import DraftPublic
 from app.schemas.sync import SyncOptions
 
 cli = typer.Typer(help="VansDevBlog 검색 서비스 운영 명령", no_args_is_help=True)
@@ -183,6 +185,103 @@ def abort(round_id: str) -> None:
         typer.echo(f"라운드 {round_id} 를 중단했다.")
 
     _run_agents(_abort)
+
+
+def _echo_draft(draft) -> None:
+    typer.echo(json.dumps(DraftPublic.from_draft(draft).model_dump(mode="json"), ensure_ascii=False, indent=2))
+
+
+@agents.command()
+def show(
+    draft_id: str,
+    version: Annotated[int | None, typer.Option(help="본문을 찍을 버전 번호. 없으면 마지막 버전")] = None,
+) -> None:
+    """글의 버전·리뷰·중재·결정과 한 버전의 본문을 찍는다."""
+
+    async def _show(database, settings):
+        draft = await PostDraftRepository(database).get(draft_id)
+        if draft is None:
+            typer.echo(f"글 {draft_id} 가 없다.", err=True)
+            raise typer.Exit(1)
+        _echo_draft(draft)
+        for each in draft.versions:
+            typer.echo(
+                f"-- v{each.version_number} {each.title!r} passed={each.passed_validation} origin={each.origin_cause} "
+                f"errors={each.validation_errors} resolutions={[(r.item_id, r.status) for r in each.resolutions]}"
+            )
+        for review in draft.reviews:
+            typer.echo(f"-- review {review.review_id} {review.derived_verdict}: {review.overall_feedback}")
+            for item in review.items:
+                typer.echo(f"   [{item.severity}] {item.item_id} ({item.section_id}) {item.comment}")
+        for arbitration in draft.arbitrations:
+            typer.echo(f"-- arbitration {arbitration.item_id}: {arbitration.outcome} — {arbitration.reasoning}")
+        if draft.publication_intent:
+            typer.echo(f"-- intent {draft.publication_intent.model_dump(mode='json')}")
+        if draft.publication:
+            typer.echo(f"-- publication {draft.publication.model_dump(mode='json', exclude={'peer_review_note'})}")
+        chosen = (
+            next((each for each in draft.versions if each.version_number == version), draft.versions[-1])
+            if draft.versions
+            else None
+        )
+        if chosen is not None:
+            typer.echo(f"\n===== v{chosen.version_number} {chosen.title} =====\n{chosen.content_markdown}")
+
+    _run_agents(_show)
+
+
+@agents.command()
+def resolve(
+    draft_id: str,
+    decision: Annotated[
+        EscalationDecisionKind, typer.Option(help="PUBLISH_AS_IS | REVISE | REJECT | CONFIRM_PUBLISHED")
+    ],
+    decided_by: Annotated[str, typer.Option()] = "cli",
+    instruction: Annotated[str | None, typer.Option(help="REVISE 의 지시문")] = None,
+    external_post_id: Annotated[str | None, typer.Option(help="CONFIRM_PUBLISHED: 블로그에서 찾은 게시글 id")] = None,
+) -> None:
+    """ESCALATED 글을 해소한다. PUBLISH_UNCERTAIN 이면 블로그를 먼저 확인한다."""
+
+    async def _resolve(database, settings):
+        draft = await build_draft_decision_service(database, settings).resolve_escalation(
+            draft_id, decision, decided_by=decided_by, instruction=instruction, external_post_id=external_post_id
+        )
+        _echo_draft(draft)
+
+    _run_agents(_resolve)
+
+
+@agents.command()
+def approve(draft_id: str, approved_by: Annotated[str, typer.Option()] = "cli") -> None:
+    """READY_TO_PUBLISH 글의 발행을 승인한다. 다음 스캔이 발행한다."""
+
+    async def _approve(database, settings):
+        _echo_draft(await build_draft_decision_service(database, settings).approve(draft_id, approved_by=approved_by))
+
+    _run_agents(_approve)
+
+
+@agents.command()
+def retry(
+    draft_id: str,
+    token_limit: Annotated[int | None, typer.Option(min=1, help="새 소프트 상한. 현재 사용량보다 커야 한다")] = None,
+) -> None:
+    """FAILED 글을 실패한 단계부터 다시 돌린다."""
+
+    async def _retry(database, settings):
+        _echo_draft(await build_draft_decision_service(database, settings).retry(draft_id, token_limit=token_limit))
+
+    _run_agents(_retry)
+
+
+@agents.command()
+def discard(draft_id: str, decided_by: Annotated[str, typer.Option()] = "cli") -> None:
+    """FAILED 글 하나만 폐기한다. 레지스트리는 RELEASED 다."""
+
+    async def _discard(database, settings):
+        _echo_draft(await build_draft_decision_service(database, settings).discard(draft_id, decided_by=decided_by))
+
+    _run_agents(_discard)
 
 
 @agents.command()

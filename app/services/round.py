@@ -45,6 +45,12 @@ class RoundService:
     async def get(self, round_id: str) -> PublishingRound | None:
         return await self._rounds.get(round_id)
 
+    async def list_rounds(self, status: RoundStatus | None = None) -> list[PublishingRound]:
+        """최근 생성 순. status 가 없으면 전부."""
+        statuses = [status] if status is not None else list(RoundStatus)
+        rounds = [publishing_round for each in statuses for publishing_round in await self._rounds.list_by_status(each)]
+        return sorted(rounds, key=lambda publishing_round: publishing_round.created_at, reverse=True)
+
     async def start_round(
         self, *, theme_keyword: str | None, slot_bindings: Mapping[AgentSlot, ModelBinding]
     ) -> PublishingRound:

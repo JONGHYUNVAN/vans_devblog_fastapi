@@ -1,0 +1,108 @@
+{
+  "round_id": "round-1",
+  "round_seq": 1,
+  "status": "IN_PROGRESS",
+  "theme_keyword": null,
+  "slot_bindings": {
+    "A": {
+      "provider": "fake",
+      "model_id": "fake-1",
+      "persona_id": "architect",
+      "temperature": 0.7,
+      "max_output_tokens": 1000
+    },
+    "B": {
+      "provider": "fake",
+      "model_id": "fake-1",
+      "persona_id": "systems_engineer",
+      "temperature": 0.7,
+      "max_output_tokens": 1000
+    },
+    "C": {
+      "provider": "fake",
+      "model_id": "fake-1",
+      "persona_id": "troubleshooter",
+      "temperature": 0.7,
+      "max_output_tokens": 1000
+    }
+  },
+  "draft_ids": [
+    "round-1:A",
+    "round-1:B",
+    "round-1:C"
+  ],
+  "topic_attempts": 0,
+  "abort_reason": null,
+  "created_at": "2026-11-02T09:00:00Z",
+  "updated_at": "2026-11-02T09:00:00Z",
+  "categories": [
+    {
+      "main_category_id": "main-1",
+      "main_label": "Backend",
+      "sub_category_id": "sub-1",
+      "sub_label": "Database"
+    }
+  ],
+  "latest_attempt": null,
+  "drafts": [
+    {
+      "draft_id": "round-1:A",
+      "round_id": "round-1",
+      "author_slot": "A",
+      "status": "ESCALATED",
+      "iteration": 1,
+      "version_count": 2,
+      "title": "제목 v2",
+      "topic_title": "MongoDB 낙관적 잠금 실전",
+      "revision_cause": "REVIEW",
+      "escalation_reason": "MAX_ITERATIONS_REACHED",
+      "failure": null,
+      "publish_attempts": 0,
+      "approved_by": null,
+      "external_post_id": null,
+      "token_limit": 100000,
+      "updated_at": "2026-11-02T09:00:00Z"
+    },
+    {
+      "draft_id": "round-1:B",
+      "round_id": "round-1",
+      "author_slot": "B",
+      "status": "FAILED",
+      "iteration": 0,
+      "version_count": 0,
+      "title": null,
+      "topic_title": "MongoDB 낙관적 잠금 실전",
+      "revision_cause": null,
+      "escalation_reason": null,
+      "failure": {
+        "from_status": "IN_REVIEW",
+        "code": "BUDGET_EXCEEDED",
+        "message": "over",
+        "occurred_at": "2026-11-02T09:00:00Z"
+      },
+      "publish_attempts": 0,
+      "approved_by": null,
+      "external_post_id": null,
+      "token_limit": 100000,
+      "updated_at": "2026-11-02T09:00:00Z"
+    },
+    {
+      "draft_id": "round-1:C",
+      "round_id": "round-1",
+      "author_slot": "C",
+      "status": "TOPIC_LOCKED",
+      "iteration": 0,
+      "version_count": 0,
+      "title": null,
+      "topic_title": "MongoDB 낙관적 잠금 실전",
+      "revision_cause": null,
+      "escalation_reason": null,
+      "failure": null,
+      "publish_attempts": 0,
+      "approved_by": null,
+      "external_post_id": null,
+      "token_limit": 100000,
+      "updated_at": "2026-11-02T09:00:00Z"
+    }
+  ]
+}

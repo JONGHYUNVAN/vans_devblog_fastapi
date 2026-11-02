@@ -16,7 +16,7 @@ from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.dependencies import build_pipeline_runner, ensure_agent_indexes, get_index_setup_service, open_clients
-from app.routers import health, internal, kis, search, sync
+from app.routers import agent_rounds, health, internal, kis, search, sync
 from app.services.runner import PipelineRunner
 
 logging.basicConfig(
@@ -112,6 +112,7 @@ app.include_router(search.router)
 app.include_router(sync.router)
 app.include_router(internal.router)
 app.include_router(kis.router)
+app.include_router(agent_rounds.router)
 
 
 @app.get("/", include_in_schema=False)

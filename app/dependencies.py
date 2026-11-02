@@ -35,11 +35,13 @@ from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_index import PostIndexRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
-from app.services.draft_pipeline import DraftPipelineService
+from app.services.draft_decision import DraftDecisionService
+from app.services.draft_pipeline import DraftPipelineService, DraftPublisher
 from app.services.health import HealthService
 from app.services.index_setup import IndexSetupService
 from app.services.indexing import IndexingService
 from app.services.kis import KISService
+from app.services.publishing import PublishingService
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
 from app.services.search import SearchService
@@ -77,9 +79,49 @@ def verify_internal_key(
     x_internal_key: Annotated[str, Header()] = "",
 ) -> None:
     """X-Internal-Key 가 INTERNAL_API_KEY 와 같은지 확인한다. 서버에 키가 설정되지 않았으면 모두 거절한다."""
-    expected = settings.internal_api_key
-    if not expected or not secrets.compare_digest(x_internal_key.encode(), expected.encode()):
+    _verify_key(x_internal_key, settings.internal_api_key)
+
+
+def verify_agents_key(
+    settings: Annotated[Settings, Depends(get_settings)],
+    x_internal_key: Annotated[str, Header()] = "",
+) -> None:
+    """에이전트 내부 API. X-Internal-Key 가 AGENTS_INTERNAL_API_KEY 와 같은지 확인한다 (설계 07 문서 D-44)."""
+    _verify_key(x_internal_key, settings.agents_internal_api_key)
+
+
+def _verify_key(provided: str, expected: str) -> None:
+    if not expected or not secrets.compare_digest(provided.encode(), expected.encode()):
         raise AuthenticationError("Invalid or missing X-Internal-Key header")
+
+
+def get_async_database(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> AsyncDatabase:
+    """에이전트 파이프라인 컬렉션이 있는 DB. lifespan 이 만든 비동기 클라이언트를 쓴다 (설계 07 문서 D-43)."""
+    return request.app.state.async_mongo_client[settings.mongodb_db_name]
+
+
+def get_draft_repository(database: Annotated[AsyncDatabase, Depends(get_async_database)]) -> PostDraftRepository:
+    return PostDraftRepository(database)
+
+
+def get_agent_call_repository(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+) -> AgentCallRepository:
+    return AgentCallRepository(database)
+
+
+def get_round_service(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RoundService:
+    return build_round_service(database, settings)
+
+
+def get_draft_decision_service(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> DraftDecisionService:
+    return build_draft_decision_service(database, settings)
 
 
 def get_health_service(
@@ -145,10 +187,30 @@ def build_llm_registry(settings: Settings) -> LLMClientRegistry:
 
 
 def build_publisher(settings: Settings) -> PostBEPublisher | None:
-    """POST_BE_URL 이 없으면 None. 라운드 생성이 카테고리를 읽을 수 없어 ValueError 로 거절한다."""
+    """POST_BE_URL 이 없으면 None. 라운드 생성이 카테고리를 읽을 수 없어 ValueError 로 거절한다.
+
+    발행 계정(USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)이 비어 있으면 발행 호출이 ValueError 라 러너가 INTERNAL_ERROR 로 멈춘다.
+    """
     if not settings.post_be_url:
         return None
-    return PostBEPublisher(settings.post_be_url, settings.publish_timeout_s)
+    return PostBEPublisher(
+        settings.post_be_url,
+        settings.publish_timeout_s,
+        user_service_url=settings.user_service_url,
+        email=settings.publisher_email,
+        password=settings.publisher_password.get_secret_value() if settings.publisher_password else "",
+    )
+
+
+def build_draft_decision_service(database: AsyncDatabase, settings: Settings) -> DraftDecisionService:
+    """라우터와 CLI 결정 명령이 같은 조립을 쓴다."""
+    return DraftDecisionService(
+        draft_repository=PostDraftRepository(database),
+        agent_call_repository=AgentCallRepository(database),
+        topic_registry_repository=TopicRegistryRepository(database),
+        round_service=build_round_service(database, settings),
+        settings=settings,
+    )
 
 
 def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundService:
@@ -160,12 +222,11 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
     )
 
 
-class _UnavailableDraftPublisher:
-    """발행은 6단계 PublishingService 가 맡는다. 그 전에는 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다."""
+class _UnconfiguredDraftPublisher:
+    """POST_BE_URL 이 없다. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다(새 라운드는 start-round 가 먼저 거절한다)."""
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        # TODO(로드맵 6단계): PublishingService 로 바꾼다
-        raise NotImplementedError("publishing is not implemented yet")
+        raise ValueError("no Post BE publisher is configured (POST_BE_URL)")
 
 
 def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> PipelineRunner:
@@ -173,10 +234,19 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     round_repository = PublishingRoundRepository(database)
     draft_repository = PostDraftRepository(database)
     topic_registry_repository = TopicRegistryRepository(database)
-    round_service = RoundService(
-        round_repository, draft_repository, topic_registry_repository, publisher=build_publisher(settings)
-    )
+    publisher = build_publisher(settings)
+    round_service = RoundService(round_repository, draft_repository, topic_registry_repository, publisher=publisher)
     agent_call_service = AgentCallService(AgentCallRepository(database), build_llm_registry(settings), settings)
+    draft_publisher: DraftPublisher = (
+        PublishingService(
+            draft_repository=draft_repository,
+            topic_registry_repository=topic_registry_repository,
+            publisher=publisher,
+            settings=settings,
+        )
+        if publisher is not None
+        else _UnconfiguredDraftPublisher()
+    )
     return PipelineRunner(
         round_repository=round_repository,
         draft_repository=draft_repository,
@@ -194,7 +264,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             round_service=round_service,
             agent_call_service=agent_call_service,
             gate=ValidationGate(min_chars=settings.draft_min_chars, max_chars=settings.draft_max_chars),
-            publisher=_UnavailableDraftPublisher(),
+            publisher=draft_publisher,
             settings=settings,
         ),
         settings=settings,
