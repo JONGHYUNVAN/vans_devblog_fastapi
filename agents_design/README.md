@@ -23,4 +23,5 @@
 - 2026-11-02: Q-17을 정했다. 파이프라인 컬렉션은 검색 서비스와 같은 Mongo·같은 DB에 두고 비동기 클라이언트만 따로 만든다(07 문서 D-43).
 - 2026-11-02: 로드맵 2단계를 마쳤다. `repositories/` 4개(async, revision 잠금, 멱등 생성), `clients/llm/`(계약·레지스트리), `services/agent_calls.py`(예산·재시도·영수증), `FakeLLMClient`·`FakeAsyncCollection`. lifespan 이 비동기 클라이언트를 만들고 인덱스를 보장한다.
 - 2026-11-02: 로드맵 3단계를 마쳤다. `agents/`(페르소나 3종·렌즈, 05 문서 계약 전부, 프롬프트 v1 템플릿 6개, 빌더, 파서), `models/sections.py`·`models/tiptap.py`(markdown-it-py), `services/validation.py`. 호출 서비스에 문맥 검사 `check` 인자를 더했다.
+- 2026-11-02: 로드맵 4단계를 마쳤다. `services/round.py`(생성·완료·중단·reconcile), `services/topic_selection.py`(제안·충돌 판별·배정·확정), `services/draft_pipeline.py`(상태별 한 걸음·한 번 저장, 병렬 리뷰·중재 실패 처리), `services/runner.py`(스캔·코루틴 표·내부 오류 경계), lifespan 러너 시작, CLI `agents run`. 06 문서 시나리오 ①~⑫를 `PipelineHarness`·`ScriptedLLMClient`로 통과했다. 호출 서비스는 `CallResult(output, call_id)`를 돌려준다. 발행은 `DraftPublisher` 계약만 두고 6단계에서 채운다.
 - 코드 컨벤션은 이 저장소의 [CONVENTIONS.md](../CONVENTIONS.md)다.

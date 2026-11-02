@@ -2,17 +2,34 @@
 
 import asyncio
 import copy
-from collections.abc import Iterable, Iterator
-from datetime import datetime
+import json
+from collections.abc import Callable, Iterable, Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
 from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse, LLMUsage
+from app.clients.llm.registry import LLMClientRegistry
+from app.core.config import Settings
 from app.models.agent_call import AgentCall, TokenUsage
+from app.models.enums import AgentSlot, PostStatus
 from app.models.popular_search import PopularSearch
 from app.models.post import Post, PostSearchCriteria, PostSearchPage
-from tests.factories import make_call
+from app.models.post_draft import PostDraft, Publication
+from app.models.publishing_round import LockedTopic, PublishingRound, TopicAttempt
+from app.models.topic import TopicRegistryEntry
+from app.repositories.agent_call import AgentCallRepository
+from app.repositories.agent_round import PublishingRoundRepository
+from app.repositories.post_draft import PostDraftRepository
+from app.repositories.topic_registry import TopicRegistryRepository
+from app.services.agent_calls import AgentCallService
+from app.services.draft_pipeline import DraftPipelineService
+from app.services.round import RoundService
+from app.services.runner import PipelineRunner
+from app.services.topic_selection import TopicSelectionService
+from app.services.validation import ValidationGate
+from tests.factories import make_call, make_round, make_topic
 
 
 class FakePostIndexRepository:
@@ -210,6 +227,13 @@ class FakeAsyncCollection:
     async def insert_one(self, doc: dict[str, Any]) -> None:
         if any(existing["_id"] == doc["_id"] for existing in self.docs):
             raise DuplicateKeyError(f"E11000 duplicate key: {doc['_id']}")
+        for keys, options in self.indexes:
+            # 부분 unique 인덱스(단일 키)만 흉내 낸다 (agent_rounds 의 one_topic_selection_round)
+            partial = options.get("partialFilterExpression")
+            if not options.get("unique") or not isinstance(keys, str) or not _matches(doc, partial or {}):
+                continue
+            if any(_matches(existing, partial or {}) and existing.get(keys) == doc.get(keys) for existing in self.docs):
+                raise DuplicateKeyError(f"E11000 duplicate key: {options.get('name', keys)}")
         self.docs.append(copy.deepcopy(doc))
 
     async def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
@@ -299,14 +323,68 @@ class FakeLLMClient:
         try:
             if self.delay_s:
                 await asyncio.sleep(self.delay_s)
-            if not self.outcomes:
-                raise AssertionError("FakeLLMClient has no scripted outcome left")
-            outcome = self.outcomes.pop(0)
+            outcome = self._next_outcome(messages)
             if isinstance(outcome, Exception):
                 raise outcome
             return self.response(outcome) if isinstance(outcome, str) else outcome
         finally:
             self.active -= 1
+
+    def _next_outcome(self, messages: list[LLMMessage]) -> str | LLMResponse | Exception:
+        if not self.outcomes:
+            raise AssertionError("FakeLLMClient has no scripted outcome left")
+        return self.outcomes.pop(0)
+
+
+# 시스템 프롬프트(v1 템플릿)의 문구로 호출 종류를 가린다. LLMClient 계약에는 종류가 없다 (설계 06 문서 6절).
+_KIND_MARKERS = {
+    "주제를 세 개 제안": "PROPOSE_TOPIC",
+    "글 한 편을 한국어로 쓴다": "WRITE_DRAFT",
+    "수정본을 낸다": "REVISE_DRAFT",
+    "`content_markdown` 을 `lens`": "REVIEW_FULL",
+    "해소됐는지 확인": "SPOT_CHECK",
+    "리뷰 분쟁을 판정": "ARBITRATE",
+}
+
+ScriptOutcome = str | LLMResponse | Exception | Callable[[dict[str, Any]], "str | LLMResponse | Exception"]
+
+
+def call_kind_of(messages: list[LLMMessage]) -> str:
+    system = messages[0].content
+    for marker, kind in _KIND_MARKERS.items():
+        if marker in system:
+            return kind
+    raise AssertionError("cannot tell the call kind from the system prompt")
+
+
+def call_input_of(messages: list[LLMMessage]) -> dict[str, Any]:
+    """첫 user 메시지의 입력 JSON (builders.render_messages 형식)."""
+    return json.loads(messages[1].content.removeprefix("입력(JSON):\n"))
+
+
+class ScriptedLLMClient(FakeLLMClient):
+    """종류별 스크립트. 값은 FakeLLMClient 와 같고, callable 이면 입력 JSON 을 받아 값을 만든다.
+
+    종류의 스크립트가 list 면 순서대로 소비하고, callable 하나면 그 종류의 모든 호출에 쓴다. 스크립트가 없거나 모자라면 AssertionError.
+    """
+
+    def __init__(self, scripts: dict[str, list[ScriptOutcome] | Callable[..., Any]], delay_s: float = 0.0) -> None:
+        super().__init__([], delay_s)
+        self.scripts = {
+            kind: (list(script) if isinstance(script, list) else script) for kind, script in scripts.items()
+        }
+        self.kinds: list[str] = []
+
+    def _next_outcome(self, messages: list[LLMMessage]) -> str | LLMResponse | Exception:
+        kind = call_kind_of(messages)
+        self.kinds.append(kind)
+        script = self.scripts.get(kind)
+        if script is None or (isinstance(script, list) and not script):
+            raise AssertionError(f"ScriptedLLMClient has no outcome left for {kind}")
+        outcome = script.pop(0) if isinstance(script, list) else script
+        if callable(outcome) and not isinstance(outcome, Exception):
+            return outcome(call_input_of(messages))
+        return outcome
 
 
 class FakeAgentCallRepository:
@@ -338,3 +416,132 @@ class FakeAgentCallRepository:
             usage.prompt_tokens += call.usage.prompt_tokens
             usage.completion_tokens += call.usage.completion_tokens
         return usage
+
+
+# ---------- 파이프라인 하네스 (로드맵 4단계) ----------
+
+
+class FakePublisher:
+    """DraftPublisher 대역. 승인된 글을 바로 PUBLISHED 로 쓴다. 6단계 PublishingService 가 들어오기 전까지 쓴다."""
+
+    def __init__(self, draft_repository: PostDraftRepository, requires_approval: bool) -> None:
+        self._drafts = draft_repository
+        self._requires_approval = requires_approval
+        self.published: list[str] = []
+
+    async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        intent = draft.begin_publish(self._requires_approval)
+        draft.publish(
+            Publication(
+                published_at=datetime.now(UTC),
+                final_version=intent.final_version,
+                external_post_id=f"post-{draft.draft_id}",
+                peer_review_note="",
+                approved_by=draft.approved_by,
+            ),
+            self._requires_approval,
+        )
+        await self._drafts.save(draft)
+        self.published.append(draft.draft_id)
+
+
+async def _no_sleep(seconds: float) -> None:
+    return None
+
+
+class PipelineHarness:
+    """FakeAsyncDatabase 위에 실제 리포지토리·서비스를 조립한다. LLM 은 ScriptedLLMClient 다.
+
+    settings 기본: 본문 길이 하한 1, 호출 재시도 2, 백오프 없음, 승인 토글 켬.
+    """
+
+    def __init__(
+        self,
+        scripts: dict[str, Any] | None = None,
+        *,
+        delay_s: float = 0.0,
+        database: FakeAsyncDatabase | None = None,
+        round_repository: PublishingRoundRepository | None = None,
+        **settings_overrides: Any,
+    ) -> None:
+        self.database = database or FakeAsyncDatabase()
+        self.llm = ScriptedLLMClient(scripts or {}, delay_s)
+        self.settings = Settings(
+            _env_file=None,
+            **({"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2} | settings_overrides),
+        )
+        self.rounds = round_repository or PublishingRoundRepository(self.database)
+        self.drafts = PostDraftRepository(self.database)
+        self.topics = TopicRegistryRepository(self.database)
+        self.calls = AgentCallRepository(self.database)
+        self.round_service = RoundService(self.rounds, self.drafts, self.topics)
+        self.call_service = AgentCallService(
+            self.calls,
+            LLMClientRegistry({"fake": self.llm}, concurrency_per_provider=3),
+            self.settings,
+            sleep=_no_sleep,
+        )
+        self.publisher = FakePublisher(self.drafts, self.settings.publish_requires_approval)
+        self.draft_pipeline = DraftPipelineService(
+            draft_repository=self.drafts,
+            round_service=self.round_service,
+            agent_call_service=self.call_service,
+            gate=ValidationGate(min_chars=self.settings.draft_min_chars, max_chars=self.settings.draft_max_chars),
+            publisher=self.publisher,
+            settings=self.settings,
+        )
+        self.topic_selection = TopicSelectionService(
+            round_repository=self.rounds,
+            draft_repository=self.drafts,
+            topic_registry_repository=self.topics,
+            round_service=self.round_service,
+            agent_call_service=self.call_service,
+            settings=self.settings,
+        )
+        self.runner = PipelineRunner(
+            round_repository=self.rounds,
+            draft_repository=self.drafts,
+            round_service=self.round_service,
+            topic_selection_service=self.topic_selection,
+            draft_pipeline_service=self.draft_pipeline,
+            settings=self.settings,
+        )
+
+    async def seed_round(self, round_id: str = "round-1") -> PublishingRound:
+        """주제가 확정된 IN_PROGRESS 라운드와 TOPIC_LOCKED 글 3편, RESERVED 레지스트리 3건."""
+        publishing_round = make_round(round_id)
+        attempt = TopicAttempt(attempt_number=1)
+        for index, slot in enumerate(AgentSlot):
+            topic = make_topic(title=f"주제 {slot}", keywords=[f"k{index}a", f"k{index}b", f"k{index}c"])
+            attempt.proposals[slot] = [topic]
+            attempt.locked[slot] = LockedTopic(slot=slot, source_attempt=1, proposal_index=0, proposal=topic)
+        publishing_round.topic_attempts = [attempt]
+        publishing_round.lock_topics()
+        await self.rounds.add(publishing_round)
+        for slot in AgentSlot:
+            draft = self.round_service.build_draft(publishing_round, slot, self.settings.draft_token_limit)
+            await self.drafts.add_if_missing(draft)
+            await self.topics.add_if_missing(
+                TopicRegistryEntry(
+                    entry_id=draft.draft_id,
+                    title=draft.topic.title,
+                    keywords=draft.topic.keywords,
+                    draft_id=draft.draft_id,
+                    round_id=round_id,
+                )
+            )
+        return publishing_round
+
+    async def draft(self, slot: AgentSlot = AgentSlot.A, round_id: str = "round-1") -> PostDraft:
+        draft = await self.drafts.get(f"{round_id}:{slot}")
+        assert draft is not None
+        return draft
+
+    async def drive(self, slot: AgentSlot = AgentSlot.A, round_id: str = "round-1") -> PostDraft:
+        await self.draft_pipeline.drive(f"{round_id}:{slot}")
+        return await self.draft(slot, round_id)
+
+    async def set_status(self, draft: PostDraft, status: PostStatus) -> None:
+        """시나리오 준비용. 전이 규칙을 거치지 않고 상태만 바꿔 저장한다."""
+        draft.status = status
+        await self.drafts.save(draft)

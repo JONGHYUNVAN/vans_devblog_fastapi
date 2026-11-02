@@ -15,8 +15,9 @@ from app.clients.kis.stream import create_kis_stream
 from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
-from app.dependencies import ensure_agent_indexes, get_index_setup_service, open_clients
+from app.dependencies import build_pipeline_runner, ensure_agent_indexes, get_index_setup_service, open_clients
 from app.routers import health, internal, kis, search, sync
+from app.services.runner import PipelineRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +37,7 @@ _STARTUP_ES_TIMEOUT = 5
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """ES·MongoDB 클라이언트와 KIS 스트림 매니저를 한 번 만들어 app.state 에 두고, 종료 때 닫는다.
 
-    인기 검색어 인덱스도 준비한다. KIS 연결은 첫 구독 때 맺는다.
+    인기 검색어 인덱스도 준비한다. KIS 연결은 첫 구독 때 맺는다. 에이전트 파이프라인 러너도 여기서 시작·종료한다.
     """
     with open_clients(settings) as (es, mongo_client):
         app.state.es = es
@@ -46,9 +47,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.kis_stream = create_kis_stream(settings)
         await _ensure_popular_index(es)
         await _ensure_agent_indexes(app.state.async_mongo_client, settings.mongodb_db_name)
+        app.state.pipeline_runner = _start_pipeline_runner(app.state.async_mongo_client, settings.mongodb_db_name)
         try:
             yield
         finally:
+            if app.state.pipeline_runner is not None:
+                await app.state.pipeline_runner.stop()
             await app.state.kis_stream.close()
             await app.state.async_mongo_client.close()
 
@@ -64,6 +68,16 @@ async def _ensure_popular_index(es: Elasticsearch) -> None:
     else:
         if created:
             logger.info("인기 검색어 인덱스를 만들었다")
+
+
+def _start_pipeline_runner(async_mongo_client: AsyncMongoClient, db_name: str) -> PipelineRunner | None:
+    # uvicorn 워커 1개 전제. 러너는 lifespan 이 소유한 asyncio 태스크다 (설계 04 문서 1절). DB 이름이 없으면 돌리지 않는다.
+    if not db_name:
+        logger.warning("MongoDB DB 이름이 없어 에이전트 파이프라인 러너를 시작하지 않는다")
+        return None
+    runner = build_pipeline_runner(async_mongo_client[db_name], settings)
+    runner.start()
+    return runner
 
 
 async def _ensure_agent_indexes(async_mongo_client: AsyncMongoClient, db_name: str) -> None:

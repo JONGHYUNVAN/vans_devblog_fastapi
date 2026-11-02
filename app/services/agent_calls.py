@@ -3,8 +3,8 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
@@ -21,14 +21,20 @@ from app.repositories.agent_call import AgentCallRepository
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T", bound=BaseModel)
-
 _BACKOFF_BASE_S = 1.0
 _REVIEW_KINDS = frozenset({CallKind.REVIEW, CallKind.ARBITRATE})
 # 스키마 위반 재시도 때 첫 시도 메시지 뒤에 붙이는 안내. 직전 출력은 assistant 메시지로 그 앞에 둔다.
 _RETRY_GUIDANCE = (
     "직전 응답이 출력 계약에 맞지 않았다: {error}\n같은 요청에 대해 계약에 맞는 JSON 객체 하나만 다시 출력하라."
 )
+
+
+@dataclass(frozen=True)
+class CallResult[T: BaseModel]:
+    """성공한 시도의 파싱 결과와 영수증 ID. 버전·리뷰·중재가 call_id 로 영수증을 가리킨다(설계 02 문서)."""
+
+    output: T
+    call_id: str
 
 
 class AgentCallService:
@@ -51,7 +57,7 @@ class AgentCallService:
         self._settings = settings
         self._sleep = sleep
 
-    async def call(
+    async def call[T: BaseModel](
         self,
         *,
         kind: CallKind,
@@ -65,8 +71,8 @@ class AgentCallService:
         target_version: int | None = None,
         topic_attempt: int | None = None,
         item_id: str | None = None,
-    ) -> T:
-        """messages 를 binding 의 모델에 보내 schema 로 파싱한 결과를 돌려준다.
+    ) -> CallResult[T]:
+        """messages 를 binding 의 모델에 보내 schema 로 파싱한 결과와 그 시도의 call_id 를 돌려준다.
 
         draft 가 None 이면 주제 제안 호출이라 예산을 검사하지 않는다 (설계 02 문서 3절).
         check 는 입력 문맥이 필요한 검사(agents/parsers)다. 파싱된 모델을 받아 위반이면 LLMOutputError 를 던진다.
@@ -112,9 +118,10 @@ class AgentCallService:
                     error = f"output: {exc.message}"
             finished_at = datetime.now(UTC)
 
+            call_id = uuid4().hex
             await self._calls.add(
                 AgentCall(
-                    call_id=uuid4().hex,
+                    call_id=call_id,
                     round_id=round_id,
                     draft_id=draft.draft_id if draft else None,
                     kind=kind,
@@ -136,7 +143,7 @@ class AgentCallService:
                 )
             )
             if parsed is not None:
-                return parsed
+                return CallResult(output=parsed, call_id=call_id)
 
             last_error = error or ""
             logger.warning("%s %s/%s attempt %d/%d failed: %s", kind, round_id, slot, attempt, max_attempts, last_error)

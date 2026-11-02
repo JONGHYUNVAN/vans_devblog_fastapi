@@ -40,6 +40,7 @@ async def test_list_active_since_excludes_released_and_old_entries():
     entries = await repository.list_active_since(now - timedelta(days=180))
 
     assert [e.entry_id for e in entries] == ["r2:A", "r1:A"]
+    assert [e.entry_id for e in await repository.list_active()] == ["r2:A", "r1:A", "r1:B"]
 
 
 async def test_set_status_updates_and_reports_match():

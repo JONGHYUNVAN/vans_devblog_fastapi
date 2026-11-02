@@ -51,7 +51,7 @@ class Harness:
         )
 
     async def call(self, kind: CallKind = CallKind.WRITE_DRAFT, draft=None, **overrides) -> Answer:
-        return await self.service.call(
+        result = await self.service.call(
             kind=kind,
             round_id="round-1",
             slot=AgentSlot.A,
@@ -61,6 +61,7 @@ class Harness:
             draft=draft,
             **overrides,
         )
+        return result.output
 
 
 async def test_call_returns_parsed_model_and_records_receipt():
@@ -213,7 +214,7 @@ async def test_check_hook_failure_retries_like_a_schema_violation():
         if len(seen) == 1:
             raise LLMOutputError("score must be 5")
 
-    answer = await harness.service.call(
+    result = await harness.service.call(
         kind=CallKind.WRITE_DRAFT,
         round_id="round-1",
         slot=AgentSlot.A,
@@ -223,8 +224,9 @@ async def test_check_hook_failure_retries_like_a_schema_violation():
         check=check,
     )
 
-    assert answer.score == 3 and len(seen) == 2
+    assert result.output.score == 3 and len(seen) == 2
     first, second = harness.calls.calls
+    assert result.call_id == second.call_id
     assert (first.output_parsed_ok, first.error) == (False, "output: score must be 5")
     assert second.output_parsed_ok is True
     assert "score must be 5" in harness.llm.calls[1].messages[-1].content

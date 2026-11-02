@@ -76,7 +76,7 @@
 | 1 | `models/` 전부 + `PostDraft` 전이 + `services/evaluation.py` + 단위 테스트 | 전이표 행마다 테스트 통과. DB·LLM 없음. 완료(2026-10-30) |
 | 2 | `repositories/`(async Mongo) + `AgentCallService`(재시도, 영수증, 소프트 예산) + `FakeLLMClient` | 호출 서비스 테스트 통과. 완료(2026-11-02) |
 | 3 | `agents/`(페르소나, 계약, 빌더, 파서, 프롬프트 v1) + `models/tiptap.py` + `ValidationGate` | 파서 위반 케이스 테스트, 게이트 테스트, 변환 golden 테스트. 완료(2026-11-02) |
-| 4 | `TopicSelectionService` + `DraftPipelineService.drive` + `PipelineRunner` + CLI `run` | 가짜 LLM으로 문서 06의 시나리오 ①~⑫ 통과 |
+| 4 | `TopicSelectionService` + `DraftPipelineService.drive` + `PipelineRunner` + CLI `run` | 가짜 LLM으로 문서 06의 시나리오 ①~⑫ 통과. 완료(2026-11-02). `RoundService`도 여기서 만들었고 `DraftDecisionService`는 6단계로 미뤘다 |
 | 5 | `clients/llm/` 벤더 3종 + Post BE 카테고리 조회 + e2e 1회 호출 테스트 | 실제 모델로 라운드 1회 완주 (발행은 dry-run) |
 | 6 | `PublishingService` + `clients/publisher/` 발행(봇 계정 로그인, 실패 분류) + 요약 노트 + 승인 토글 + `PUBLISH_UNCERTAIN` 해소 + 라우터·golden | 에이전트 전용 관리자 계정을 만들고, 승인 후 Post BE 에 발행해 블로그에서 사람이 쓴 글과 같게 보인다 |
 | 7 | 운영: 토큰 측정 → Q-07 확정, 프롬프트 튜닝(`reported_verdict`·`derived_verdict` 불일치 지표), `replay` 명령 | 라운드 3회 이상 운영 후 승인 토글 해제 검토 |

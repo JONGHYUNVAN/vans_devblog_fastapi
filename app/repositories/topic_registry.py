@@ -39,6 +39,11 @@ class TopicRegistryRepository:
         docs = await self._topics.find({"round_id": round_id}).sort("_id", 1).to_list()
         return [TopicRegistryEntry.model_validate(doc) for doc in docs]
 
+    async def list_active(self) -> list[TopicRegistryEntry]:
+        """RESERVED·PUBLISHED 항목 전부. 중복 판별은 기간과 무관하다 (설계 03 문서 5절 TOPIC_AVOID_LOOKBACK_DAYS)."""
+        docs = await self._topics.find({"status": {"$in": _ACTIVE_STATUSES}}).sort("created_at", -1).to_list()
+        return [TopicRegistryEntry.model_validate(doc) for doc in docs]
+
     async def list_active_since(self, since: datetime) -> list[TopicRegistryEntry]:
         """since 이후 등록된 RESERVED·PUBLISHED 항목, 최근 순. 주제 제안의 avoid_topics 입력이다 (설계 05 문서 2.1절)."""
         query = {"status": {"$in": _ACTIVE_STATUSES}, "created_at": {"$gte": since}}

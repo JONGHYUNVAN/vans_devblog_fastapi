@@ -1,16 +1,26 @@
 """운영 명령. 사용법: python -m cli --help (Django 관리 명령 sync_posts_to_elasticsearch·setup_popular_searches 대체)."""
 
+import asyncio
 import json
 import logging
 from typing import Annotated
 
 import typer
 
+from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
-from app.dependencies import get_index_setup_service, get_sync_service, open_clients
+from app.dependencies import (
+    build_pipeline_runner,
+    ensure_agent_indexes,
+    get_index_setup_service,
+    get_sync_service,
+    open_clients,
+)
 from app.schemas.sync import SyncOptions
 
 cli = typer.Typer(help="VansDevBlog 검색 서비스 운영 명령", no_args_is_help=True)
+agents = typer.Typer(help="에이전트 파이프라인 (설계 agents_design/06 문서 3절 cli)", no_args_is_help=True)
+cli.add_typer(agents, name="agents")
 
 
 @cli.callback()
@@ -64,6 +74,34 @@ def setup_popular(
             typer.echo("인기 검색어 인덱스를 만들었다.")
         else:
             typer.echo("인기 검색어 인덱스가 이미 있다.")
+
+
+@agents.command()
+def run() -> None:
+    """서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 띄우지 않는다(같은 글을 두 프로세스가 돌린다). Ctrl+C 로 끝낸다."""
+    settings = get_settings()
+    if not settings.mongodb_db_name:
+        typer.echo("MongoDB DB 이름(MONGODB_DATABASE 또는 URI 경로)이 없다.", err=True)
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        async_mongo_client = create_async_mongo_client(settings)
+        try:
+            database = async_mongo_client[settings.mongodb_db_name]
+            await ensure_agent_indexes(database)
+            runner = build_pipeline_runner(database, settings)
+            runner.start()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await runner.stop()
+        finally:
+            await async_mongo_client.close()
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        typer.echo("러너를 멈췄다.")
 
 
 if __name__ == "__main__":
