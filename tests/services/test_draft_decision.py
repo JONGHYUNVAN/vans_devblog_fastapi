@@ -13,6 +13,7 @@ from app.models.enums import (
     TopicRegistryStatus,
 )
 from app.repositories.post_draft import PostDraftRepository
+from app.services.draft_decision import DraftDecisionService
 from tests.factories import draft_output, make_call, review_output
 from tests.fakes import PipelineHarness
 
@@ -40,10 +41,28 @@ async def test_approve_records_approver_and_rejects_other_states():
 
     assert (approved.approved_by, approved.status) == ("사람", PostStatus.READY_TO_PUBLISH)
     assert (await harness.draft(A)).approved_by == "사람"
+    with pytest.raises(InvalidTransitionError, match="already approved"):  # 재승인은 발행 코루틴과 겹친다
+        await harness.decisions.approve(draft.draft_id, approved_by="다른 사람")
     with pytest.raises(InvalidTransitionError):
         await harness.decisions.approve((await harness.draft(B)).draft_id, approved_by="사람")
     with pytest.raises(NotFoundError):
         await harness.decisions.approve("nope", approved_by="사람")
+
+
+async def test_approve_is_refused_when_the_approval_toggle_is_off():
+    harness = PipelineHarness(_fast_track())
+    draft = await _ready(harness)
+    decisions = DraftDecisionService(
+        draft_repository=harness.drafts,
+        agent_call_repository=harness.calls,
+        topic_registry_repository=harness.topics,
+        round_service=harness.round_service,
+        settings=harness.settings.model_copy(update={"publish_requires_approval": False}),
+    )
+
+    with pytest.raises(InvalidTransitionError, match="toggle is off"):
+        await decisions.approve(draft.draft_id, approved_by="사람")
+    assert (await harness.draft(A)).approved_by is None
 
 
 async def test_conflict_rereads_and_reapplies_when_the_premise_still_holds():

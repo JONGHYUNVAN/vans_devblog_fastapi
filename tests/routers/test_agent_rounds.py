@@ -223,6 +223,7 @@ def test_approve_retry_discard(client, database):
     database.agent_drafts.docs[2]["status"] = PostStatus.READY_TO_PUBLISH.value
     response = client.post(approve, headers=KEY, json={"approved_by": "사람"})
     assert response.status_code == 200 and response.json()["approved_by"] == "사람"
+    assert client.post(approve, headers=KEY, json={"approved_by": "사람"}).status_code == 409  # 재승인
 
     retry = f"/api/v1/agents/drafts/{ROUND}:B/retry/"
     assert client.post(retry, headers=KEY, json={"token_limit": 0}).status_code == 400

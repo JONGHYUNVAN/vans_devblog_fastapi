@@ -233,6 +233,9 @@ class _UnconfiguredDraftPublisher:
             "Post BE publishing is not configured (POST_BE_URL, USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)"
         )
 
+    async def drain(self) -> None:
+        return None
+
 
 def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> PipelineRunner:
     """lifespan 과 CLI `agents run` 이 같은 조립으로 러너를 만든다. 러너는 프로세스에 하나만 둔다(설계 07 문서 Q-04)."""

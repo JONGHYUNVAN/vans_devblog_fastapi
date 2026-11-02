@@ -1,6 +1,7 @@
 """vans_story_be_post 호출: 카테고리 조회, 봇 계정 로그인(vans_story_be), 글 생성 (설계 06 문서 3절 clients/publisher, 07 문서 D-40).
 
-실패 분류(04 문서 8절 10·11단계): 로그인 단계의 모든 실패와 글 생성의 4xx·연결 거부는 PublishFailedError(결과 확정),
+실패 분류(04 문서 8절 10·11단계): 로그인 단계의 모든 실패와 글 생성의 2xx 아닌 500 미만 응답(4xx·리다이렉트)·연결 거부는
+PublishFailedError(결과 확정),
 글 생성의 응답 전 타임아웃·연결 끊김·5xx 는 PublishUncertainError(글이 생겼을 수 있다). 토큰은 저장하지 않고 발행마다 받는다.
 """
 
@@ -93,7 +94,8 @@ class PostBEPublisher:
             raise PublishUncertainError(f"post creation result unknown: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 500:
             raise PublishUncertainError(f"post creation result unknown: HTTP {response.status_code}")
-        if response.status_code >= 400:
+        if not 200 <= response.status_code < 300:
+            # 4xx 와 리다이렉트(3xx). 글은 생기지 않았다
             raise PublishFailedError(f"post creation rejected (HTTP {response.status_code}): {response.text[:500]}")
         try:
             post_id = response.json()["_id"]

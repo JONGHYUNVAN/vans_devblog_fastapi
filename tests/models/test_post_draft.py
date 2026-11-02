@@ -759,13 +759,26 @@ def test_publish_requires_approval_when_toggle_is_on():
     with pytest.raises(InvalidTransitionError, match="waiting for approval"):
         draft.begin_publish(requires_approval=True)
 
-    draft.record_approval("admin")
+    draft.record_approval("admin", requires_approval=True)
     intent = draft.begin_publish(requires_approval=True)
     draft.publish(_publication(), requires_approval=True)
 
     assert intent.attempt == 1
     assert intent.final_version == 1
     assert draft.status == PostStatus.PUBLISHED
+
+
+def test_approval_is_refused_when_already_approved_or_toggle_is_off():
+    """재승인·토글 꺼짐 승인은 발행 코루틴과 겹치는 쓰기라 거절한다 (04 문서 1절·8절 9단계)."""
+    draft = _ready()
+    with pytest.raises(InvalidTransitionError, match="toggle is off"):
+        draft.record_approval("admin", requires_approval=False)
+
+    draft.record_approval("admin", requires_approval=True)
+
+    with pytest.raises(InvalidTransitionError, match="already approved by admin"):
+        draft.record_approval("other", requires_approval=True)
+    assert draft.approved_by == "admin"
 
 
 def test_publish_without_toggle_needs_no_approval():
@@ -856,7 +869,7 @@ def test_reject_by_abort_raises_when_published():
         (PostStatus.IN_REVIEW, lambda draft: submit(draft)),
         (PostStatus.DRAFTING, lambda draft: draft.pass_validation()),
         (PostStatus.DRAFTING, lambda draft: draft.fail_validation(["x"], MAX_VALIDATION_RETRIES)),
-        (PostStatus.IN_REVIEW, lambda draft: draft.record_approval("admin")),
+        (PostStatus.IN_REVIEW, lambda draft: draft.record_approval("admin", requires_approval=True)),
         (
             PostStatus.READY_TO_PUBLISH,
             lambda draft: draft.resolve_escalation(EscalationDecisionKind.REJECT, decided_by="a"),

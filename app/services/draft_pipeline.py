@@ -51,6 +51,10 @@ class DraftPublisher(Protocol):
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None: ...
 
+    async def drain(self) -> None:
+        """진행 중인 발행 호출·결과 반영이 끝나기를 기다린다. 종료 때 러너가 부른다(04 문서 8절 4단계)."""
+        ...
+
 
 class DraftPipelineService:
     """러너가 글마다 asyncio 태스크 하나로 drive 를 돌린다."""
@@ -88,6 +92,10 @@ class DraftPipelineService:
                 continue  # 라운드 중단과 겹쳤다. 결과를 버리고 다시 읽는다. 호출 비용은 AgentCall 에 남는다
             if draft.is_terminal:
                 await self._rounds.close_if_complete(draft.round_id)
+
+    async def drain(self) -> None:
+        """발행 호출은 cancel 되지 않는다. runner.stop 이 결과 반영까지 기다린다."""
+        await self._publisher.drain()
 
     def _should_run(self, draft: PostDraft, publishing_round: PublishingRound) -> bool:
         return (
@@ -174,7 +182,10 @@ class DraftPipelineService:
             draft.pass_validation()
 
     async def _review(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        """응답이 없는 리뷰어만 병렬 호출한다. 하나가 실패해도 나머지를 기다려 성공분을 넣고 FAILED 다 (설계 04 문서 6절)."""
+        """응답이 없는 리뷰어만 병렬 호출한다. 하나가 실패해도 나머지를 기다려 성공분을 넣고 FAILED 다 (설계 04 문서 6절).
+
+        예상하지 못한 예외도 같다: 성공한 형제의 결과를 저장한 뒤 FAILED(INTERNAL_ERROR) 로 멈춘다.
+        """
         scope = draft.current_review_scope
         reviews, failures = await _gather(
             [self._call_review(draft, publishing_round, slot, scope) for slot in draft.pending_reviewers()]
@@ -198,10 +209,26 @@ class DraftPipelineService:
             draft.apply_evaluation(evaluate(draft, self._settings.max_iterations))
 
     def _fail(self, draft: PostDraft, failures: list[Exception]) -> None:
-        """사유가 여럿이면 BUDGET_EXCEEDED 를 남긴다 (설계 03 문서 5행). 재개 때 상한을 올릴 수 있기 때문이다."""
-        has_budget = any(isinstance(failure, BudgetExceededError) for failure in failures)
-        code = FailureCode.BUDGET_EXCEEDED if has_budget else FailureCode.LLM_RETRIES_EXHAUSTED
-        draft.mark_failed(code, "; ".join(str(failure) for failure in failures))
+        """사유가 여럿이면 BUDGET_EXCEEDED 를 남긴다 (설계 03 문서 5행). 재개 때 상한을 올릴 수 있기 때문이다.
+
+        병렬 단계의 예상하지 못한 예외(설정 오류 등)는 INTERNAL_ERROR 다. 로그가 신호다 (04 문서 9절).
+        """
+        unexpected = [failure for failure in failures if not isinstance(failure, _STEP_FAILURES)]
+        for failure in unexpected:
+            logger.error("draft %s step crashed", draft.draft_id, exc_info=failure)
+        if any(isinstance(failure, BudgetExceededError) for failure in failures):
+            code = FailureCode.BUDGET_EXCEEDED
+        elif unexpected:
+            code = FailureCode.INTERNAL_ERROR
+        else:
+            code = FailureCode.LLM_RETRIES_EXHAUSTED
+        draft.mark_failed(
+            code,
+            "; ".join(
+                str(failure) if isinstance(failure, _STEP_FAILURES) else f"{type(failure).__name__}: {failure}"
+                for failure in failures
+            ),
+        )
 
     async def _call_review(
         self, draft: PostDraft, publishing_round: PublishingRound, slot: AgentSlot, scope: ReviewScope
@@ -297,12 +324,12 @@ class DraftPipelineService:
 
 
 async def _gather[T](calls: list[Awaitable[T]]) -> tuple[list[T], list[Exception]]:
-    """병렬 호출을 모두 기다려 (성공 결과, 재시도 소진·예산 초과) 로 나눈다. 그 밖의 예외는 첫 것을 그대로 던진다."""
+    """병렬 호출을 모두 기다려 (성공 결과, 예외) 로 나눈다. Exception 이 아닌 것(취소 등)은 그대로 던진다."""
     results = await asyncio.gather(*calls, return_exceptions=True)
     successes: list[T] = []
     failures: list[Exception] = []
     for result in results:
-        if isinstance(result, _STEP_FAILURES):
+        if isinstance(result, Exception):
             failures.append(result)
         elif isinstance(result, BaseException):
             raise result

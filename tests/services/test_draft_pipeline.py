@@ -71,7 +71,7 @@ async def test_one_revision_then_approval_publishes():  # ②
     assert spot.reviewer_slot == B  # C 는 미결 항목이 없어 SPOT_CHECK 를 받지 않는다
     assert draft.versions[1].origin_cause == RevisionCause.REVIEW
 
-    draft.record_approval("사람")
+    draft.record_approval("사람", requires_approval=True)
     await harness.drafts.save(draft)
     draft = await harness.drive(A)
 
@@ -175,7 +175,7 @@ async def test_human_revise_skips_review_and_clears_previous_approval():  # ⑥
     )
     await harness.seed_round()
     draft = await harness.drive(A)
-    draft.record_approval("사람")
+    draft.record_approval("사람", requires_approval=True)
     draft.escalate(EscalationReason.PUBLISH_FAILED)
     draft.resolve_escalation(EscalationDecisionKind.REVISE, decided_by="사람", instruction="결론을 줄여라")
     await harness.drafts.save(draft)
@@ -275,6 +275,33 @@ async def test_one_review_exhausting_retries_keeps_the_other_and_resume_calls_on
 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert harness.llm.kinds.count("REVIEW_FULL") == 4
+    assert [review.reviewer_slot for review in draft.reviews] == [B, C]
+
+
+async def test_unexpected_exception_in_one_review_keeps_the_other_and_fails_with_internal_error():
+    """병렬 단계의 예상하지 못한 예외(예: 바인딩이 키 없는 벤더를 가리킴)도 성공한 형제를 저장한다 (04 문서 6절·9절)."""
+    harness = PipelineHarness(
+        {
+            "WRITE_DRAFT": [draft_output()],
+            "REVIEW_FULL": [review_output(), KeyError("no-such-provider"), review_output()],
+        }
+    )
+    await harness.seed_round()
+
+    draft = await harness.drive(A)
+
+    assert draft.status == PostStatus.FAILED
+    assert draft.failure is not None
+    assert (draft.failure.code, draft.failure.from_status) == (FailureCode.INTERNAL_ERROR, PostStatus.IN_REVIEW)
+    assert "KeyError: 'no-such-provider'" in draft.failure.message
+    assert [review.reviewer_slot for review in draft.reviews] == [B]
+
+    draft.retry_from_failed()
+    await harness.drafts.save(draft)
+    draft = await harness.drive(A)
+
+    assert draft.status == PostStatus.READY_TO_PUBLISH
+    assert harness.llm.kinds.count("REVIEW_FULL") == 3
     assert [review.reviewer_slot for review in draft.reviews] == [B, C]
 
 

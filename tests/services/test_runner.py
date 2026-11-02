@@ -6,7 +6,7 @@ import pytest
 
 from app.models.enums import AgentSlot, EscalationReason, FailureCode, PostStatus, RoundAbortReason, RoundStatus
 from tests.factories import draft_output, make_round, review_output
-from tests.fakes import PipelineHarness
+from tests.fakes import FakePostBE, PipelineHarness
 
 pytestmark = pytest.mark.anyio
 
@@ -120,3 +120,26 @@ async def test_stop_cancels_running_coroutines():
 
     assert harness.runner.running == []
     assert (await harness.draft(A)).status == PostStatus.DRAFTING  # 끊긴 호출은 다음 기동 때 다시 한다
+
+
+async def test_stop_waits_for_a_publish_call_in_flight_instead_of_cancelling_it():
+    """발행 HTTP 호출 중 종료(재배포)해도 결과를 반영한다. 끊으면 결과를 모르는 의도가 남아 PUBLISH_UNCERTAIN 이 된다 (04 문서 8절 4단계)."""
+    harness = PipelineHarness(
+        {"WRITE_DRAFT": [draft_output()], "REVIEW_FULL": review_output()},
+        publisher=FakePostBE(["post-77"], delay_s=0.05),
+        publish_requires_approval=False,
+    )
+    await harness.seed_round()
+    for slot in (B, C):
+        sibling = await harness.draft(slot)
+        sibling.escalate(EscalationReason.MAX_ITERATIONS_REACHED)
+        await harness.drafts.save(sibling)
+    harness.runner.start()
+    while not harness.publisher.payloads:
+        await asyncio.sleep(0.005)
+
+    await harness.runner.stop()
+
+    assert harness.runner.running == []
+    draft = await harness.draft(A)
+    assert (draft.status, draft.external_post_id) == (PostStatus.PUBLISHED, "post-77")

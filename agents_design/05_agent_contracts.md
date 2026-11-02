@@ -125,11 +125,27 @@ class RevisionOutput(BaseModel):
 입력:
 
 ```python
+class TopicForReviewer(BaseModel):
+    """리뷰어에게 주는 주제. rationale(왜 이 성향의 작성자가 쓰는지)은 페르소나 서술이라 뺀다 (04 문서 4절 블라인드)."""
+    title: str
+    audience: str
+    keywords: list[str]
+    outline: list[str]
+
+class ReviewItemForReviewer(BaseModel):
+    """SPOT_CHECK·중재에 주는 지적. reviewer_slot·source_review_id·is_new_in_version 은 뺀다. item_id 는 SPOT_CHECK 가 그대로 돌려줘야 해 유지한다."""
+    item_id: str
+    section_id: str
+    lens: ReviewLens
+    severity: IssueSeverity
+    comment: str
+    suggested_fix: str | None
+
 class ReviewInput(BaseModel):
     scope: Literal["FULL"]
     lens: ReviewLens
     secondary_lens: ReviewLens | None
-    topic: TopicProposal                 # 독자층·목차 (저자 정보 없음)
+    topic: TopicForReviewer              # 독자층·목차 (저자 정보 없음, rationale 없음)
     content_markdown: str
     tone_preservation: TonePreservationRule   # 지적 가능/불가 목록 + author persona 의 tone_markers (익명화)
     # author_slot, model, persona display name 은 넣지 않는다
@@ -163,7 +179,7 @@ class SpotCheckInput(BaseModel):
     secondary_lens: ReviewLens | None
     previous_content: str
     current_content: str
-    my_previous_items: list[ReviewItem]              # 직전 리뷰 완료 버전의 open_blocking_items 중 본인이 낸 항목만 (각 항목에 lens 가 태그되어 있다)
+    my_previous_items: list[ReviewItemForReviewer]   # 직전 리뷰 완료 버전의 open_blocking_items 중 본인이 낸 항목만 (각 항목에 lens 가 태그되어 있다). 슬롯 필드 없음
     resolutions: list[ItemResolution]                # 작성자의 결정 (기각 사유 포함)
     tone_preservation: TonePreservationRule
 ```
@@ -188,7 +204,7 @@ class ItemCheck(BaseModel):
 
 ```python
 class ArbitrateInput(BaseModel):
-    item: ReviewItem                                 # 평가 렌즈는 item.lens 하나만 사용한다
+    item: ReviewItemForReviewer                      # 평가 렌즈는 item.lens 하나만 사용한다. 슬롯 필드 없음(블라인드)
     section_before: str                              # 해당 섹션만 (전후 버전)
     section_after: str
     author_rejection_reason: str

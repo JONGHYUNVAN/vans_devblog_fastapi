@@ -103,7 +103,8 @@ def _run_agents(coroutine_factory):
 
 
 async def _round_status(database, round_id: str) -> dict:
-    round_service = build_round_service(database, get_settings())
+    settings = get_settings()
+    round_service = build_round_service(database, settings)
     publishing_round = await round_service.get(round_id)
     if publishing_round is None:
         typer.echo(f"라운드 {round_id} 가 없다.", err=True)
@@ -116,11 +117,13 @@ async def _round_status(database, round_id: str) -> dict:
             {
                 "draft_id": draft.draft_id,
                 "status": draft.status,
+                "awaits_approval": draft.awaits_approval(settings.publish_requires_approval),
                 "iteration": draft.iteration,
                 "versions": len(draft.versions),
                 "title": draft.current_version.title if draft.versions else None,
                 "escalation_reason": draft.escalation_reason,
                 "failure": draft.failure.code if draft.failure else None,
+                "external_post_id": draft.external_post_id,
                 "tokens": usage.total_tokens,
             }
         )
@@ -134,13 +137,16 @@ async def _round_status(database, round_id: str) -> dict:
 
 
 def _is_waiting_on_human(status: dict) -> bool:
-    """러너가 더 할 일이 없는지: 라운드가 끝났거나, 글이 모두 승인·사람 결정 대기·종결이다."""
+    """러너가 더 할 일이 없는지: 라운드가 끝났거나, 글이 모두 승인 대기·사람 결정 대기·종결이다.
+
+    READY_TO_PUBLISH 는 승인을 기다릴 때만 멈춘 상태다. 승인됐거나 토글이 꺼져 있으면 러너가 발행 중이다.
+    """
     if status["status"] in (RoundStatus.COMPLETED, RoundStatus.ABORTED):
         return True
     if status["status"] == RoundStatus.TOPIC_SELECTION or not status["drafts"]:
         return False
-    halted = {"READY_TO_PUBLISH", "ESCALATED", "FAILED", "PUBLISHED", "REJECTED"}
-    return all(draft["status"] in halted for draft in status["drafts"])
+    halted = {"ESCALATED", "FAILED", "PUBLISHED", "REJECTED"}
+    return all(draft["status"] in halted or draft["awaits_approval"] for draft in status["drafts"])
 
 
 @agents.command()

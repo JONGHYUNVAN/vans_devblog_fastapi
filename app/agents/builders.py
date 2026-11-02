@@ -1,6 +1,7 @@
 """도메인 상태 → 프롬프트 입력 모델과 메시지 (설계 05 문서 2절, 04 문서 3절·7절).
 
-리뷰·중재 입력에는 저자·모델·페르소나 식별 정보를 넣지 않는다(블라인드). 작성자 입력에는 리뷰어의 모델명을 넣지 않는다.
+리뷰·중재 입력에는 저자·모델·페르소나 식별 정보를 넣지 않는다(블라인드): 주제는 rationale 을 뺀 TopicForReviewer,
+지적은 슬롯 필드를 뺀 ReviewItemForReviewer 다. 작성자 입력에는 리뷰어의 모델명을 넣지 않는다.
 메시지 렌더링은 결정론적이다: 시스템 메시지는 템플릿, 사용자 메시지는 입력 모델의 JSON 이다.
 """
 
@@ -16,10 +17,12 @@ from app.agents.contracts import (
     ProposeTopicInput,
     ReviewForAuthor,
     ReviewInput,
+    ReviewItemForReviewer,
     ReviseDraftInput,
     SpotCheckInput,
     StructureRules,
     TonePreservationRule,
+    TopicForReviewer,
     WriteDraftInput,
 )
 from app.agents.personas import PersonaProfile, get_persona
@@ -158,12 +161,12 @@ def _tone_rule(draft: PostDraft, publishing_round: PublishingRound) -> TonePrese
 
 
 def build_review_input(draft: PostDraft, publishing_round: PublishingRound, slot: AgentSlot) -> ReviewInput:
-    """FULL 리뷰. 저자 슬롯·모델·페르소나 이름은 넣지 않는다."""
+    """FULL 리뷰. 저자 슬롯·모델·페르소나 이름과 주제의 rationale 은 넣지 않는다."""
     assignment = draft.assignment_of(slot)
     return ReviewInput(
         lens=assignment.primary_lens,
         secondary_lens=assignment.secondary_lens,
-        topic=draft.topic,
+        topic=TopicForReviewer.from_topic(draft.topic),
         content_markdown=draft.current_version.content_markdown,
         tone_preservation=_tone_rule(draft, publishing_round),
     )
@@ -183,7 +186,7 @@ def build_spot_check_input(draft: PostDraft, publishing_round: PublishingRound, 
         secondary_lens=assignment.secondary_lens,
         previous_content=previous.content_markdown,
         current_content=current.content_markdown,
-        my_previous_items=my_items,
+        my_previous_items=[ReviewItemForReviewer.from_item(item) for item in my_items],
         resolutions=[resolution for resolution in current.resolutions if resolution.item_id in my_ids],
         tone_preservation=_tone_rule(draft, publishing_round),
     )
@@ -209,7 +212,7 @@ def build_arbitrate_input(draft: PostDraft, item: ReviewItem) -> ArbitrateInput:
         "",
     )
     return ArbitrateInput(
-        item=item,
+        item=ReviewItemForReviewer.from_item(item),
         section_before=section_text(draft.versions[raised_version - 1].content_markdown, item.section_id) or "",
         section_after=section_text(current.content_markdown, section_after_id) or "",
         author_rejection_reason=resolution.reason,

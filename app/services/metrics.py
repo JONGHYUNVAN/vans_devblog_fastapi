@@ -42,7 +42,9 @@ class PipelineMetrics(BaseModel):
     drafts: int
     status_counts: dict[str, int]
     reached_ready: int = Field(description="READY_TO_PUBLISH 에 닿은 글(발행됨·발행 단계 격리 포함)")
-    fast_track_ratio: float | None = Field(description="닿은 글 중 v1 에서 바로 간 비율(iteration 0)")
+    fast_track_ratio: float | None = Field(
+        description="닿은 글 중 v1 이 그대로 발행본인 비율. 게이트 실패 뒤 v2 로 간 글은 아니다"
+    )
     avg_iteration: float | None
     escalated_ratio: float | None
     failed_ratio: float | None
@@ -51,7 +53,9 @@ class PipelineMetrics(BaseModel):
     arbitration_ratio: float | None = Field(description="리뷰를 받은 글 중 중재가 있었던 비율")
     uphold_author_ratio: float | None = Field(description="중재 중 UPHOLD_AUTHOR 비율")
     verdict_mismatch: list[SlotVerdictMismatch]
-    gate_failure_ratio: float | None = Field(description="제출 버전 중 게이트에 떨어진 비율")
+    gate_failure_ratio: float | None = Field(
+        description="게이트를 거친 버전(통과했거나 validation_errors 가 있음) 중 떨어진 비율. 아직 VALIDATING 인 버전은 세지 않는다"
+    )
     gate_failures: dict[str, int] = Field(description="게이트 실패 사유 종류별 건수 (메시지의 ':' 앞부분)")
     rejected_with_reason_ratio: float | None = Field(description="해소 중 REJECTED_WITH_REASON 비율")
     tokens_by_kind: dict[str, int]
@@ -67,6 +71,7 @@ def compute_metrics(drafts: list[PostDraft], calls: list[AgentCall]) -> Pipeline
     reviewed = [draft for draft in drafts if draft.reviews]
     arbitrations = [arbitration for draft in drafts for arbitration in draft.arbitrations]
     versions = [version for draft in drafts for version in draft.versions]
+    gated = [version for version in versions if version.passed_validation or version.validation_errors]
     resolutions = [resolution for version in versions for resolution in version.resolutions]
 
     mismatch: list[SlotVerdictMismatch] = []
@@ -112,7 +117,7 @@ def compute_metrics(drafts: list[PostDraft], calls: list[AgentCall]) -> Pipeline
         drafts=len(drafts),
         status_counts=dict(Counter(draft.status.value for draft in drafts)),
         reached_ready=len(reached),
-        fast_track_ratio=_ratio(sum(1 for draft in reached if draft.iteration == 0), reached),
+        fast_track_ratio=_ratio(sum(1 for draft in reached if _is_fast_track(draft)), reached),
         avg_iteration=_mean([draft.iteration for draft in drafts if draft.versions]),
         escalated_ratio=_ratio(len(escalated), drafts),
         failed_ratio=_ratio(len(failed), drafts),
@@ -124,7 +129,7 @@ def compute_metrics(drafts: list[PostDraft], calls: list[AgentCall]) -> Pipeline
             arbitrations,
         ),
         verdict_mismatch=mismatch,
-        gate_failure_ratio=_ratio(sum(1 for version in versions if not version.passed_validation), versions),
+        gate_failure_ratio=_ratio(sum(1 for version in gated if not version.passed_validation), gated),
         gate_failures=dict(gate_failures),
         rejected_with_reason_ratio=_ratio(
             sum(1 for resolution in resolutions if resolution.status == ResolutionStatus.REJECTED_WITH_REASON),
@@ -141,6 +146,11 @@ def _reached_ready(draft: PostDraft) -> bool:
     if draft.status in (PostStatus.READY_TO_PUBLISH, PostStatus.PUBLISHED):
         return True
     return draft.status == PostStatus.ESCALATED and draft.escalation_reason in _PUBLISH_STAGE
+
+
+def _is_fast_track(draft: PostDraft) -> bool:
+    version = draft.publishable_version
+    return version is not None and version.version_number == 1
 
 
 def _ratio(count: int, population: list | int) -> float | None:

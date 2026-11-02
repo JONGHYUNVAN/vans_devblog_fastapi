@@ -85,6 +85,26 @@ def test_metrics_count_ratios_reasons_mismatches_gate_failures_and_tokens():
     ]
 
 
+def test_fast_track_needs_v1_as_the_publishable_version_and_gate_ratio_skips_pending_versions():
+    # v1 게이트 실패 → v2 로 READY. iteration 은 0 이지만 fast-track 이 아니다 (07 문서 4절 "v1 에서 바로")
+    rewritten = make_draft(A, draft_id="round-1:A")
+    rewritten.start_drafting(MAX_ITERATIONS)
+    submit(rewritten)
+    rewritten.fail_validation(["필수 앵커가 없다: tradeoff"], 2)
+    write_next_version(rewritten)
+    add_reviews(rewritten)
+    rewritten.apply_evaluation(evaluate(rewritten, MAX_ITERATIONS))
+    # 방금 제출돼 VALIDATING 인 버전은 게이트를 거치지 않았다
+    pending = make_draft(B, draft_id="round-1:B")
+    pending.start_drafting(MAX_ITERATIONS)
+    submit(pending)
+
+    metrics = compute_metrics([rewritten, _fast_track(), pending], [])
+
+    assert (metrics.reached_ready, metrics.fast_track_ratio) == (2, 0.5)
+    assert metrics.gate_failure_ratio == round(1 / 3, 3)  # 거친 버전 3개(실패 1, 통과 2), VALIDATING 1개는 제외
+
+
 def test_metrics_on_nothing_have_no_ratios():
     metrics = compute_metrics([], [])
 

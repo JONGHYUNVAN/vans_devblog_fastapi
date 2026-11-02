@@ -60,8 +60,9 @@ async def test_complete_builds_generate_content_request_and_reads_candidate_text
 
 @pytest.mark.parametrize("status", [429, 503])
 async def test_retryable_statuses_and_network_errors_raise_transport_error(status):
-    with pytest.raises(LLMTransportError):
+    with pytest.raises(LLMTransportError) as info:
         await _client(lambda request: httpx2.Response(status, text="busy")).complete(MESSAGES, SCHEMA, PARAMS, 30)
+    assert info.value.rate_limited is (status == 429)
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("down")

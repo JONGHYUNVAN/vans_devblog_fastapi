@@ -6,7 +6,7 @@ import httpx2
 
 from app.core.exceptions import LLMTransportError
 
-_RETRYABLE_STATUS = 429
+_RATE_LIMITED = 429
 
 
 async def post_json(
@@ -27,8 +27,11 @@ async def post_json(
             response = await client.post(url, headers=headers, json=body)
     except httpx2.HTTPError as exc:
         raise LLMTransportError(f"{vendor}: {type(exc).__name__}: {exc}") from exc
-    if response.status_code == _RETRYABLE_STATUS or response.status_code >= 500:
-        raise LLMTransportError(f"{vendor}: HTTP {response.status_code}: {response.text[:200]}")
+    if response.status_code == _RATE_LIMITED or response.status_code >= 500:
+        raise LLMTransportError(
+            f"{vendor}: HTTP {response.status_code}: {response.text[:200]}",
+            rate_limited=response.status_code == _RATE_LIMITED,
+        )
     if response.status_code >= 400:
         raise ValueError(f"{vendor} rejected the request (HTTP {response.status_code}): {response.text[:500]}")
     try:

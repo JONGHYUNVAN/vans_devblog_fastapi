@@ -169,6 +169,8 @@ def test_review_input_is_blind_and_carries_author_tone_markers():
     dumped = result.model_dump_json()
     assert "persona" not in result.model_dump()
     assert "author_slot" not in dumped and "display_name" not in dumped and "fake-1" not in dumped
+    assert "rationale" not in dumped  # 왜 이 성향의 작성자가 쓰는지는 페르소나 서술이다
+    assert (result.topic.title, result.topic.outline) == (draft.topic.title, draft.topic.outline)
 
 
 def test_spot_check_input_filters_items_and_resolutions_to_the_slot():
@@ -182,6 +184,7 @@ def test_spot_check_input_filters_items_and_resolutions_to_the_slot():
     assert [item.item_id for item in result.my_previous_items] == [items[0].item_id]
     assert [resolution.item_id for resolution in result.resolutions] == [items[0].item_id]
     assert result.lens == ReviewLens.FACT_STRUCTURE
+    assert "reviewer_slot" not in result.model_dump_json()  # 지적은 슬롯 필드 없이 넘긴다
 
 
 def test_arbitrate_input_extracts_sections_reason_and_note():
@@ -203,7 +206,13 @@ def test_arbitrate_input_extracts_sections_reason_and_note():
 
     result = build_arbitrate_input(draft, item)
 
-    assert result.item == item
+    assert (result.item.item_id, result.item.section_id, result.item.lens, result.item.severity) == (
+        item.item_id,
+        item.section_id,
+        item.lens,
+        item.severity,
+    )
+    assert "reviewer_slot" not in result.model_dump_json()
     assert result.section_before == ""  # v1 본문(팩토리)에는 body-1 앵커가 없다
     assert result.section_after == "고친 본론"
     assert result.author_rejection_reason == "근거가 있다"

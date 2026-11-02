@@ -13,6 +13,7 @@ from app.models.enums import (
 )
 from app.models.post_draft import PostDraft
 from app.models.tiptap import markdown_to_tiptap
+from app.schemas.agent_pipeline import DraftPublic
 from app.services.publishing import build_payload, build_peer_review_note
 from tests.factories import (
     arbitrate_output,
@@ -38,7 +39,7 @@ async def _approved(harness: PipelineHarness) -> PostDraft:
     await harness.seed_round()
     draft = await harness.drive(A)
     assert draft.status == PostStatus.READY_TO_PUBLISH
-    draft.record_approval("사람")
+    draft.record_approval("사람", requires_approval=True)
     await harness.drafts.save(draft)
     return draft
 
@@ -176,6 +177,7 @@ async def test_rejected_before_the_result_is_saved_keeps_external_post_id_on_the
 
     assert (draft.status, draft.publication) == (PostStatus.REJECTED, None)
     assert draft.publication_intent is not None and draft.publication_intent.external_post_id == "post-9"
+    assert DraftPublic.from_draft(draft).external_post_id == "post-9"  # 회수 대상 id 가 요약 응답에 보인다
     assert (
         await harness.topics.get(draft.draft_id)
     ).status == TopicRegistryStatus.RESERVED  # 정리가 RELEASED 로 맞춘다

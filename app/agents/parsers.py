@@ -52,7 +52,10 @@ def review_output_check(section_ids: Iterable[str], lenses: Iterable[ReviewLens]
 def spot_check_output_check(
     section_ids: Iterable[str], expected_item_ids: Iterable[str], lenses: Iterable[ReviewLens]
 ) -> Callable[[SpotCheckOutput], None]:
-    """SPOT_CHECK: item_checks 가 my_previous_items 와 정확히 일치(누락·중복·입력 외 ID 없음)해야 한다."""
+    """SPOT_CHECK: item_checks 가 my_previous_items 와 정확히 일치(누락·중복·입력 외 ID 없음)해야 한다.
+
+    신규 항목은 CRITICAL 만 앵커·렌즈를 검사한다. 다른 심각도는 spot_check_items 가 버리므로 그 때문에 호출이 실패하면 안 된다.
+    """
     known_sections, known_lenses, expected = set(section_ids), set(lenses), set(expected_item_ids)
 
     def check(output: SpotCheckOutput) -> None:
@@ -64,7 +67,11 @@ def spot_check_output_check(
             raise LLMOutputError(
                 f"item_checks must cover exactly the previous items: missing {sorted(missing)}, unknown {sorted(unknown)}"
             )
-        _check_items(output.new_critical_items, known_sections, known_lenses)
+        _check_items(
+            [item for item in output.new_critical_items if item.severity == IssueSeverity.CRITICAL],
+            known_sections,
+            known_lenses,
+        )
 
     return check
 

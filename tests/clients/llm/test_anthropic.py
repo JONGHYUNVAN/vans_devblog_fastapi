@@ -63,8 +63,10 @@ async def test_complete_sends_structured_output_request_and_maps_usage():
 async def test_retryable_statuses_raise_transport_error(status):
     client = _client(lambda request: httpx2.Response(status, json={"error": {"type": "x", "message": "busy"}}))
 
-    with pytest.raises(LLMTransportError):
+    with pytest.raises(LLMTransportError) as info:
         await client.complete(MESSAGES, SCHEMA, PARAMS, timeout=30)
+
+    assert info.value.rate_limited is (status == 429)
 
 
 async def test_timeout_raises_transport_error():

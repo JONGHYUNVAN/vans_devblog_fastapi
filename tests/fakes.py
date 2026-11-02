@@ -430,11 +430,15 @@ class FakePostBE:
     """Publisher 대역. list_categories 는 고정 목록, publish 는 outcomes 를 순서대로 쓴다(비면 성공).
 
     outcome: str 은 게시글 id, Exception 은 던진다, callable 은 payload 를 받아 둘 중 하나를 돌려준다(호출 중 사고를 흉내 낸다).
+    delay_s 는 HTTP 호출이 걸리는 시간을 흉내 낸다(종료와 겹치는 발행 테스트).
     """
 
-    def __init__(self, outcomes: Iterable[Any] = (), categories: list[PostCategory] | None = None) -> None:
+    def __init__(
+        self, outcomes: Iterable[Any] = (), categories: list[PostCategory] | None = None, delay_s: float = 0.0
+    ) -> None:
         self.outcomes = list(outcomes)
         self.categories = categories or []
+        self.delay_s = delay_s
         self.payloads: list[PostCreatePayload] = []
         self.published: list[str] = []  # 돌려준 게시글 id
 
@@ -443,6 +447,8 @@ class FakePostBE:
 
     async def publish(self, payload: PostCreatePayload) -> PublishResult:
         self.payloads.append(payload)
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
         outcome = self.outcomes.pop(0) if self.outcomes else None
         if callable(outcome):
             outcome = outcome(payload)

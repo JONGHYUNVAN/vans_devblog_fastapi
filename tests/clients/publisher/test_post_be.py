@@ -142,6 +142,7 @@ async def test_any_login_failure_is_a_certain_failure(login_response):
     [
         (httpx2.Response(400, json={"message": "Invalid category"}), PublishFailedError),
         (httpx2.Response(403, text="forbidden"), PublishFailedError),
+        (httpx2.Response(301, headers={"location": "https://post.test/api/v1/posts"}), PublishFailedError),
         (httpx2.ConnectError("refused"), PublishFailedError),
         (httpx2.ConnectTimeout("no route"), PublishFailedError),
         (httpx2.Response(500, text="boom"), PublishUncertainError),

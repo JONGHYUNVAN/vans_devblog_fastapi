@@ -25,7 +25,7 @@ from app.models.enums import (
     ReviewLens,
     TopicRegistryStatus,
 )
-from app.models.post_draft import ItemResolution, PostDraft, Publication
+from app.models.post_draft import ItemResolution, PostDraft, Publication, PublicationIntent
 from app.models.publishing_round import PublishingRound
 from app.models.tiptap import markdown_to_tiptap
 from app.repositories.post_draft import PostDraftRepository
@@ -138,6 +138,7 @@ class PublishingService:
         self._publisher = publisher
         self._settings = settings
         self._sleep = sleep
+        self._in_flight: set[asyncio.Task[None]] = set()  # 호출부터 결과 반영까지. cancel 되지 않게 shield 한다
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
         requires_approval = self._settings.publish_requires_approval
@@ -153,6 +154,26 @@ class PublishingService:
         payload = build_payload(draft, note)
         intent = draft.begin_publish(requires_approval)
         await self._drafts.save(draft)  # 이 쓰기가 실패(충돌)하면 호출하지 않는다 (8절 6단계)
+        # 호출과 결과 반영은 글 코루틴이 cancel 돼도(runner.stop) 끝까지 간다. 끊기면 결과를 모르는 의도가 남아
+        # 평범한 재배포가 PUBLISH_UNCERTAIN 을 만들기 때문이다. 종료는 drain 으로 기다린다
+        task = asyncio.create_task(self._call_and_record(draft, intent, payload, note, requires_approval))
+        self._in_flight.add(task)
+        task.add_done_callback(self._in_flight.discard)
+        await asyncio.shield(task)
+
+    async def drain(self) -> None:
+        """진행 중인 발행 호출·결과 반영이 끝나기를 기다린다. 종료 때 러너가 부른다."""
+        if self._in_flight:
+            await asyncio.gather(*list(self._in_flight), return_exceptions=True)
+
+    async def _call_and_record(
+        self,
+        draft: PostDraft,
+        intent: PublicationIntent,
+        payload: PostCreatePayload,
+        note: str,
+        requires_approval: bool,
+    ) -> None:
         try:
             result = await self._publisher.publish(payload)
         except PublishFailedError as exc:
@@ -192,12 +213,20 @@ class PublishingService:
                 await self._drafts.save(draft)
             except ConcurrentUpdateError:
                 continue
-            logger.error(
-                "draft %s is %s but post %s was created on the blog; take it down manually",
-                draft_id,
-                draft.status,
-                external_post_id,
-            )
+            if draft.is_terminal:
+                logger.error(
+                    "draft %s is %s but post %s was created on the blog; take it down manually",
+                    draft_id,
+                    draft.status,
+                    external_post_id,
+                )
+            else:
+                logger.error(
+                    "draft %s is %s; post %s was created on the blog and is kept on the intent (CONFIRM_PUBLISHED)",
+                    draft_id,
+                    draft.status,
+                    external_post_id,
+                )
             return
 
 

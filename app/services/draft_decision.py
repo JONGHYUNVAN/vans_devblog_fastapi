@@ -35,10 +35,10 @@ class DraftDecisionService:
         self._settings = settings
 
     async def approve(self, draft_id: str, *, approved_by: str) -> PostDraft:
-        """발행 승인. 그 버전에 대한 것이다. 다음 스캔이 글 코루틴을 띄워 발행한다."""
+        """발행 승인. 그 버전에 대한 것이다. 다음 스캔이 글 코루틴을 띄워 발행한다. 토글이 꺼져 있거나 이미 승인됐으면 409."""
 
         async def mutate(draft: PostDraft) -> None:
-            draft.record_approval(approved_by)
+            draft.record_approval(approved_by, self._settings.publish_requires_approval)
 
         return await self._apply(draft_id, mutate)
 

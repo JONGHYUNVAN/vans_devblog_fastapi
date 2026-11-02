@@ -4,7 +4,7 @@
 item_id·source_review_id·reviewer_slot·is_new_in_version 은 출력에 없고 parsers 가 붙인다.
 """
 
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field
 
@@ -127,11 +127,46 @@ class RevisionOutput(BaseModel):
 # ── REVIEW (FULL / SPOT_CHECK) ─────────────────────────────────────────
 
 
+class TopicForReviewer(BaseModel):
+    """리뷰어에게 주는 주제. rationale(왜 이 성향의 작성자가 쓰는지)은 페르소나 서술이라 뺀다 (04 문서 4절 블라인드)."""
+
+    title: str
+    audience: str
+    keywords: list[str]
+    outline: list[str]
+
+    @classmethod
+    def from_topic(cls, topic: TopicProposal) -> Self:
+        return cls(title=topic.title, audience=topic.audience, keywords=topic.keywords, outline=topic.outline)
+
+
+class ReviewItemForReviewer(BaseModel):
+    """SPOT_CHECK·중재에 주는 지적. reviewer_slot·source_review_id 는 뺀다. item_id 는 SPOT_CHECK 가 그대로 돌려줘야 해 유지한다."""
+
+    item_id: str
+    section_id: str
+    lens: ReviewLens
+    severity: IssueSeverity
+    comment: str
+    suggested_fix: str | None
+
+    @classmethod
+    def from_item(cls, item: ReviewItem) -> Self:
+        return cls(
+            item_id=item.item_id,
+            section_id=item.section_id,
+            lens=item.lens,
+            severity=item.severity,
+            comment=item.comment,
+            suggested_fix=item.suggested_fix,
+        )
+
+
 class ReviewInput(BaseModel):
     scope: Literal["FULL"] = "FULL"
     lens: ReviewLens
     secondary_lens: ReviewLens | None
-    topic: TopicProposal  # 독자층·목차. 저자 정보 없음
+    topic: TopicForReviewer  # 독자층·목차. 저자 정보 없음
     content_markdown: str
     tone_preservation: TonePreservationRule
 
@@ -157,7 +192,7 @@ class SpotCheckInput(BaseModel):
     secondary_lens: ReviewLens | None
     previous_content: str
     current_content: str
-    my_previous_items: list[ReviewItem]  # 직전 리뷰 완료 버전의 open_blocking_items 중 본인이 낸 항목
+    my_previous_items: list[ReviewItemForReviewer]  # 직전 리뷰 완료 버전의 open_blocking_items 중 본인이 낸 항목
     resolutions: list[ItemResolution]  # 작성자의 결정 (기각 사유 포함)
     tone_preservation: TonePreservationRule
 
@@ -172,7 +207,7 @@ class SpotCheckOutput(BaseModel):
 
 
 class ArbitrateInput(BaseModel):
-    item: ReviewItem  # 평가 렌즈는 item.lens 하나만 쓴다
+    item: ReviewItemForReviewer  # 평가 렌즈는 item.lens 하나만 쓴다
     section_before: str
     section_after: str
     author_rejection_reason: str

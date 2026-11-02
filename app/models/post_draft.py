@@ -334,6 +334,13 @@ class PostDraft(BaseModel):
     def awaits_approval(self, requires_approval: bool) -> bool:
         return self.status == PostStatus.READY_TO_PUBLISH and requires_approval and self.approved_by is None
 
+    @property
+    def external_post_id(self) -> str | None:
+        """블로그에 올라간 게시글 id. Publication 이 없으면 의도에만 남은 것(중단과 겹쳐 PUBLISHED 로 쓰지 못한 글, 회수 대상)이다."""
+        if self.publication is not None:
+            return self.publication.external_post_id
+        return self.publication_intent.external_post_id if self.publication_intent is not None else None
+
     def assignment_of(self, slot: AgentSlot) -> ReviewAssignment:
         for assignment in self.reviewer_assignments:
             if assignment.slot == slot:
@@ -709,9 +716,17 @@ class PostDraft(BaseModel):
         self.abort_reason = reason
         self.status = PostStatus.REJECTED
 
-    def record_approval(self, approved_by: str) -> None:
-        """발행 승인. 그 버전에 대한 것이다. 상태는 바뀌지 않는다."""
+    def record_approval(self, approved_by: str, requires_approval: bool) -> None:
+        """발행 승인. 그 버전에 대한 것이다. 상태는 바뀌지 않는다.
+
+        승인 토글이 꺼져 있거나 이미 승인됐으면 InvalidTransitionError. 그때는 발행 코루틴이 돌 수 있어
+        이 쓰기가 발행 결과 반영과 겹친다(04 문서 1절: 사람 결정은 코루틴이 돌지 않는 상태에만 쓴다).
+        """
         self._require(PostStatus.READY_TO_PUBLISH)
+        if not requires_approval:
+            raise InvalidTransitionError(f"draft {self.draft_id} does not wait for approval (approval toggle is off)")
+        if self.approved_by is not None:
+            raise InvalidTransitionError(f"draft {self.draft_id} is already approved by {self.approved_by}")
         self.approved_by = approved_by
         self.approved_at = _now()
 

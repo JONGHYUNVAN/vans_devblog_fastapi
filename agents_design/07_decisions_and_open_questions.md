@@ -78,7 +78,7 @@
 | 2 | `repositories/`(async Mongo) + `AgentCallService`(재시도, 영수증, 소프트 예산) + `FakeLLMClient` | 호출 서비스 테스트 통과. 완료(2026-11-02) |
 | 3 | `agents/`(페르소나, 계약, 빌더, 파서, 프롬프트 v1) + `models/tiptap.py` + `ValidationGate` | 파서 위반 케이스 테스트, 게이트 테스트, 변환 golden 테스트. 완료(2026-11-02) |
 | 4 | `TopicSelectionService` + `DraftPipelineService.drive` + `PipelineRunner` + CLI `run` | 가짜 LLM으로 문서 06의 시나리오 ①~⑫ 통과. 완료(2026-11-02). `RoundService`도 여기서 만들었고 `DraftDecisionService`는 6단계로 미뤘다 |
-| 5 | `clients/llm/` 벤더 3종 + Post BE 카테고리 조회 + e2e 1회 호출 테스트 | 실제 모델로 라운드 1회 완주 (발행은 dry-run). 코드·단위 테스트 완료(2026-11-02). 실제 벤더 e2e 와 라운드 완주는 키를 넣고 사용자가 돌린다(`pytest -m e2e tests/e2e/test_llm_vendors.py`, `agents start-round --wait` + `agents run`) |
+| 5 | `clients/llm/` 벤더 3종 + Post BE 카테고리 조회 + e2e 호출 테스트(계약 출력 스키마 6종) | 실제 모델로 라운드 1회 완주 (발행은 dry-run). 코드·단위 테스트 완료(2026-11-02). 실제 벤더 e2e 와 라운드 완주는 키를 넣고 사용자가 돌린다(`pytest -m e2e tests/e2e/test_llm_vendors.py`, `agents start-round --wait` + `agents run`) |
 | 6 | `PublishingService` + `clients/publisher/` 발행(봇 계정 로그인, 실패 분류) + 요약 노트 + 승인 토글 + `PUBLISH_UNCERTAIN` 해소 + `DraftDecisionService` + 라우터·golden + 결정 CLI | 에이전트 전용 관리자 계정을 만들고, 승인 후 Post BE 에 발행해 블로그에서 사람이 쓴 글과 같게 보인다. 코드·단위 테스트 완료(2026-11-02). 계정을 만들어 `.env`에 넣고(`USER_SERVICE_URL`·`PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD`·`AGENTS_INTERNAL_API_KEY`) `pytest -m e2e tests/e2e/test_post_be.py` → 라운드 1회 → `agents approve` → 블로그 확인은 사용자가 한다 |
 | 7 | 운영: 토큰 측정 → Q-07 확정, 프롬프트 튜닝(`reported_verdict`·`derived_verdict` 불일치 지표), `replay` 명령 | 라운드 3회 이상 운영 후 승인 토글 해제 검토. 도구는 완료(2026-11-02): `services/metrics.py` + `agents metrics` + `GET /api/v1/agents/metrics/`(4절 지표 전부), `AgentCallService.replay` + `agents replay`. Q-07 확정·프롬프트 튜닝·토글 해제는 실제 라운드를 돌린 뒤 사용자가 한다 |
 
@@ -86,11 +86,11 @@
 
 | 지표 | 의미 |
 |---|---|
-| fast-track 비율 | v1 에서 바로 발행된 비율. 너무 높으면 리뷰가 느슨, 너무 낮으면 작성 프롬프트 문제 |
+| fast-track 비율 | `READY_TO_PUBLISH` 에 닿은 글 중 v1 이 그대로 발행본인 비율(게이트 실패 뒤 v2 로 간 글은 아니다). 너무 높으면 리뷰가 느슨, 너무 낮으면 작성 프롬프트 문제 |
 | 평균 iteration | 수렴 속도 |
 | `ESCALATED`·`FAILED` 비율과 사유 분포 | 상한 튜닝 |
 | 중재 발생률과 `UPHOLD_AUTHOR` 비율 | 리뷰어가 과하게 CRITICAL 을 남발하는지 |
 | `reported_verdict ≠ derived_verdict` 비율 (슬롯별, `PeerReview`에서 계산) | 리뷰어 페르소나가 severity 기준을 잘 따르는지 |
-| 게이트 실패율 (항목별) | 작성 프롬프트의 구조 지시 품질 |
+| 게이트 실패율 (항목별) | 게이트를 거친 버전(통과 또는 `validation_errors` 있음) 중 떨어진 비율과 사유별 건수. 아직 `VALIDATING` 인 버전은 세지 않는다. 작성 프롬프트의 구조 지시 품질 |
 | 글당 토큰·비용 | 예산 상한 결정 |
 | `REJECTED_WITH_REASON` 비율 | 작성자 방어권이 작동하는지 (0% 면 무조건 수용, 너무 높으면 고집) |

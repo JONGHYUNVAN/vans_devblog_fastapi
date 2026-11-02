@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineRunner:
-    """lifespan 이 start() 로 시작하고 종료 때 stop() 으로 코루틴을 전부 cancel 한다. 끊긴 호출은 다음 기동 때 다시 한다."""
+    """lifespan 이 start() 로 시작하고 종료 때 stop() 으로 코루틴을 전부 cancel 한다. 끊긴 호출은 다음 기동 때 다시 한다.
+
+    발행 호출만은 끊지 않는다. 끊기면 결과를 모르는 의도가 남아 PUBLISH_UNCERTAIN 이 되므로 결과 반영까지 기다린다(drain).
+    """
 
     def __init__(
         self,
@@ -59,6 +62,7 @@ class PipelineRunner:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await self._draft_pipeline.drain()
         self._loop_task = None
         self._tasks.clear()
 

@@ -409,12 +409,13 @@ class Publication(BaseModel):
 | `mark_failed(code, message)` | 종결·`ESCALATED`·`FAILED` 가 아닌 상태 | `FAILED` | 현재 상태로 `FailureRecord(from_status, code)`를 만들어 기록한다. 병렬 단계는 서비스가 다른 호출이 끝나기를 기다려 성공한 리뷰·중재를 먼저 넣는다 |
 | `retry_from_failed(token_limit=None)` | `FAILED` | `failure.from_status`. `GATE_RETRIES_EXHAUSTED` 면 `REVISING` (`cause=GATE`) | 게이트 실패면 `validation_retries=0`. 어느 사유든 새 `token_limit` 을 받을 수 있다(병렬 단계는 사유가 여럿일 수 있다). 저장된 리뷰·중재는 그대로라 서비스는 빠진 호출만 한다 |
 | `discard(by)` | `FAILED` | `REJECTED` | 사람이 그 글만 폐기한다. 레지스트리 `RELEASED` 는 서비스가 따라 쓴다 |
-| `record_approval(by)` | `READY_TO_PUBLISH` | 변화 없음 | 승인 토글이 켜진 경우 |
+| `record_approval(by, requires_approval)` | `READY_TO_PUBLISH` | 변화 없음 | 승인 토글이 켜져 있고 아직 승인이 없을 때만. 토글이 꺼져 있거나 재승인이면 `InvalidTransitionError`. 그때는 발행 코루틴이 돌 수 있어 이 쓰기가 결과 반영과 겹친다(04 문서 8절 9단계) |
 | `begin_publish(requires_approval)` | `READY_TO_PUBLISH` | 변화 없음 | 발행 호출 직전 `PublicationIntent(attempt = publish_attempts + 1)` 를 남긴다. 승인 대기이거나 결과를 모르는 의도가 있으면 거절한다 (04 문서 8절 4·6단계) |
 | `fail_publish(max_publish_attempts)` | `READY_TO_PUBLISH` | 변화 없음 / `ESCALATED` | 결과가 확정된 실패. 의도에 `failed_at` 을 쓰고 `publish_attempts` 를 그 `attempt` 로 맞춘다. 상한이면 `PUBLISH_FAILED` (03 문서 28a·28행) |
 | `publish(publication, requires_approval)` | `READY_TO_PUBLISH` | `PUBLISHED` | 승인 토글이 켜져 있으면 `approved_by` 가 있어야 한다. `begin_publish` 가 남긴 의도가 있어야 하고 `publication.final_version` 은 그 의도의 버전과 같아야 한다 |
 | `has_uncertain_publication` | – | – | `failed_at` 없는 의도가 있다. 서비스는 이때 호출하지 않고 `escalate(PUBLISH_UNCERTAIN)` (03 문서 28b행) |
 | `awaits_approval(requires_approval)` | – | – | `READY_TO_PUBLISH`, 토글 켜짐, `approved_by` 없음. 러너가 이 글을 띄우지 않는다 |
+| `external_post_id` | – | – | 블로그에 올라간 게시글 id. `Publication` 이 없으면 의도에 남은 것(중단과 겹쳐 `PUBLISHED` 로 쓰지 못한 글, 회수 대상). 요약 응답·CLI 상태가 이 값을 보여 준다 |
 | `is_active` | – | – | `PUBLISHED`, `REJECTED`, `ESCALATED`, `FAILED` 가 아니면 참. 러너가 이 글만 코루틴으로 돌린다 |
 
 ## 6. 저장 (MongoDB)

@@ -43,9 +43,10 @@ class Harness:
         async def sleep(seconds: float) -> None:
             self.sleeps.append(seconds)
 
+        self.registry = LLMClientRegistry({"fake": self.llm}, concurrency_per_provider=concurrency)
         self.service = AgentCallService(
             agent_call_repository=self.calls,
-            llm_registry=LLMClientRegistry({"fake": self.llm}, concurrency_per_provider=concurrency),
+            llm_registry=self.registry,
             settings=self.settings,
             sleep=sleep,
         )
@@ -205,6 +206,18 @@ async def test_calls_to_one_provider_are_limited_by_semaphore():
     assert harness.llm.max_active == 2
 
 
+async def test_rate_limit_throttles_the_provider_gate_but_other_transport_errors_do_not():
+    harness = Harness([LLMTransportError("503"), GOOD, LLMTransportError("429", rate_limited=True), GOOD])
+
+    await harness.call()
+    assert not harness.registry.gate("fake").throttled
+
+    await harness.call()
+
+    assert harness.registry.gate("fake").throttled  # 04 문서 9절: 429 는 벤더 세마포어도 일시 축소
+    assert harness.sleeps == [1.0, 1.0]
+
+
 async def test_check_hook_failure_retries_like_a_schema_violation():
     harness = Harness([GOOD, GOOD])
     seen: list[Answer] = []
@@ -230,6 +243,30 @@ async def test_check_hook_failure_retries_like_a_schema_violation():
     assert (first.output_parsed_ok, first.error) == (False, "output: score must be 5")
     assert second.output_parsed_ok is True
     assert "score must be 5" in harness.llm.calls[1].messages[-1].content
+
+
+async def test_check_hook_raising_validation_error_is_a_schema_violation_too():
+    harness = Harness([GOOD, GOOD])
+    seen: list[Answer] = []
+
+    def check(answer: Answer) -> None:
+        seen.append(answer)
+        if len(seen) == 1:
+            Answer.model_validate({"title": "x", "score": "not a number"})  # pydantic ValidationError
+
+    result = await harness.service.call(
+        kind=CallKind.WRITE_DRAFT,
+        round_id="round-1",
+        slot=AgentSlot.A,
+        binding=make_binding(),
+        messages=MESSAGES,
+        schema=Answer,
+        check=check,
+    )
+
+    first, second = harness.calls.calls
+    assert result.call_id == second.call_id and len(seen) == 2
+    assert first.output_parsed_ok is False and first.error is not None and first.error.startswith("output: score")
 
 
 # ---------- replay (로드맵 7단계) ----------

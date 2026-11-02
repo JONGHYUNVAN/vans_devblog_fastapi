@@ -116,7 +116,7 @@ class DraftPublic(BaseModel):
     failure: FailureRecord | None
     publish_attempts: int
     approved_by: str | None
-    external_post_id: str | None
+    external_post_id: str | None  # PUBLISHED 가 아니면 의도에만 남은 회수 대상 id (04 문서 8절 9단계)
     token_limit: int
     updated_at: datetime
 
@@ -136,7 +136,7 @@ class DraftPublic(BaseModel):
             failure=draft.failure,
             publish_attempts=draft.publish_attempts,
             approved_by=draft.approved_by,
-            external_post_id=draft.publication.external_post_id if draft.publication else None,
+            external_post_id=draft.external_post_id,
             token_limit=draft.token_limit,
             updated_at=draft.updated_at,
         )

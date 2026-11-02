@@ -30,6 +30,7 @@ from app.repositories.agent_call import AgentCallRepository
 logger = logging.getLogger(__name__)
 
 _BACKOFF_BASE_S = 1.0
+_RATE_LIMIT_COOLDOWN_S = 30.0  # 429 뒤 그 벤더의 동시 호출을 1건으로 줄여 두는 시간 (설계 04 문서 9절)
 _REVIEW_KINDS = frozenset({CallKind.REVIEW, CallKind.ARBITRATE})
 _OUTPUT_SCHEMAS: dict[CallKind, type[BaseModel]] = {
     CallKind.PROPOSE_TOPIC: ProposeTopicOutput,
@@ -105,6 +106,7 @@ class AgentCallService:
         check 는 입력 문맥이 필요한 검사(agents/parsers)다. 파싱된 모델을 받아 위반이면 LLMOutputError 를 던진다.
         네트워크·5xx·429·타임아웃(LLMTransportError)은 지수 백오프 뒤 같은 메시지로,
         계약 위반(ValidationError·LLMOutputError)은 직전 출력과 안내를 붙여 다시 부른다.
+        429 는 그 벤더의 게이트도 _RATE_LIMIT_COOLDOWN_S 동안 1건씩으로 줄인다(다른 글·리뷰 코루틴도 함께 느려진다).
         """
         client = self._llm.get(binding.provider)
         is_review = kind in _REVIEW_KINDS
@@ -128,16 +130,19 @@ class AgentCallService:
             parsed: T | None = None
             error: str | None = None
             try:
-                async with self._llm.semaphore(binding.provider):
+                async with self._llm.gate(binding.provider).slot():
                     response = await client.complete(_to_llm_messages(attempt_messages), json_schema, params, timeout)
             except LLMTransportError as exc:
                 error = f"transport: {exc.message}"
+                if exc.rate_limited:
+                    self._llm.gate(binding.provider).throttle(_RATE_LIMIT_COOLDOWN_S)
             else:
                 try:
                     parsed = schema.model_validate_json(response.text)
                     if check is not None:
                         check(parsed)
                 except ValidationError as exc:
+                    parsed = None  # check 가 던진 ValidationError 도 실패다
                     error = "output: " + "; ".join(
                         f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in exc.errors()
                     )
@@ -204,7 +209,7 @@ class AgentCallService:
         timeout = float(self._settings.review_timeout_s if is_review else self._settings.draft_timeout_s)
         schema = output_schema_of(call)
         started_at = datetime.now(UTC)
-        async with self._llm.semaphore(binding.provider):
+        async with self._llm.gate(binding.provider).slot():
             response = await self._llm.get(binding.provider).complete(
                 _to_llm_messages(call.messages), schema.model_json_schema(), params, timeout
             )

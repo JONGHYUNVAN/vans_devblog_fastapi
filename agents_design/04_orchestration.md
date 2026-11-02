@@ -6,7 +6,7 @@
 - **진행 단위는 코루틴 하나.** 글마다 `DraftPipelineService.drive(draft_id)` 하나, 주제 선정 중인 라운드마다 `TopicSelectionService.drive(round_id)` 하나다. 코루틴은 상태를 읽고, 그 상태의 LLM 호출을 직접 `await`하고, 결과를 도메인에 반영해 한 번 저장하기를 사람 대기나 종결까지 반복한다. 작업 큐, dispatch, heartbeat가 없다.
 - **러너는 띄우기만 한다.** 라운드 시작은 CLI 또는 내부 API가 라운드 문서를 만드는 것으로 끝난다. 러너는 기동 시와 `SCAN_INTERVAL_S`마다 코루틴이 없는 진행 대상(`TOPIC_SELECTION` 라운드, `IN_PROGRESS` 라운드의 승인 대기가 아닌 `is_active` 글)을 찾아 띄운다. 같은 대상의 코루틴은 하나다(러너가 `id → asyncio.Task` 표를 가진다). 사람 결정(API·CLI)은 DB만 바꾸고, 다음 스캔이 이어 간다. CLI는 다른 프로세스라 러너를 직접 부를 수 없으므로 이 스캔이 유일한 연결이다.
 - **재시작.** 상태는 전부 DB에 있다. 기동하면 마지막으로 저장된 상태부터 이어 가고, 종료 때 진행 중이던 단계의 호출만 다시 한다(병렬 단계면 그 단계의 호출 전부). 잃는 것은 그 호출들의 비용이다.
-- **모든 단계는 끝난다.** LLM 호출에는 `REVIEW_TIMEOUT_S`·`DRAFT_TIMEOUT_S`, 발행 HTTP에는 `PUBLISH_TIMEOUT_S`가 있고, 재시도·반복 횟수에는 상한이 있다. 그래서 라운드 시간 상한을 두지 않는다(07 문서 D-34). 벤더별 동시 요청 수는 `asyncio.Semaphore`로 제한한다.
+- **모든 단계는 끝난다.** LLM 호출에는 `REVIEW_TIMEOUT_S`·`DRAFT_TIMEOUT_S`, 발행 HTTP에는 `PUBLISH_TIMEOUT_S`가 있고, 재시도·반복 횟수에는 상한이 있다. 그래서 라운드 시간 상한을 두지 않는다(07 문서 D-34). 벤더별 동시 요청 수는 게이트(세마포어)로 제한하고, 429를 받으면 잠시 1건으로 줄인다(9절).
 - **저장.** `pymongo.AsyncMongoClient`(06 문서). 글·라운드 저장은 `revision` 낙관적 잠금이다. 사람 결정은 코루틴이 돌지 않는 상태(승인 대기, `ESCALATED`, `FAILED`)에만 쓰므로, 코루틴의 저장과 겹치는 쓰기는 라운드 중단뿐이다. 충돌이 나면 코루틴은 결과를 버리고 다시 읽는다. 사람·관리자 쓰기는 다시 읽고, 전제 상태가 여전히 맞으면 재적용하고 아니면 409다. 버린 호출의 비용은 `AgentCall`에 남는다.
 - **트랜잭션 없음.** 여러 문서를 고치는 동작은 커밋 지점이 되는 쓰기 하나를 정하고, 나머지를 결정론적 ID로 멱등하게 쓴다. 중간에 죽거나 충돌로 멈추면 정리(`RoundService.reconcile`)가 마저 쓴다. 정리는 스캔마다 돈다.
 
@@ -113,7 +113,7 @@ DraftPipelineService.drive(draft_id):
 ## 4. Phase 3: FULL 리뷰
 
 - `IN_REVIEW`에서 `reviewer_assignments`의 두 슬롯 중 아직 리뷰가 없는 슬롯에 `REVIEW(scope=FULL)`를 병렬 호출한다.
-- **블라인드**: 리뷰어 입력에 `author_slot`, 모델명, 페르소나명을 넣지 않는다. 본문·주제·렌즈 지시만 넣는다. 블라인드는 리뷰 단계 한정이며 요약 노트에는 저자가 드러난다.
+- **블라인드**: 리뷰어 입력에 `author_slot`, 모델명, 페르소나명을 넣지 않는다. 본문·주제·렌즈 지시만 넣는다. 주제는 `rationale`(왜 이 성향의 작성자가 쓰는지, 사실상 페르소나 서술)을 뺀 `TopicForReviewer`로, SPOT_CHECK·중재의 지적은 `reviewer_slot`·`source_review_id`를 뺀 `ReviewItemForReviewer`로 넘긴다. `item_id`는 SPOT_CHECK가 그대로 돌려줘야 해 유지한다(슬롯 글자는 모델에게 불투명하다). 블라인드는 리뷰 단계 한정이며 요약 노트에는 저자가 드러난다.
 - 리뷰 출력은 `ReviewOutput` 스키마(05 문서). 스키마 위반은 같은 호출 재시도. 재시도를 소진한 리뷰어를 빼고 진행하지 않는다. 리뷰 한 건으로 발행을 결정하지 않는다(07 문서 D-06). 다른 리뷰 호출이 끝나기를 기다려 성공한 리뷰는 저장하고 글을 `FAILED`로 둔다. 재개하면 빠진 리뷰만 호출한다.
 - `item_id`, `source_review_id`, `reviewer_slot`, `is_new_in_version` 은 오케스트레이터가 부모 리뷰 문맥으로 붙인다. LLM 출력에는 없다. FULL 항목의 `is_new_in_version` 은 False.
 - FULL 의 `derived_verdict`: `REQUEST_CHANGES` 는 차단 등급 항목이 1건 이상일 때다. `reported_verdict` 와 다르면 로그를 남긴다. 지표는 `PeerReview`에서 계산한다(07 문서 4절).
@@ -189,7 +189,7 @@ else:
 ### 중재
 
 - 중재자는 저자도 그 항목의 리뷰어도 아닌 슬롯이다. 렌즈는 **그 `ReviewItem.lens`**(리뷰어가 해당 항목에 태그한 주/보조 렌즈)를 그대로 쓴다.
-- 입력은 해당 섹션의 전후 본문, `ReviewItem`, 기각 사유, `resolved=False` 사유다. 블라인드를 유지한다.
+- 입력은 해당 섹션의 전후 본문, 지적(`ReviewItemForReviewer`, 슬롯 필드 없음), 기각 사유, `resolved=False` 사유다. 블라인드를 유지한다.
 - 교착 항목마다 `ARBITRATE`를 병렬 호출한다. `add_arbitration` 은 저장만 한다. 교착 항목이 모두 모이면 `apply_evaluation` 이 전이한다. 일부가 재시도를 소진하면 리뷰와 같이 성공분을 저장하고 `FAILED`다.
 - `UPHOLD_AUTHOR` 항목은 종결되어 `open_blocking_items` 에서 빠진다.
 - `UPHOLD_REVIEWER` 항목은 `open_blocking_items` 에 남고 다음 수정에서 기각할 수 없다(`must_accept=True`).
@@ -220,7 +220,7 @@ else:
 
 **호출 재시도.** 재시도 루프는 호출 서비스(`AgentCallService.call`)가 끝까지 맡는다. 네트워크·5xx·429·타임아웃은 지수 백오프 뒤 같은 메시지로 다시 부른다. 스키마 위반은 첫 시도 메시지 뒤에 직전 실패 출력과 오류 안내를 붙여 다시 부른다. 시도마다 `AgentCall` 영수증을 insert 하고, 예산 검사도 시도마다 한다.
 
-**병렬 단계의 실패.** 리뷰 2건이나 중재 n건은 `asyncio.gather(..., return_exceptions=True)`로 모두 끝나기를 기다린다. 하나가 재시도를 소진하거나 예산에 걸려도 나머지를 취소하지 않는다. 성공한 결과를 도메인에 넣고 한 번 저장한 뒤 `FAILED`다. 재개하면 결과가 없는 슬롯·항목만 호출한다. 그래서 형제 취소·예약 반환·사후 정산이 없다.
+**병렬 단계의 실패.** 리뷰 2건이나 중재 n건은 `asyncio.gather(..., return_exceptions=True)`로 모두 끝나기를 기다린다. 하나가 재시도를 소진하거나 예산에 걸려도 나머지를 취소하지 않는다. 성공한 결과를 도메인에 넣고 한 번 저장한 뒤 `FAILED`다. 재개하면 결과가 없는 슬롯·항목만 호출한다. 그래서 형제 취소·예약 반환·사후 정산이 없다. 예상하지 못한 예외(설정 오류 등)가 섞여도 같다: 성공분을 저장한 뒤 `FAILED(INTERNAL_ERROR)`다.
 
 ## 7. 가드레일 (프롬프트 수준 규칙, 05 문서 계약에 반영)
 
@@ -232,7 +232,7 @@ else:
 | 최소 지적 개수 강제 금지 | 리뷰어 | 억지 지적을 만들므로 두지 않는다. 대신 체크리스트로 "무엇을 봤는지"를 요구 |
 | 기각에는 근거 | 작성자 | `REJECTED_WITH_REASON.reason` 필수. "원래 의도"만으로는 부족하고 기술적·독자 관점 근거 요구 |
 | 중재 결과 복종 | 작성자 | `UPHOLD_REVIEWER` 항목은 다음 버전에서 `ACCEPTED`만 허용. 게이트가 검사 |
-| 신규 CRITICAL 만 | SPOT_CHECK 리뷰어 | 그 외 심각도는 파서가 버리고 로그를 남긴다. 호출은 실패하지 않는다 |
+| 신규 CRITICAL 만 | SPOT_CHECK 리뷰어 | 그 외 심각도는 파서가 버리고 로그를 남긴다. 호출은 실패하지 않는다(버릴 항목의 앵커·렌즈는 검사하지 않는다) |
 
 ## 8. 발행과 패키징
 
@@ -248,13 +248,13 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
    - fast-track 으로 남은 MINOR·NITPICK 은 "발행을 막지 않아 수정하지 않음"으로 구분한다
    - 중재가 있었으면 판정
 3. 글과 라운드를 다시 읽는다. 글이 `READY_TO_PUBLISH`가 아니거나 라운드가 `IN_PROGRESS`가 아니면 발행을 호출하지 않는다.
-4. `failed_at`이 없는 `publication_intent`가 남아 있으면 직전 호출이 Post BE에 닿았는지 모른다(호출 중 프로세스 종료). 다시 호출하지 않고 `ESCALATED(PUBLISH_UNCERTAIN)`로 보낸다.
+4. `failed_at`이 없는 `publication_intent`가 남아 있으면 직전 호출이 Post BE에 닿았는지 모른다(호출 중 프로세스 종료). 다시 호출하지 않고 `ESCALATED(PUBLISH_UNCERTAIN)`로 보낸다. 그래서 정상 종료(`runner.stop`)는 발행 호출 중인 코루틴을 끊지 않고 결과 반영까지 기다린다. 끊으면 재배포마다 이 격리가 생긴다.
 5. 최종 버전 본문 뒤에 요약 노트를 붙여 아래 변환표로 Tiptap JSON을 만들고, 아래 매핑표로 `CreatePostDto`를 채운다.
 6. `status==READY_TO_PUBLISH`인 문서에만 `attempt = publish_attempts + 1`인 발행 의도를 저장한다. 이 쓰기가 실패하면 발행을 호출하지 않는다.
 7. 에이전트 전용 관리자 계정으로 `vans_story_be`의 `POST /api/v1/auth/login`에 로그인해 액세스 토큰(기본 900초)을 받고, Bearer 토큰으로 `POST /api/v1/posts`를 호출한다. 토큰은 저장하지 않고 발행마다 받는다. 게시글 작성자는 이 계정이다.
 8. 성공하면 `status==READY_TO_PUBLISH`인 글에만 `Publication`(응답의 게시글 id)과 상태 `PUBLISHED`를 조건 갱신하고, 이어서 레지스트리를 `PUBLISHED`로 쓴다(1절 순서). 검색 색인은 Post BE가 생성 시 스스로 요청한다.
 9. 그 조건 갱신이 실패하면 `PUBLISHED`로 쓰지 않고, 상태와 무관하게 반환된 `external_post_id`를 의도에만 남긴다(`reject_by_abort`도 의도를 지우지 않는다). 이 경쟁이 생기는 쓰기는 라운드 중단뿐이다. 자동으로 내리지 않는다. 운영자가 그 ID로 블로그 글을 회수한다.
-10. 결과가 확정된 실패(로그인 단계의 모든 실패, 글 생성 호출의 4xx 응답·연결 거부)면 의도에 `failed_at`을 쓰고 `publish_attempts`를 그 `attempt`로 맞춘다. 상한 미만이면 지수 백오프 뒤 다시 호출하고, 상한이면 `ESCALATED(PUBLISH_FAILED)`다. 로그인에서는 글이 생기지 않으므로 그 단계의 타임아웃·5xx도 여기에 든다.
+10. 결과가 확정된 실패(로그인 단계의 모든 실패, 글 생성 호출의 2xx 아닌 500 미만 응답(4xx·리다이렉트)·연결 거부)면 의도에 `failed_at`을 쓰고 `publish_attempts`를 그 `attempt`로 맞춘다. 상한 미만이면 지수 백오프 뒤 다시 호출하고, 상한이면 `ESCALATED(PUBLISH_FAILED)`다. 로그인에서는 글이 생기지 않으므로 그 단계의 타임아웃·5xx도 여기에 든다.
 11. 글 생성 호출(`POST /api/v1/posts`)의 결과 불명(응답 전 타임아웃·연결 끊김, 5xx)이면 다시 호출하지 않고 `ESCALATED(PUBLISH_UNCERTAIN)`다. Post BE는 글을 저장한 뒤 조회·응답 변환을 하므로 5xx여도 글이 생겼을 수 있다. 글 목록 API는 카테고리·페이지로만 걸러 이 서비스가 이미 게시됐는지 확인할 수 없다.
 
 `PUBLISH_UNCERTAIN`은 사람이 블로그를 확인해 해소한다. 글이 있으면 `CONFIRM_PUBLISHED(external_post_id)`로 `PUBLISHED`(03 문서 23a행), 없으면 `PUBLISH_AS_IS`로 다시 발행 대기(23행)다. `REVISE`·`REJECT`도 글이 올라가 있지 않은지 확인한 뒤 고른다.
@@ -297,13 +297,13 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
 
 | 실패 | 처리 |
 |---|---|
-| 벤더 5xx, 429, 타임아웃 | 지수 백오프 재시도 (`MAX_LLM_RETRIES`). 429는 벤더 세마포어도 일시 축소 |
+| 벤더 5xx, 429, 타임아웃 | 지수 백오프 재시도 (`MAX_LLM_RETRIES`). 429는 그 벤더의 게이트(`ProviderGate`)를 30초(`_RATE_LIMIT_COOLDOWN_S`) 동안 동시 1건으로 줄인다. 같은 벤더의 다른 글·리뷰 호출도 그동안 줄을 선다 |
 | 출력 스키마 위반 | 같은 호출 재시도. 첫 시도 메시지 뒤에 직전 실패 출력과 오류 안내를 붙인다(6절) |
 | 출력이 스키마는 맞지만 불변식 위반(예: 차단 항목에 resolution 없음) | 게이트 실패로 처리 (`REVISING`) |
 | 재시도 소진 | 글 `FAILED(LLM_RETRIES_EXHAUSTED)`. 병렬 단계는 다른 호출을 기다려 성공분을 저장한다. 라운드는 계속. 사람이 재개하거나 폐기한다 |
 | 글 예산 초과 | 호출하지 않고 글 `FAILED(BUDGET_EXCEEDED)`. 재개 때 `token_limit`을 올릴 수 있다 |
-| 예상하지 못한 예외 | 글 `FAILED(INTERNAL_ERROR)`, 주제 선정이면 라운드 `ABORTED(INTERNAL_ERROR)`. 로그가 신호다 |
-| 프로세스 재시작 | 마지막 저장 상태부터 이어 간다. 끊긴 단계의 호출만 다시 한다. 스캔마다 도는 정리가 1절 표의 따라 쓰기를 마저 한다 |
+| 예상하지 못한 예외 | 글 `FAILED(INTERNAL_ERROR)`, 주제 선정이면 라운드 `ABORTED(INTERNAL_ERROR)`. 로그가 신호다. 병렬 단계는 성공한 형제의 결과를 저장한 뒤 멈춘다 |
+| 프로세스 재시작 | 마지막 저장 상태부터 이어 간다. 끊긴 단계의 호출만 다시 한다. 스캔마다 도는 정리가 1절 표의 따라 쓰기를 마저 한다. 정상 종료는 발행 호출만 끊지 않고 결과 반영까지 기다린다(8절 4단계) |
 | 발행 결과 불명 | 다시 호출하지 않는다. `ESCALATED(PUBLISH_UNCERTAIN)`. 사람이 블로그를 확인해 `CONFIRM_PUBLISHED` 또는 `PUBLISH_AS_IS` (8절) |
 | 동시 쓰기 충돌 | `revision` 불일치 → 코루틴은 결과를 버리고 다시 읽는다. 사람·관리자 쓰기는 다시 읽어 전제가 맞으면 재적용하고, 아니면 409 |
 | 관리자 중단 | 1절 순서. 진행 중인 호출은 끊지 않고 결과를 버린다. `IN_PROGRESS`에서는 `PUBLISHED` 외 글만 `REJECTED` |

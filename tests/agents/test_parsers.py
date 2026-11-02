@@ -70,11 +70,19 @@ def test_spot_check_output_check_requires_exact_item_checks(ids, reason):
         spot_check_output_check(SECTIONS, ["r:1", "r:2"], LENSES)(output)
 
 
-def test_spot_check_output_check_validates_new_item_anchor():
+def test_spot_check_output_check_validates_new_item_anchor_for_critical_only():
     output = SpotCheckOutput(item_checks=[], new_critical_items=[_item("gone")], checklist=CHECKLIST)
 
     with pytest.raises(LLMOutputError, match="unknown section"):
         spot_check_output_check(SECTIONS, [], LENSES)(output)
+
+    # 어차피 버릴 MAJOR 의 앵커·렌즈 때문에 호출이 실패하면 안 된다 (04 문서 7절)
+    dropped = SpotCheckOutput(
+        item_checks=[],
+        new_critical_items=[_item("gone", severity=IssueSeverity.MAJOR, lens=ReviewLens.LOGIC_READABILITY)],
+        checklist=CHECKLIST,
+    )
+    spot_check_output_check(SECTIONS, [], LENSES)(dropped)
 
 
 def test_review_items_assign_ids_in_order():

@@ -60,6 +60,12 @@ class LLMTransportError(AppError):
     status_code = 503
     error = "LLM call failed"
 
+    def __init__(self, message: str, *, rate_limited: bool = False) -> None:
+        super().__init__(message)
+        self.rate_limited = (
+            rate_limited  # 429. 호출 서비스가 그 벤더의 동시 호출을 잠시 1건으로 줄인다 (설계 04 문서 9절)
+        )
+
 
 class LLMOutputError(AppError):
     """LLM 응답이 계약(스키마·의미 규칙)에 맞지 않는다. 직전 출력과 오류 안내를 붙여 재시도한다."""

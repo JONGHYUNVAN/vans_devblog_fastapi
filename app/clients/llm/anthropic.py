@@ -41,7 +41,9 @@ class AnthropicClient:
             raise LLMTransportError(f"anthropic: {type(exc).__name__}: {exc}") from exc
         except anthropic.APIStatusError as exc:
             if exc.status_code == 429 or exc.status_code >= 500:
-                raise LLMTransportError(f"anthropic: HTTP {exc.status_code}: {exc.message}") from exc
+                raise LLMTransportError(
+                    f"anthropic: HTTP {exc.status_code}: {exc.message}", rate_limited=exc.status_code == 429
+                ) from exc
             raise ValueError(f"anthropic rejected the request (HTTP {exc.status_code}): {exc.message}") from exc
         text = "".join(block.text for block in response.content if block.type == "text")
         return LLMResponse(
