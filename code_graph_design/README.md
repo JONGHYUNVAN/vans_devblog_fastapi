@@ -2,7 +2,7 @@
 
 내 저장소들의 의존 그래프를 이 앱이 만들고, 블로그(vans_story) 프로젝트 페이지가 그 JSON 을 그린다. 손으로 쓰는 아키텍처 문서·그림을 대체하는 것이 목적이다(블로그 `src/constants/projects.ts` 는 검색 서비스를 아직 Django·Redis 로, 기술 스택에 Storybook 을 적고 있다). Understand-Anything 의 클론이 아니다. LLM 요약·멀티 에이전트·임의 URL 입력·webhook·큐는 넣지 않는다.
 
-- 설계 문서 세트는 만들지 않는다. 기획은 이 문서 하나, 저장소 설정 예시는 [repos.example.json](repos.example.json), 사용법은 저장소 README 한 절, 나머지는 docstring 이다. 그래프 JSON 과 context 마크다운이 곧 문서다. 코드가 이 문서와 달라지면 같은 커밋에서 이 문서를 고친다.
+- 설계 문서 세트는 만들지 않는다. 기획은 이 문서 하나, 저장소 설정 예시는 [repos.example.json](repos.example.json), PoC 참고 코드는 [poc_codegraph.py](poc_codegraph.py)(앱 코드가 아니다), 사용법은 저장소 README 한 절, 나머지는 docstring 이다. 그래프 JSON 과 context 마크다운이 곧 문서다. 코드가 이 문서와 달라지면 같은 커밋에서 이 문서를 고친다.
 - 이 문서의 수치·경로는 전부 2026-11-03 에 저장소·tarball·코드에서 확인한 것이다. 확인하지 않은 값은 "확인 필요" 라고 적는다.
 
 ## 확인된 전제 (2026-11-03)
@@ -10,7 +10,7 @@
 - 의존성 3개, 네이티브 빌드 없음: `tree-sitter==0.26.0`, `tree-sitter-language-pack==1.23.1`(win_amd64·manylinux_2_34 wheel. `python:3.13-slim` 에 그대로 설치된다), `networkx==3.7`(Louvain 내장).
 - 이미지에 git 이 없다. `https://codeload.github.com/JONGHYUNVAN/{repo}/tar.gz/{ref}` 를 httpx 로 받아 `tarfile`(`filter="data"`)로 임시 디렉터리에 풀고 끝나면 지운다. 네 저장소(vans_devblog_fastapi, vans_story, vans_story_be_post, vans_story_be)가 모두 public 이라 토큰이 없다. 소유자는 `JONGHYUNVAN` 이다(다른 표기는 404).
 - tarball 구조: 최상위 디렉터리는 `{repo}-{ref}`(예: `vans_story-main`)이고, 커밋 해시는 pax 전역 헤더 `comment` 에 전체 SHA 로 들어 있다(네 저장소 모두 확인). 크기는 vans_story 30.4MB(`public/docs` 의 HTML 470개 포함), 나머지 셋은 300KB 이하다.
-- 1회용 PoC(tree-sitter + networkx, 소스 루트 바로 아래 디렉터리를 레이어로) 결과:
+- 1회용 PoC([poc_codegraph.py](poc_codegraph.py). tree-sitter + networkx, 소스 루트 바로 아래 디렉터리를 레이어로) 결과:
 
 | 저장소 | 소스 루트 | 파일 | 파싱 | 심볼 | 내부 import 엣지 |
 |---|---|---|---|---|---|
