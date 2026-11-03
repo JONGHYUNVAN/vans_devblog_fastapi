@@ -212,3 +212,22 @@ async def test_start_round_does_not_create_round_when_categories_fail_or_are_emp
     with pytest.raises(ValueError):
         await without_publisher.start_round(theme_keyword=None, slot_bindings=BINDINGS)
     assert harness.database.agent_rounds.docs == []
+
+
+async def test_create_round_validates_raw_settings_bindings():
+    """Settings 는 바인딩을 원문 dict 로 두고(core 는 models 를 모른다) 여기서 검증한다."""
+    harness = PipelineHarness()
+    service = RoundService(harness.rounds, harness.drafts, harness.topics)
+    raw = {slot: binding.model_dump() for slot, binding in BINDINGS.items()}
+
+    publishing_round = await service.create_round(theme_keyword=None, slot_bindings=raw, categories=[make_category()])
+
+    assert publishing_round.slot_bindings == BINDINGS
+    with pytest.raises(ValueError):  # 모르는 슬롯
+        await service.create_round(
+            theme_keyword=None, slot_bindings={"D": raw["A"], **raw}, categories=[make_category()]
+        )
+    with pytest.raises(ValueError):  # ModelBinding 검증 실패(pydantic)
+        await service.create_round(
+            theme_keyword=None, slot_bindings={**raw, "A": {"provider": "x"}}, categories=[make_category()]
+        )

@@ -20,7 +20,13 @@ from app.agents.contracts import (
 from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse
 from app.clients.llm.registry import LLMClientRegistry
 from app.core.config import Settings
-from app.core.exceptions import BudgetExceededError, LLMOutputError, LLMRetriesExhaustedError, LLMTransportError
+from app.core.exceptions import (
+    BudgetExceededError,
+    LLMOutputError,
+    LLMRetriesExhaustedError,
+    LLMTransportError,
+    NotFoundError,
+)
 from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
 from app.models.enums import AgentSlot, CallKind
 from app.models.model_binding import ModelBinding
@@ -192,6 +198,13 @@ class AgentCallService:
                 ]
 
         raise LLMRetriesExhaustedError(f"{kind} for {round_id}/{slot} failed {max_attempts} times: {last_error}")
+
+    async def get(self, call_id: str) -> AgentCall:
+        """영수증 하나. 없으면 NotFoundError. replay 의 입력이다."""
+        call = await self._calls.get(call_id)
+        if call is None:
+            raise NotFoundError(f"call {call_id} does not exist")
+        return call
 
     async def replay(self, call: AgentCall, *, binding: ModelBinding | None = None) -> ReplayResult:
         """영수증의 메시지를 그대로 다시 보낸다(프롬프트 튜닝용, 설계 07 문서 로드맵 7단계).

@@ -34,7 +34,7 @@ app/
    ├─ kis/                  외부 시스템 하나 = 하위 패키지 하나
    ├─ llm/
    └─ publisher/
-cli/                        [Controller] typer 명령. 라우터와 같은 규칙(서비스만 호출). 서비스는 dependencies.py 의 open_clients·get_*_service 로 만든다
+cli/                        [Controller] typer 명령. 라우터와 같은 규칙(서비스만 호출). 서비스는 dependencies.py 의 open_clients·open_async_database·get_*_service·build_* 로 만든다
 tests/                      app/ 구조를 그대로 따른다(7절)
 ```
 
@@ -60,6 +60,8 @@ routers, cli ─→ services ─→ repositories ─→ clients
 | `core/` | 표준 라이브러리, 서드파티 | `app`의 다른 패키지 전부 |
 
 역방향 import가 필요해 보이면 구조가 잘못된 것이다. 지연 import(함수 안 import)로 순환을 덮지 않는다.
+
+예외(에이전트 파이프라인, 타입 공유만): `models/enums.py`의 열거형은 API 타입이라 `routers`·`schemas`·`cli`가 import 할 수 있다. `schemas/agent_pipeline.py`는 전체 이력 응답(`DraftHistory`)이 도메인 문서 그대로라 `models`의 값 객체를 필드 타입으로 쓴다. 두 경우 모두 변환·계산은 두지 않고 `services/pipeline_views.py`가 한다.
 
 | 무엇 | 어디 |
 |---|---|

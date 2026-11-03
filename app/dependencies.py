@@ -1,11 +1,11 @@
 """라우터가 Depends 로 받는 객체를 조립한다. 연결은 lifespan 이 app.state 에 만들어 둔 것을 쓴다.
 
-CLI 는 open_clients 로 연결을 직접 열고 같은 get_*_service 함수로 서비스를 만든다.
+CLI 는 open_clients·open_async_database 로 연결을 직접 열고 같은 get_*·build_* 함수로 서비스를 만든다.
 """
 
 import secrets
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from functools import partial
 from typing import Annotated
 
@@ -21,12 +21,10 @@ from app.clients.llm.base import LLMClient
 from app.clients.llm.google import GoogleClient
 from app.clients.llm.registry import LLMClientRegistry
 from app.clients.llm.xai import XAIClient
-from app.clients.mongo import create_mongo_client, is_mongo_reachable
+from app.clients.mongo import create_async_mongo_client, create_mongo_client, is_mongo_reachable
 from app.clients.publisher.post_be import PostBEPublisher
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
-from app.models.post_draft import PostDraft
-from app.models.publishing_round import PublishingRound
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.popular_search import PopularSearchRepository
@@ -41,7 +39,8 @@ from app.services.health import HealthService
 from app.services.index_setup import IndexSetupService
 from app.services.indexing import IndexingService
 from app.services.kis import KISService
-from app.services.publishing import PublishingService
+from app.services.pipeline_views import PipelineViewService
+from app.services.publishing import PublishingService, UnconfiguredDraftPublisher
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
 from app.services.search import SearchService
@@ -100,14 +99,14 @@ def get_async_database(request: Request, settings: Annotated[Settings, Depends(g
     return request.app.state.async_mongo_client[settings.mongodb_db_name]
 
 
-def get_draft_repository(database: Annotated[AsyncDatabase, Depends(get_async_database)]) -> PostDraftRepository:
-    return PostDraftRepository(database)
-
-
-def get_agent_call_repository(
-    database: Annotated[AsyncDatabase, Depends(get_async_database)],
-) -> AgentCallRepository:
-    return AgentCallRepository(database)
+@asynccontextmanager
+async def open_async_database(settings: Settings) -> AsyncIterator[AsyncDatabase]:
+    """에이전트 파이프라인용 비동기 Mongo 연결을 열고 블록이 끝나면 닫는다. CLI 가 쓴다 (설계 07 문서 D-43)."""
+    async_mongo_client = create_async_mongo_client(settings)
+    try:
+        yield async_mongo_client[settings.mongodb_db_name]
+    finally:
+        await async_mongo_client.close()
 
 
 def get_round_service(
@@ -122,6 +121,13 @@ def get_draft_decision_service(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> DraftDecisionService:
     return build_draft_decision_service(database, settings)
+
+
+def get_pipeline_view_service(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> PipelineViewService:
+    return build_pipeline_view_service(database, settings)
 
 
 def get_health_service(
@@ -222,19 +228,19 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
     )
 
 
-class _UnconfiguredDraftPublisher:
-    """발행 설정(POST_BE_URL 또는 발행 계정)이 비어 있다. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다.
+def build_pipeline_view_service(database: AsyncDatabase, settings: Settings) -> PipelineViewService:
+    """읽기 전용 조회. 라우터와 CLI(status·show·metrics·--wait)가 같이 쓴다."""
+    return PipelineViewService(
+        round_service=build_round_service(database, settings),
+        draft_repository=PostDraftRepository(database),
+        agent_call_repository=AgentCallRepository(database),
+        settings=settings,
+    )
 
-    발행 의도를 저장하기 전에 멈춰야 설정을 고치고 재개했을 때 결과 불명(PUBLISH_UNCERTAIN)으로 격리되지 않는다.
-    """
 
-    async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        raise ValueError(
-            "Post BE publishing is not configured (POST_BE_URL, USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)"
-        )
-
-    async def drain(self) -> None:
-        return None
+def build_agent_call_service(database: AsyncDatabase, settings: Settings) -> AgentCallService:
+    """러너 조립과 CLI `agents replay` 가 같이 쓴다."""
+    return AgentCallService(AgentCallRepository(database), build_llm_registry(settings), settings)
 
 
 def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> PipelineRunner:
@@ -244,7 +250,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     topic_registry_repository = TopicRegistryRepository(database)
     publisher = build_publisher(settings)
     round_service = RoundService(round_repository, draft_repository, topic_registry_repository, publisher=publisher)
-    agent_call_service = AgentCallService(AgentCallRepository(database), build_llm_registry(settings), settings)
+    agent_call_service = build_agent_call_service(database, settings)
     account_ready = bool(settings.user_service_url and settings.publisher_email and settings.publisher_password)
     draft_publisher: DraftPublisher = (
         PublishingService(
@@ -254,7 +260,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             settings=settings,
         )
         if publisher is not None and account_ready
-        else _UnconfiguredDraftPublisher()
+        else UnconfiguredDraftPublisher()
     )
     return PipelineRunner(
         round_repository=round_repository,

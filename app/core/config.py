@@ -1,13 +1,11 @@
 """환경변수 설정. 이름은 Django 서비스와 같게 유지해 CloudType 환경변수를 그대로 옮길 수 있게 한다."""
 
 from functools import lru_cache
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from app.models.enums import AgentSlot
-from app.models.model_binding import ModelBinding
 
 
 class Settings(BaseSettings):
@@ -49,7 +47,8 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     xai_api_key: SecretStr | None = None
     # 슬롯 바인딩. JSON 문자열. 예: {"A": {"provider": "anthropic", "model_id": "...", "persona_id": "architect", "max_output_tokens": 16000}, ...}
-    agent_slot_bindings: dict[AgentSlot, ModelBinding] = {}
+    # 원문 그대로 둔다. 슬롯·ModelBinding 검증은 RoundService.create_round 가 한다(core 는 models 를 import 하지 않는다)
+    agent_slot_bindings: dict[str, Any] = {}
     post_be_url: str = ""  # vans_story_be_post. 카테고리 조회·발행
     user_service_url: str = ""  # vans_story_be. 발행 계정 로그인 (설계 07 문서 D-40)
     publisher_email: str = ""  # 에이전트 전용 관리자 계정. 게시글 작성자가 된다

@@ -3,8 +3,17 @@
 from app.clients.llm.google import GoogleClient
 from app.clients.llm.xai import XAIClient
 from app.core.config import Settings
-from app.dependencies import build_draft_decision_service, build_llm_registry, build_pipeline_runner, build_publisher
+from app.dependencies import (
+    build_agent_call_service,
+    build_draft_decision_service,
+    build_llm_registry,
+    build_pipeline_runner,
+    build_pipeline_view_service,
+    build_publisher,
+)
+from app.services.agent_calls import AgentCallService
 from app.services.draft_decision import DraftDecisionService
+from app.services.pipeline_views import PipelineViewService
 from app.services.publishing import PublishingService
 from tests.fakes import FakeAsyncDatabase
 
@@ -59,3 +68,5 @@ def test_build_pipeline_runner_publishes_through_publishing_service_only_when_fu
     assert not isinstance(url_only._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
     assert not isinstance(without._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
     assert isinstance(build_draft_decision_service(database, Settings(_env_file=None)), DraftDecisionService)
+    assert isinstance(build_pipeline_view_service(database, Settings(_env_file=None)), PipelineViewService)
+    assert isinstance(build_agent_call_service(database, Settings(_env_file=None)), AgentCallService)

@@ -6,18 +6,15 @@ import logging
 import re
 from collections import Counter
 
-from markdown_it import MarkdownIt
-
 from app.models.enums import ArbitrationOutcome, ResolutionStatus, ReviewScope, RevisionCause
 from app.models.post_draft import DraftVersion, PostDraft
 from app.models.sections import ANCHOR_PATTERN, CODE_ANCHOR_PATTERN, REQUIRED_SECTIONS, find_anchors
-from app.models.tiptap import code_language, markdown_to_tiptap
+from app.models.tiptap import code_language, markdown_to_tiptap, parse_markdown
 
 logger = logging.getLogger(__name__)
 
 _FENCE_LINE = re.compile(r"^\s*(```|~~~)")
 _EXTERNAL_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
-_parser = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 
 
 class ValidationGate:
@@ -55,7 +52,7 @@ def _check_code_blocks(markdown: str, min_code_blocks: int) -> list[str]:
     lines = markdown.split("\n")
     if sum(1 for line in lines if _FENCE_LINE.match(line)) % 2:
         errors.append("코드 펜스의 열림·닫힘 짝이 맞지 않는다")
-    fences = [token for token in _parser.parse(markdown) if token.type == "fence"]
+    fences = [token for token in parse_markdown(markdown) if token.type == "fence"]
     if len(fences) < min_code_blocks:
         errors.append(f"코드 블록이 {len(fences)}개다. {min_code_blocks}개 이상이어야 한다")
     anchored_lines: set[int] = set()

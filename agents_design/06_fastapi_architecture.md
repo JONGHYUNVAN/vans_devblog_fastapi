@@ -27,25 +27,26 @@
 
 ```
 app/
-├─ main.py                     lifespan: Mongo(async) 연결, 인덱스 보장, PipelineRunner 시작·종료(DB 이름이 없으면 러너를 돌리지 않는다). LLM 클라이언트는 5단계
-├─ dependencies.py             build_pipeline_runner·build_llm_registry·build_publisher·build_round_service·build_draft_decision_service(lifespan·CLI 공용 조립), get_async_database·get_round_service·get_draft_decision_service·get_draft_repository·get_agent_call_repository(라우터), verify_agents_key(AGENTS_INTERNAL_API_KEY, 07 문서 D-44)
+├─ main.py                     lifespan: Mongo(async) 연결, 인덱스 보장, PipelineRunner 시작·종료(DB 이름이 없으면 러너를 돌리지 않는다)
+├─ dependencies.py             build_pipeline_runner·build_llm_registry·build_publisher·build_round_service·build_draft_decision_service·build_pipeline_view_service·build_agent_call_service(lifespan·CLI 공용 조립), open_async_database(CLI 연결), get_async_database·get_round_service·get_draft_decision_service·get_pipeline_view_service(라우터), verify_agents_key(AGENTS_INTERNAL_API_KEY, 07 문서 D-44). 라우터·CLI 에 리포지토리를 직접 주지 않는다
 ├─ core/
-│  ├─ config.py                Settings: 벤더 키, 슬롯 바인딩, 반복·예산 상수, 승인 토글, 발행 계정
+│  ├─ config.py                Settings: 벤더 키, 슬롯 바인딩(원문 dict. 검증은 RoundService.create_round. core 는 models 를 import 하지 않는다), 반복·예산 상수, 승인 토글, 발행 계정
 │  └─ exceptions.py            AppError + InvalidTransitionError(409), ConcurrentUpdateError(409), BudgetExceededError, LLMTransportError, LLMOutputError, LLMRetriesExhaustedError, PublishFailedError, PublishUncertainError
 ├─ routers/
 │  └─ agent_rounds.py          내부 API (X-Internal-Key)
 ├─ schemas/
-│  └─ agent_pipeline.py        RoundCreate, RoundPublic, DraftPublic, DraftHistory, EscalationDecision, DraftApproval, DraftRetry, DraftDiscard, …
+│  └─ agent_pipeline.py        RoundCreate, RoundPublic, DraftPublic, DraftHistory, EscalationDecision, DraftApproval, DraftRetry, DraftDiscard, RoundProgress(CLI), … 필드 타입으로만 models 를 쓴다. 변환은 services/pipeline_views.py
 ├─ services/
 │  ├─ round.py                 RoundService: 라운드 생성(create_round: 바인딩·페르소나·렌즈 매트릭스 검증, round_id 는 uuid, round_seq 는 기존 라운드 수 + 1)·글 문서 생성(build_draft)·종결(close_if_complete)·중단(abort_round)·정리(reconcile)
 │  ├─ topic_selection.py       TopicSelectionService.drive(round_id): 제안 수집, 중복 판별, 배정, 확정 (Phase 1). 한 걸음(제안·배정·확정)마다 라운드를 저장한다
 │  ├─ draft_pipeline.py        DraftPipelineService.drive(draft_id): 글 하나를 사람 대기나 종결까지 진행. 발행은 DraftPublisher 계약(PublishingService 가 구현)
 │  ├─ draft_decision.py        DraftDecisionService: 사람 결정(승인, 격리 해소, 재개, 폐기). 충돌이면 다시 읽어 재적용, 종결이면 레지스트리·close_if_complete 따라 쓰기
 │  ├─ validation.py            ValidationGate(min_chars, max_chars, min_code_blocks).validate(draft) -> list[str]: 결정론적 검사 (LLM 없음). Tiptap 변환 가능 여부 포함. 전이는 호출자가 한다
-│  ├─ evaluation.py            EvaluationEngine: derived_verdict, evaluate 규칙 (순수 함수)
+│  ├─ evaluation.py            derive_verdict, evaluate 규칙 (순수 함수)
 │  ├─ publishing.py            PublishingService(DraftPublisher 구현): 결과 불명 판정, 백오프, build_peer_review_note(요약 노트, 순수 함수), build_payload(Tiptap 변환·CreatePostDto 매핑), 의도 저장, Publisher 호출, 결과 반영과 레지스트리 PUBLISHED
 │  ├─ runner.py                PipelineRunner: 코루틴 표(running), 주기 스캔, 기동·종료, 코루틴 경계의 INTERNAL_ERROR 처리
 │  ├─ metrics.py               compute_metrics(drafts, calls) -> PipelineMetrics: 07 문서 4절 지표 (순수 함수)
+│  ├─ pipeline_views.py        PipelineViewService: 읽기 전용(라운드 목록·상세·진행 상태, 글 이력, 격리 요약, 영수증, 지표)과 엔티티 → 응답 변환 함수(build_round_public·build_draft_public·build_escalation_summary·…). 라우터·CLI 는 리포지토리 대신 이것을 부른다
 │  └─ agent_calls.py           AgentCallService.call -> CallResult(output, call_id): 예산 검사, 호출, 재시도, 영수증. replay(call, binding?) -> ReplayResult: 영수증 메시지 재전송(영수증·재시도 없음)
 ├─ agents/                     [프롬프트 자산 계층] 도메인 → 프롬프트 입력, LLM 출력 → 도메인
 │  ├─ personas.py              PersonaProfile 상수 3종, 렌즈 정의
@@ -207,7 +208,7 @@ class DraftPipelineService:
 
 ### `routers/agent_rounds.py`
 
-모두 `Depends(verify_agents_key)`(`X-Internal-Key` = `AGENTS_INTERNAL_API_KEY`, 검색 내부 키와 별개. 07 문서 D-44). 응답은 `schemas/agent_pipeline.py`(`RoundPublic`·`RoundDetail`·`DraftPublic`·`DraftHistory`·`EscalationSummary`·`CallPublic`, 변환 classmethod 포함). 사람 결정은 `DraftDecisionService`가 맡는다. 상태를 바꾸는 요청은 DB만 바꾸고, 진행은 다음 스캔이 이어 간다(최대 `SCAN_INTERVAL_S` 지연). 라운드 생성 입력 오류(바인딩·렌즈 매트릭스·발행 설정 없음)와 결정 값 오류는 400 `InvalidRequestError`, 없는 id는 404.
+모두 `Depends(verify_agents_key)`(`X-Internal-Key` = `AGENTS_INTERNAL_API_KEY`, 검색 내부 키와 별개. 07 문서 D-44). 응답은 `schemas/agent_pipeline.py`(`RoundPublic`·`RoundDetail`·`DraftPublic`·`DraftHistory`·`EscalationSummary`·`CallPublic`)이고 엔티티 → 응답 변환은 `services/pipeline_views.py`가 한다. 읽기 엔드포인트(라운드 목록·상세, 글 이력, 격리 요약, 영수증, 지표)는 `PipelineViewService`만, 사람 결정은 `DraftDecisionService`, 생성·중단은 `RoundService`를 부른다. 라우터는 리포지토리를 받지 않는다(CONVENTIONS 1절). 상태를 바꾸는 요청은 DB만 바꾸고, 진행은 다음 스캔이 이어 간다(최대 `SCAN_INTERVAL_S` 지연). 라운드 생성 입력 오류(바인딩·렌즈 매트릭스·발행 설정 없음)와 결정 값 오류는 400 `InvalidRequestError`, 없는 id는 404.
 
 | 메서드 | 경로 | 동작 |
 |---|---|---|
@@ -232,7 +233,7 @@ class DraftPipelineService:
 |---|---|
 | `agents start-round [--theme] [--wait]` | Post BE 카테고리를 읽어 라운드 생성 후 종료(진행은 러너). `--wait`면 러너가 더 할 일이 없을 때(라운드 종결, 또는 글이 모두 승인 대기·사람 결정 대기·종결. 승인됐거나 토글이 꺼진 `READY_TO_PUBLISH`는 발행 중이라 기다린다)까지 `SCAN_INTERVAL_S` 마다 상태를 찍는다 |
 | `agents run` | 서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 쓰지 않는다 |
-| `agents status <round_id>` | 글 3편 상태·승인 대기 여부·iteration·토큰·`external_post_id` |
+| `agents status <round_id>` | 글 3편 상태·승인 대기 여부·iteration·토큰·`external_post_id`(`PipelineViewService.get_round_progress`, `RoundProgress`) |
 | `agents show <draft_id> [--version N]` | 본문·리뷰·결정 출력 |
 | `agents resolve <draft_id> --decision … [--instruction] [--external-post-id] [--decided-by]` | 격리 해소. `decided_by` 기본은 `cli` |
 | `agents approve <draft_id> [--approved-by]` | 발행 승인 |
@@ -309,6 +310,7 @@ class Settings(BaseSettings):
 | `services/runner.py` | 같은 글에 코루틴이 둘 생기지 않음, 승인 대기·`ESCALATED`·`FAILED` 글은 띄우지 않음, 스캔마다 정리가 `ABORTED` 라운드의 남은 글·레지스트리와 `PUBLISHED`·`REJECTED` 글의 레지스트리를 맞춤, 종료가 발행 호출 중인 글을 끊지 않고 `PUBLISHED` 까지 기다림 |
 | `services/draft_decision.py` | 결정마다 전제 상태 검사와 409, 재승인·토글 꺼짐 승인은 409, 충돌 시 다시 읽어 재적용, 종결 결정 뒤 레지스트리와 `close_if_complete`, 재개의 `token_limit` 검사 |
 | `services/metrics.py` | 순수 함수. fast-track(v1 이 발행본인 글만)·iteration·격리·실패 사유·중재·판정 불일치(슬롯별)·게이트 실패 종류(게이트를 거친 버전만)·`REJECTED_WITH_REASON`·종류별·글별 토큰. 빈 입력은 비율이 `None` |
+| `services/pipeline_views.py` | 라운드 진행 상태(승인 대기·글별 토큰), 격리 요약(diff·미해소·기각·중재), 영수증 필터(둘 다 없으면 400), 없는 id 는 404. 응답 형태는 라우터 golden 이 본다 |
 | `AgentCallService.replay` | 영수증 메시지를 그대로 보내고 새 영수증을 남기지 않음, 바인딩 덮어쓰기, `REVIEW` 영수증의 scope 로 출력 계약 선택 |
 | `services/publishing.py` | `CreatePostDto` 매핑. 외부 호출 후 로컬 반영 전 장애를 재현하면 다시 `drive`해도 호출하지 않고 `PUBLISH_UNCERTAIN`. `PublishFailedError`는 재시도 후 상한에서 `PUBLISH_FAILED`, `PublishUncertainError`는 즉시 `PUBLISH_UNCERTAIN`. `CONFIRM_PUBLISHED`는 호출 없이 `PUBLISHED`, `PUBLISH_AS_IS`·`REVISE`는 카운터·의도를 지움. 로그인 단계 실패는 결과 확정. 요약 노트에 HTML·여러 줄이 든 지적이 있어도 변환 성공. 응답 반영 전에 `REJECTED`이면 `PUBLISHED`로 쓰지 않고 `external_post_id`만 의도에 남긴다 |
 | `agents/parsers.py` | 없는 앵커·빈 체크리스트는 `LLMOutputError`. SPOT_CHECK의 MAJOR는 버리고 로그(그 앵커·렌즈는 검사하지 않음). `item_checks` 누락·중복·입력 외 ID·미해소 빈 note는 오류. 제안 카테고리가 입력 목록에 없음, 제목 100자 초과, 빈 `summary`는 오류 |

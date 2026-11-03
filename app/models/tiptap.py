@@ -26,12 +26,17 @@ _MARK_BY_TOKEN = {"strong": "bold", "em": "italic", "s": "strike"}
 _parser = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 
 
+def parse_markdown(markdown: str) -> list[Token]:
+    """변환기와 게이트(services/validation.py)가 같은 파서·같은 문법으로 본문을 본다."""
+    return _parser.parse(markdown)
+
+
 def markdown_to_tiptap(markdown: str) -> dict[str, Any]:
     """앵커를 지우고 변환한다. HTML·이미지·각주·mermaid·그 밖의 변환표 밖 문법은 ValueError."""
     text = strip_anchors(markdown)
     if _FOOTNOTE_PATTERN.search(text):
         raise ValueError("각주([^n])는 변환하지 않는다")
-    return {"type": "doc", "content": _Converter(_parser.parse(text)).blocks(0, None)}
+    return {"type": "doc", "content": _Converter(parse_markdown(text)).blocks(0, None)}
 
 
 def code_language(info: str) -> str | None:

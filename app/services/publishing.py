@@ -230,6 +230,21 @@ class PublishingService:
             return
 
 
+class UnconfiguredDraftPublisher:
+    """발행 설정(POST_BE_URL 또는 발행 계정)이 비어 있을 때 꽂는 DraftPublisher. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다.
+
+    발행 의도를 저장하기 전에 멈춰야 설정을 고치고 재개했을 때 결과 불명(PUBLISH_UNCERTAIN)으로 격리되지 않는다.
+    """
+
+    async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        raise ValueError(
+            "Post BE publishing is not configured (POST_BE_URL, USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)"
+        )
+
+    async def drain(self) -> None:
+        return None
+
+
 def _final_resolutions(draft: PostDraft) -> dict[str, ItemResolution]:
     """항목마다 마지막 버전의 해소. 중재에서 리뷰어가 맞다고 판정돼 다음 버전에서 수용하면 그 수용이 남는다."""
     final: dict[str, ItemResolution] = {}

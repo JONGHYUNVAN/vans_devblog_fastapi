@@ -6,6 +6,7 @@
 
 import logging
 from collections.abc import Mapping
+from typing import Any
 from uuid import uuid4
 
 from app.agents.personas import get_persona
@@ -51,9 +52,7 @@ class RoundService:
         rounds = [publishing_round for each in statuses for publishing_round in await self._rounds.list_by_status(each)]
         return sorted(rounds, key=lambda publishing_round: publishing_round.created_at, reverse=True)
 
-    async def start_round(
-        self, *, theme_keyword: str | None, slot_bindings: Mapping[AgentSlot, ModelBinding]
-    ) -> PublishingRound:
+    async def start_round(self, *, theme_keyword: str | None, slot_bindings: Mapping[str, Any]) -> PublishingRound:
         """Post BE 활성 카테고리를 읽어 스냅샷을 만들고 라운드를 만든다 (설계 06 문서 3절 라우터 표).
 
         조회 실패(PublishFailedError)나 활성 서브 카테고리가 없으면 라운드를 만들지 않는다.
@@ -69,14 +68,15 @@ class RoundService:
         self,
         *,
         theme_keyword: str | None,
-        slot_bindings: Mapping[AgentSlot, ModelBinding],
+        slot_bindings: Mapping[str, Any],
         categories: list[CategoryOption],
     ) -> PublishingRound:
         """검사(바인딩 3개, 페르소나 존재, 렌즈 매트릭스)를 마친 라운드를 TOPIC_SELECTION 으로 만든다 (설계 03 문서 3절).
 
+        slot_bindings 는 설정 원문(dict)이든 ModelBinding 이든 받아 여기서 검증한다. 틀리면 ValueError(pydantic 오류 포함).
         다른 라운드가 주제 선정 중이면 InvalidTransitionError(409) 이고 문서는 남지 않는다. 카테고리 스냅샷은 호출자가 읽어 넘긴다.
         """
-        bindings = dict(slot_bindings)
+        bindings = {AgentSlot(slot): ModelBinding.model_validate(binding) for slot, binding in slot_bindings.items()}
         if set(bindings) != set(AgentSlot):
             raise ValueError("slot_bindings must bind every slot (A, B, C)")
         primary_lenses = {slot: get_persona(binding.persona_id).primary_lens for slot, binding in bindings.items()}
@@ -132,7 +132,7 @@ class RoundService:
             return False
         return True
 
-    async def abort_round(self, round_id: str, reason: RoundAbortReason = RoundAbortReason.MANUAL) -> None:
+    async def abort_round(self, round_id: str, reason: RoundAbortReason = RoundAbortReason.MANUAL) -> PublishingRound:
         """라운드를 ABORTED 로 먼저 쓰고 글·레지스트리를 정리한다 (설계 04 문서 1절 표). 종결 라운드면 InvalidTransitionError."""
         while True:
             publishing_round = await self._rounds.get(round_id)
@@ -145,6 +145,7 @@ class RoundService:
                 continue  # 코루틴의 저장과 겹쳤다. 다시 읽어 전제(종결 아님)가 맞으면 재적용한다
             break
         await self._clean_up(publishing_round)
+        return publishing_round
 
     async def reconcile(self) -> None:
         """1절 표의 따라 쓰기를 마저 한다. 스캔마다 돈다. 되풀이해도 결과가 같다.
