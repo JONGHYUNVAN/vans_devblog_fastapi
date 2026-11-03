@@ -35,7 +35,9 @@
     "diagnostics": { "orphans": true, "hubs": true },
     "openapi": null,
     "service": "bff",
-    "client_env": {}
+    "client_env": {},
+    "call_sites": ["src/app/**/route.ts"],
+    "route_root": "src/app"
   },
   "kotlin_app": {
     "owner": "JONGHYUNVAN",

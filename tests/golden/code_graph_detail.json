@@ -298,5 +298,6 @@
       }
     ]
   },
-  "outbound_calls": []
+  "outbound_calls": [],
+  "inbound_routes": [{ "file": "src/app/api/posts/route.ts", "http_method": "GET", "path": "/api/posts" }]
 }

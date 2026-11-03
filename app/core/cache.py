@@ -16,6 +16,8 @@ HEALTH_TTL = 1800
 LAST_SYNC_TTL = 60 * 60 * 24 * 30
 KIS_APPROVAL_TTL = 82800  # KIS 접속키 유효기간 24시간보다 1시간 일찍 버린다
 CODE_GRAPH_TTL = 600  # 같은 프로세스의 분석 저장은 캐시를 지운다. CLI 로 저장한 결과는 이 시간 뒤에 보인다
+SERVICE_GRAPH_CACHE_KEY = "code_graph:services"  # 서비스 그래프도 CODE_GRAPH_TTL. 분석 저장이 같이 지운다
+OPENAPI_TTL = 600  # 다른 백엔드의 OpenAPI 문서. 실패도 같은 시간 동안 캐시한다 (code_graph_design G-13)
 
 _MAX_ENTRIES = 1000
 

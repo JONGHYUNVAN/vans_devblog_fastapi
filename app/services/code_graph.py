@@ -15,11 +15,12 @@ from tree_sitter import Node, Parser
 from tree_sitter_language_pack import get_parser
 
 from app.clients.github import GitHubClient, extract_tarball, read_commit_sha
-from app.core.cache import CODE_GRAPH_TTL, cache
+from app.core.cache import CODE_GRAPH_TTL, SERVICE_GRAPH_CACHE_KEY, cache
 from app.core.exceptions import NotFoundError
-from app.models.code_graph import CodeGraph, CodeGraphRepo, SourceFile
+from app.models.code_graph import CodeGraph, CodeGraphRepo, InboundRoute, OutboundCall, SourceFile
 from app.repositories.code_graph import CodeGraphRepository
 from app.schemas.code_graph import CodeGraphAnalysis, CodeGraphPublic, CodeGraphSummary
+from app.services.code_graph_calls import extract_next_routes, extract_python_calls, extract_ts_calls
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ class CodeGraphService:
         # 응답을 보낸 뒤 실행되므로 알릴 곳이 없다. 실패하면 이전 결과를 그대로 두고 로그만 남긴다 (G-09)
         try:
             with extract_tarball(tarball) as root:
-                files, imports = _parse_repo(root, repo_spec.source_roots)
+                parsed = _parse_repo(root, repo_spec)
                 tech_stack = _read_tech_stack(root)
             code_graph = CodeGraph.build(
                 repo=repo,
@@ -166,8 +167,10 @@ class CodeGraphService:
                 analyzed_at=datetime.now(UTC),
                 tech_stack=tech_stack,
                 repo_spec=repo_spec,
-                files=files,
-                imports=imports,
+                files=parsed.files,
+                imports=parsed.imports,
+                outbound_calls=parsed.outbound_calls,
+                inbound_routes=parsed.inbound_routes,
             )
             self._repository.upsert(code_graph)
             self._repository.delete_stale(repo, keep=KEEP_PER_REPO)
@@ -175,13 +178,15 @@ class CodeGraphService:
             logger.warning("코드 그래프 분석 실패 (%s@%s): %s", repo, commit_sha[:7], exc, exc_info=True)
             return
         cache.delete(_cache_key(repo))
+        cache.delete(SERVICE_GRAPH_CACHE_KEY)
         logger.info(
-            "코드 그래프 저장 (%s@%s): 파일 %s, 엣지 %s, 위반 %s",
+            "코드 그래프 저장 (%s@%s): 파일 %s, 엣지 %s, 위반 %s, 호출 지점 %s",
             repo,
             commit_sha[:7],
             len(code_graph.nodes),
             len(code_graph.edges),
             len(code_graph.diagnostics.layer_violations),
+            len(code_graph.outbound_calls),
         )
 
 
@@ -202,15 +207,36 @@ class _ParsedFile:
     is_barrel: bool = False
 
 
-def _parse_repo(root: Path, source_roots: list[str]) -> tuple[list[SourceFile], set[tuple[str, str]]]:
-    """Pass 1 이 파일·심볼·Kotlin 패키지 인덱스를, Pass 2 가 import 를 해석해 내부 엣지를 만든다. 외부 패키지는 버린다."""
+@dataclass
+class _ParsedRepo:
+    files: list[SourceFile]
+    imports: set[tuple[str, str]]
+    outbound_calls: list[OutboundCall]
+    inbound_routes: list[InboundRoute]
+
+
+def _parse_repo(root: Path, repo_spec: CodeGraphRepo) -> _ParsedRepo:
+    """Pass 1 이 파일·심볼·Kotlin 패키지 인덱스와 호출 지점을, Pass 2 가 import 를 해석해 내부 엣지를 만든다.
+
+    외부 패키지는 버린다. 호출 지점·inbound 엔드포인트는 call_sites 에 걸린 파일에서만 뽑는다.
+    """
     parsers: dict[str, Parser] = {}
     parsed = []
-    for path in sorted(_iter_source_paths(root, source_roots)):
+    outbound_calls: list[OutboundCall] = []
+    inbound_routes: list[InboundRoute] = []
+    for path in sorted(_iter_source_paths(root, repo_spec.source_roots)):
         language = _LANGUAGE_BY_SUFFIX[posixpath.splitext(path)[1]]
         if language not in parsers:
             parsers[language] = get_parser(language)
-        parsed.append(_parse_file(path, language, parsers[language].parse((root / path).read_bytes()).root_node))
+        root_node = parsers[language].parse((root / path).read_bytes()).root_node
+        parsed.append(_parse_file(path, language, root_node))
+        if repo_spec.is_call_site(path):
+            if language == "python":
+                outbound_calls += extract_python_calls(path, root_node)
+            elif language in ("typescript", "tsx"):
+                outbound_calls += extract_ts_calls(path, root_node)
+                if repo_spec.route_root is not None:
+                    inbound_routes += extract_next_routes(path, root_node, repo_spec.route_root)
 
     paths = {each.path for each in parsed}
     symbol_files: dict[str, str] = {}  # Kotlin 패키지.심볼 → 파일
@@ -231,7 +257,7 @@ def _parse_repo(root: Path, source_roots: list[str]) -> tuple[list[SourceFile], 
                 targets = _resolve_ts(each.path, spec, paths)
             imports.update((each.path, target) for target in targets if target != each.path)
     files = [SourceFile(path=each.path, symbols=each.symbols, is_barrel=each.is_barrel) for each in parsed]
-    return files, imports
+    return _ParsedRepo(files=files, imports=imports, outbound_calls=outbound_calls, inbound_routes=inbound_routes)
 
 
 def _iter_source_paths(root: Path, source_roots: list[str]) -> Iterator[str]:

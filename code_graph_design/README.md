@@ -22,10 +22,10 @@
   이 앱은 CONVENTIONS 1절 표에 없는 import 가 6건이고 전부 그 절이 선언한 예외다(`routers/agent_rounds.py → models/enums.py`, `schemas/agent_pipeline.py → models/{enums, model_binding, post_draft, publishing_round, topic}.py`). `cli/__main__.py → models/enums.py` 도 같은 예외다(PoC 는 `cli/` 를 훑지 않았다). 그 밖의 역행은 없다. 분석이 1~2초라 큐·워커는 두지 않는다.
 - 실제 디렉터리: 이 앱 `app/{routers, services, repositories, clients, models, schemas, agents, core}` + 루트 `cli/`. vans_story `src/{app, components, constants, hooks, lib, messages, store, types}`(`features`·`services`·`utils` 는 없다. 그쪽 CONVENTIONS 1장이 `utils/` 등을 만들지 않는다고 정했다. `src/middleware.ts` 도 없다). vans_story_be_post `src/{auth, categories, common, config, posts, search-service, swagger, user-service}`. vans_story_be `src/main/kotlin/blog/vans_story_be/{config, domain, global}`(빌드 파일은 `build.gradle`, kts 아님).
 - 레이어 간 import 전체 표(PoC): vans_story 는 `components → app` 17, `lib → store` 2, `lib → components` 1, `constants → lib` 1 이 방향이 이상하고 나머지는 위에서 아래로만 간다. vans_story_be_post 는 `posts → {auth 7, common 5, categories 4, user-service 3, search-service 3}`, `categories → {auth 5, common 1}` 이고 역행이 없다. vans_story_be 는 `config → {domain 7, global 1}`, `domain → global 9` 다.
-- 서비스 간 호출은 코드에 경로가 문자열로 있다. vans_story BFF `src/app/api/**/route.ts` 27개가 환경변수 6개(POST_API_URL 7건, AUTH_API_URL 5, SEARCH_API_URL 3, DJANGO_API_URL 2, IMAGE_API_URL 1, AI_API_URL 1)로 상류를 가리킨다. 환경변수마다 기본값에 경로 접두가 붙어 있다: POST_API_URL `/api/v1`, AUTH_API_URL `/api`, IMAGE_API_URL `/api`, SEARCH_API_URL·DJANGO_API_URL 없음(`src/constants/apiConfig.ts`, 각 route.ts 기본값). SEARCH_API_URL·DJANGO_API_URL 만 이 앱이고, AI_API_URL(AI 채팅, 기본 :3003)·IMAGE_API_URL(이미지, 기본 :3002)은 네 저장소 밖의 서비스다.
-- BFF 가 상류 URL 을 만드는 패턴은 세 가지다: ① `process.env.X` 를 `const` 에 받아 템플릿 리터럴에서 쓴다(`search/route.ts` 의 `searchApiUrl`), ② 인자 없는 함수로 감싼다(`stocks/kis/**` 의 `djangoApiUrl()`), ③ `lib/api/apiProxy.ts` 의 `proxyGet/proxyPost/proxyPatch/proxyDelete({baseUrl, path})` 헬퍼에 넘긴다(autocomplete·popular 등). 템플릿 안에 `process.env` 가 직접 들어가는 경우는 없다.
+- 서비스 간 호출은 코드에 경로가 문자열로 있다. vans_story BFF `src/app/api/**/route.ts` 27개가 환경변수 6개(POST_API_URL 7건, AUTH_API_URL 5, SEARCH_API_URL 3, DJANGO_API_URL 2, IMAGE_API_URL 1, AI_API_URL 1)로 상류를 가리킨다. 환경변수마다 값에 경로 접두가 붙어 있다: POST_API_URL `/api/v1`, AUTH_API_URL `/api/v1`(route.ts 가 `${AUTH_API_URL}/auth/login` 으로 부르고 Spring 경로는 `/api/v1/auth/login` 이다. `src/constants/apiConfig.ts` 의 기본값 `http://localhost:3000/api` 는 낡았고 로컬 `.env` 는 `/api/v1` 이다), IMAGE_API_URL `/api`, SEARCH_API_URL·DJANGO_API_URL 없음. route.ts 밖에서도 `src/lib/posts/clientActions.ts`·`src/app/sitemap.ts` 가 POST_API_URL 로 NestJS 를 부른다. SEARCH_API_URL·DJANGO_API_URL 만 이 앱이고, AI_API_URL(AI 채팅, 기본 :3003)·IMAGE_API_URL(이미지, 기본 :3002)은 네 저장소 밖의 서비스다.
+- BFF 가 상류 URL 을 만드는 패턴은 네 가지다: ① `process.env.X` 를 `const` 에 받아 템플릿 리터럴에서 쓴다(`search/route.ts` 의 `searchApiUrl`. 템플릿을 다시 `const fullUrl` 에 담거나 삼항식·`new URL(...)` 을 거쳐 `fetch` 에 넘기기도 한다), ② 인자 없는 함수로 감싼다(`stocks/kis/**` 의 `djangoApiUrl()`), ③ `lib/api/apiProxy.ts` 의 `proxyGet/proxyPost/proxyPatch/proxyDelete(request, {baseUrl, path})` 헬퍼에 넘긴다(autocomplete·popular·categories), ④ 템플릿 안에 `process.env.X` 를 직접 쓴다(`auth/**` 5개. 2026-11-03 B 구현 때 확인했다. 처음 기획의 "없다" 는 틀렸다). NestJS 는 `configService.get('X')` 를 `const` 에, `configService.getOrThrow('X')` 를 `this.필드` 에 받는다.
 - 백엔드 간: NestJS → 이 앱 `POST /api/internal/search/index/`·`DELETE .../{post_id}/`(`src/search-service/search-service.client.ts`. `posts.service.ts` 가 생성·수정·삭제 때 fire-and-forget 으로 부른다), NestJS → Spring `GET /api/v1/users/email/{email}`(`src/user-service/user-service.client.ts`), 이 앱 → NestJS `GET /api/v1/categories`·`POST /api/v1/posts`, 이 앱 → Spring `POST /api/v1/auth/login`(`clients/publisher/post_be.py`). Spring 은 밖으로 부르지 않는다.
-- 세 백엔드 모두 OpenAPI 를 낸다: 이 앱 `/openapi.json`(같은 프로세스라 `app.openapi()` 로 받을 수 있다), NestJS `GET /api/posts/swagger-json`(`SwaggerModule.setup("api/posts/swagger")`, spec 테스트로 확인), Spring springdoc 3.0.2 기본 `/v3/api-docs`. 호스트는 이 앱 `Settings` 의 `post_be_url`·`user_service_url` 을 그대로 쓴다. 코드에 적힌 운영 호스트는 `https://vansdevblog.online` 하나뿐이라 백엔드 호스트를 여기 하드코딩하지 않는다.
+- 세 백엔드 모두 OpenAPI 를 낸다: 이 앱 `/openapi.json`(같은 프로세스라 `app.openapi()` 로 받을 수 있다), NestJS `GET /api/posts/swagger-json`(`SwaggerModule.setup("api/posts/swagger")`. 단 `SwaggerAuthMiddleware` 가 `/api/posts/swagger` 로 시작하는 모든 경로를 비밀번호 세션 뒤에 둬 운영에서 401 이다(2026-11-03 확인). `POST /api/posts/swagger/auth {password}` 로 받은 세션 쿠키가 있어야 한다, G-20), Spring springdoc 3.0.2 기본 `/v3/api-docs`. 호스트는 이 앱 `Settings` 의 `post_be_url`·`user_service_url` 을 그대로 쓴다. 코드에 적힌 운영 호스트는 `https://vansdevblog.online` 하나뿐이라 백엔드 호스트를 여기 하드코딩하지 않는다.
 - vans_story 에는 mermaid 12 와 `MermaidDiagram` 컴포넌트가 있다. 뷰어는 서버가 만든 mermaid 텍스트로 시작한다.
 
 ## 결정
@@ -50,10 +50,14 @@
 | G-16 | 순환 대표 경로는 SCC 의 엣지를 정렬해 새로 만든 그래프에서 가장 작은 경로를 `source` 로 `find_cycle` 한다 | `G.subgraph(...)` 뷰는 노드·이웃을 set 순서로 돌 수 있어 해시 시드마다 경로가 달랐다(A 구현 때 확인). 같은 commit 은 같은 결과여야 한다 |
 | G-17 | `CodeGraph` 문서에 분석 때의 `allowed_edges` 를 같이 저장한다. API 응답에는 넣지 않는다 | context 의 Declared Exceptions 가 위반 목록과 같은 시점의 설정을 보인다. 같은 commit 은 다시 분석하지 않아(G-09) 설정만 바꾸면 둘이 어긋난다 |
 | G-18 | `tech_stack` 은 `이름 버전` 문자열. `package.json` 은 `dependencies` 만(devDependencies 제외), `build.gradle` 은 `plugins` 의 `id`·`version` 과 `test*` 가 아닌 구성의 좌표, Python 은 `pyproject.toml` `[project].dependencies` 와 `requirements.txt`(`-r` 등 옵션 줄 제외, extras 뗌) | 런타임 스택만 보인다. Spring Boot·Kotlin 버전은 Gradle plugins 에만 있다 |
+| G-19 | 호출 지점을 찾을 파일(`call_sites`, glob)과 Next.js App Router 루트(`route_root`)는 저장소마다 선언한다. 그 파일에서만 기준 URL(환경변수) 뒤에 경로를 붙인 문자열을 찾는다. TS 메서드는 그 URL 을 받는 호출에서 읽고(`fetch` 는 옵션 `method`, 기본 GET. 그 밖은 함수 이름 끝의 get·post 등), 호출을 못 찾은 URL(로그 문자열 등)은 버린다. Python 은 `f"{self._x_url}/..."` 를 `client.get/post` 에 넘긴 것만 보고 환경변수는 필드 이름을 대문자로 바꾼 것이다 | 저장소 전체를 훑으면 KIS·LLM 벤더 클라이언트의 `self._base_url` 같은 비환경변수 URL 이 외부 노드로 섞인다. G-05 와 같이 추론보다 선언 |
+| G-20 | NestJS OpenAPI 는 `openapi.login`(`path`, `password_setting`)이 있으면 그 경로로 비밀번호를 POST 하고 같은 클라이언트(쿠키)로 문서를 받는다. 비밀번호는 `POST_BE_SWAGGER_PASSWORD`(그쪽 `SWAGGER_ADMIN_PASSWORD` 와 같은 값). 비어 있으면 받지 않는다 | swagger-json 이 세션 게이트 뒤에 있다. 그쪽 보안 설정은 바꾸지 않는다. 없으면 G-08 대로 스키마만 빈다 |
+| G-21 | 흐름은 `models/service_graph.FLOWS` 고정 표(아래 4절)이고 hop 은 (호출자 서비스, 대상 서비스, 메서드, 경로) 다. hop 의 `verified` 는 호출자 서비스 코드에서 그 엔드포인트로 가는 호출 지점을 찾았다는 뜻이다. 엔드포인트 → 그 안에서 부르는 클라이언트(NestJS 컨트롤러 → `SearchServiceClient`)는 잇지 않는다 | DI 라 import 그래프로는 어느 엔드포인트가 어느 클라이언트를 부르는지 모른다(G-06 과 같은 이유) |
+| G-22 | 엣지 출발은 호출 지점이 Next.js route 핸들러(`GET`·`POST` 함수)면 그 inbound 엔드포인트, 아니면 코드 노드(`서비스:파일#심볼`)다. 엣지 상태는 matched(대상 OpenAPI·route 에 있다)·missing(없다)·unknown(대상 문서를 못 받았다)·external(`client_env` 에 없는 환경변수) 넷이고, (출발, 대상, 파일, 심볼)이 같은 호출은 엣지 하나다 | missing 이 죽은 호출·접두 오류를 드러낸다. `/posts` 와 `/posts?${query}` 가 두 줄로 보이지 않게 |
 
 ## 저장소 설정 (`CODE_GRAPH_REPOS`)
 
-전문은 [repos.example.json](repos.example.json). 저장소 키 → `{owner, name, ref, source_roots, layers[{id, path, may_import[]}], allowed_edges[{source, target}], entry_points(glob), diagnostics{orphans, hubs}, openapi, service, client_env{환경변수: 경로 접두}}`.
+전문은 [repos.example.json](repos.example.json). 저장소 키 → `{owner, name, ref, source_roots, layers[{id, path, may_import[]}], allowed_edges[{source, target}], entry_points(glob), diagnostics{orphans, hubs}, service, openapi, client_env{환경변수: 경로 접두}, call_sites(glob), route_root}`. `service` 가 비면 저장소 키를 서비스 이름으로 쓴다.
 
 - `layers[].path` 는 저장소 루트 기준 디렉터리 접두다. `may_import` 는 그 레이어가 import 해도 되는 레이어 id 목록이고 같은 레이어 안은 항상 허용이다. 위반 = `source.layer ≠ root`, `target.layer ≠ root`, `target.layer ∉ may_import(source.layer)`, `(source, target) ∉ allowed_edges`.
 - 이 앱: CONVENTIONS 1절 표 그대로. `routers`·`cli → services, schemas, core`, `services → repositories, models, schemas, agents, clients, core`, `agents → models, core`, `repositories → models, clients, core`, `models`·`schemas`·`clients → core`, `core → 없음`. `allowed_edges` 는 위 예외 7건.
@@ -61,23 +65,27 @@
 - vans_story_be_post(제안, G-15): `posts → categories, auth, common, config, search-service, user-service`, `categories → auth, common, config`, `auth`·`search-service`·`user-service`·`swagger → common, config`, `common → config`, `config → 없음`. PoC 기준 위반 0.
 - vans_story_be: `config → domain, global`, `domain → global`, `global → 없음`. PoC 기준 위반 0.
 - 엔트리포인트(orphan 제외): 이 앱 `app/main.py`·`app/dependencies.py`·`cli/__main__.py`. vans_story `src/app/**/{page,layout,loading,error,not-found,template}.tsx`·`src/app/**/route.ts`·`src/app/{robots,sitemap}.ts`. NestJS `src/main.ts`·`src/**/*.module.ts`. Spring `**/VansStoryBeApplication.kt`. Python `__init__.py` 와 TS 배럴(`index.ts(x)` 중 `export ... from` 만 있는 파일)도 orphan 에서 뺀다.
-- `openapi`: 이 앱 `"self"`, NestJS `{"base_setting": "post_be_url", "path": "/api/posts/swagger-json"}`, Spring `{"base_setting": "user_service_url", "path": "/v3/api-docs"}`, vans_story `null`.
+- `openapi`: 이 앱 `"self"`, NestJS `{"base_setting": "post_be_url", "path": "/api/posts/swagger-json", "login": {"path": "/api/posts/swagger/auth", "password_setting": "post_be_swagger_password"}}`(G-20), Spring `{"base_setting": "user_service_url", "path": "/v3/api-docs"}`, vans_story `null`(엔드포인트는 route.ts 에서).
+- `client_env`(그 서비스를 가리키는 환경변수 → 값에 붙은 경로 접두. 다른 저장소의 호출을 이 서비스로 잇는다): 이 앱 `SEARCH_API_URL`·`DJANGO_API_URL`(BFF)·`SEARCH_SERVICE_URL`(NestJS) 모두 `""`, NestJS `POST_API_URL: "/api/v1"`(BFF)·`POST_BE_URL: ""`(이 앱), Spring `AUTH_API_URL: "/api/v1"`(BFF)·`USER_SERVICE_URL: ""`(NestJS·이 앱).
+- `call_sites`(G-19): 이 앱 `app/clients/publisher/*.py`, vans_story `src/app/**/route.ts`·`src/app/sitemap.ts`·`src/lib/**/*.ts`(`route_root: "src/app"`), NestJS `src/**/*.client.ts`, Spring 없음(밖으로 부르지 않는다).
 - `client_env` 에 없는 환경변수(AI_API_URL, IMAGE_API_URL)는 서비스 그래프에서 환경변수 이름을 가진 외부 노드로 그린다.
-- 검증은 `services/code_graph.py` 가 `models/code_graph.py` 의 `CodeGraphRepo` 로 저장소 하나씩 한다. A 단계는 `openapi`·`service`·`client_env` 를 읽지 않는다(B). `CODE_GRAPH_REPOS` 를 빈 값으로 두면 JSON 이 아니라 기동이 실패하므로 끌 때는 `{}` 다.
+- 검증은 `services/code_graph.py` 가 `models/code_graph.py` 의 `CodeGraphRepo` 로 저장소 하나씩 한다. `openapi`·`client_env` 는 서비스 그래프 조회 때, `call_sites`·`route_root` 는 분석 때 읽는다(같은 commit 은 다시 분석하지 않으므로 `call_sites` 를 바꾸면 새 commit 부터 반영된다, G-09). `CODE_GRAPH_REPOS` 를 빈 값으로 두면 JSON 이 아니라 기동이 실패하므로 끌 때는 `{}` 다.
 
 ## 코드 배치 (기존 계층, 새 폴더 없음)
 
 | 파일 | 역할 |
 |---|---|
 | `clients/github.py` | tarball 받기(타임아웃·크기 상한), pax `comment` 에서 SHA, 임시 디렉터리에 풀기·삭제 |
-| `clients/openapi.py` | NestJS·Spring 의 OpenAPI 문서 받기 (B) |
-| `models/code_graph.py` | `CodeGraph`(repo, commit_sha, analyzed_at, tech_stack, layers, allowed_edges(G-17), nodes, edges, diagnostics, outbound_calls)와 노드·엣지·진단 값 객체, 저장소 설정 `CodeGraphRepo`. I/O 없는 계산(레이어 위반 판정, 순환, orphan, hub, context 마크다운) |
+| `clients/openapi.py` | NestJS·Spring 의 OpenAPI 문서 받기. 세션 로그인(G-20) |
+| `models/code_graph.py` | `CodeGraph`(repo, commit_sha, analyzed_at, tech_stack, layers, allowed_edges(G-17), nodes, edges, diagnostics, outbound_calls, inbound_routes)와 노드·엣지·진단 값 객체, 저장소 설정 `CodeGraphRepo`. I/O 없는 계산(레이어 위반 판정, 순환, orphan, hub, context 마크다운) |
 | `repositories/code_graph.py` | `code_graphs` 컬렉션 upsert·최신 조회·보관 정리 |
 | `services/code_graph.py` | 분석 유스케이스(G-11), 파싱(언어별 정의·import 추출, 2-pass 경로 해석) → DiGraph → 진단 → 엔티티 |
-| `services/service_graph.py` | 저장된 `outbound_calls` + OpenAPI 매칭 → 서비스 그래프·흐름·mermaid (B) |
+| `services/code_graph_calls.py` | tree-sitter 트리에서 호출 지점(`outbound_calls`)·Next.js inbound 엔드포인트 뽑기. `services/code_graph.py` 의 Pass 1 이 `call_sites` 파일마다 부른다 |
+| `models/service_graph.py` | `ServiceGraph.build`(호출 지점 + OpenAPI → 노드·엣지), 흐름 표 `FLOWS`, `trace`(hop·mermaid), `normalize_path`. I/O 없음 |
+| `services/service_graph.py` | 최신 `CodeGraph` 들과 OpenAPI(캐시)를 모아 `ServiceGraph` 를 만들고 응답 스키마로 바꾼다 |
 | `schemas/code_graph.py` | 응답 스키마 |
 | `routers/code_graph.py` | 아래 API |
-| `cli/__main__.py` | `code-graph analyze <repo>`, `code-graph context <repo>` 추가 |
+| `cli/__main__.py` | `code-graph analyze <repo>`, `code-graph context <repo>`, `code-graph flow <flow> [--mermaid]` |
 | `tests/` | 같은 구조. 파서 테스트는 `tests/golden/code_graph/` 에 작은 소스 트리(python_app·ts_app·kotlin_app)와 설정(`repos.json`)을 두고 기대 그래프(`{트리}.json`)와 비교. 이 트리는 ruff 대상에서 뺀다. 실제 tarball 로 A 완료 기준을 보는 `tests/e2e/test_code_graph.py` |
 
 ## 파싱 규칙 (`services/code_graph.py`)
@@ -131,13 +139,15 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 
 ## 서비스 그래프 (`services/service_graph.py`, B)
 
-1. 호출 지점 추출(분석 때, `outbound_calls[{caller_file, caller_symbol, env_var, http_method, raw_path}]`):
-   - vans_story `src/app/api/**/route.ts`: 파일이 export 하는 `GET`·`POST`·`PUT`·`PATCH`·`DELETE` 함수를 inbound 엔드포인트(`/api/...`, 파일 경로에서)로 등록한다. 상류는 세 패턴을 모두 본다. ① `process.env.X` 를 받은 `const`·② 인자 없는 함수를 한 단계 따라가 템플릿 리터럴 `${alias}{path}` 에서 `env_var`·`raw_path` 를 뽑고 `fetch` 옵션 `method`(기본 GET). ③ `proxyGet/proxyPost/proxyPatch/proxyDelete({baseUrl: process.env.X || ..., path: ...})` 는 객체 리터럴에서 뽑고 메서드는 헬퍼 이름이다.
-   - vans_story_be_post `src/**/*-service.client.ts`: `fetch`·`HttpService` 호출의 경로 문자열과 메서드.
-   - 이 앱 `app/clients/publisher/post_be.py`: `client.get/post(f"{self._x_url}/path")` 의 경로와 메서드.
-2. 정규화: `raw_path` 의 `${...}`·`{...}` 를 `{}` 로, 끝 슬래시를 떼고 비교 키를 만든다. `env_var` 를 `client_env` 에서 찾아 대상 저장소와 **경로 접두**를 얻고(`POST_API_URL` 은 `/api/v1`), 접두 + 비교 키를 OpenAPI `paths`(같은 방식으로 `{param}` → `{}`)와 맞춘다.
-3. 스키마: `requestBody.content["application/json"].schema` 와 `responses["200"|"201"|"202"].content["application/json"].schema` 의 `$ref` 마지막 이름. `type: array` 면 `items.$ref` 를 본다(이 앱의 목록 응답).
-4. `GET flows/{flow}/`:
+1. 호출 지점 추출(분석 때, `call_sites` 파일만, G-19. `outbound_calls[{caller_file, caller_symbol, env_var, http_method, raw_path}]`, `inbound_routes[{file, http_method, path}]`):
+   - `route_root` 아래 `route.ts`: export 하는 `GET`·`POST`·`PUT`·`PATCH`·`DELETE`(함수 선언 또는 `export const`)를 inbound 엔드포인트로 등록한다. URL 은 파일 경로에서 만든다(`(group)` 디렉터리는 빼고 `[id]`·`[...slug]` 는 `{id}`·`{slug}`).
+   - TS 기준 URL: `process.env.X`·`configService.get(OrThrow)('X')`(그리고 그 `|| 기본값`), 그것을 받은 `const`(감싼 함수 스코프)·인자 없는 화살표 함수(`이름()`)·`this.필드`. 템플릿 리터럴의 첫 치환이 기준 URL 이면 나머지가 `raw_path` 다(위 ①②④). `{baseUrl: 기준, path: '...'}` 객체 리터럴은 `path` 가 `raw_path` 다(③. 헬퍼의 몇 번째 인자든 된다).
+   - 메서드: 템플릿은 그것을 첫 인자로 받는 호출에서 읽는다(삼항식·괄호·`await`·`new URL(...)` 을 지나고, `const` 에 담겼으면 같은 스코프에서 그 이름·`이름.toString()` 을 첫 인자로 받는 호출). `fetch` 는 옵션 `method`(기본 GET), 그 밖은 함수 이름 끝(`get`, `proxyPost`, `basicGet`). 호출을 못 찾으면 버린다.
+   - Python: `client.get/post/...(f"{self._x_url}/path")`. 환경변수는 `X_URL`(pydantic-settings 필드 이름 규칙).
+   - `caller_symbol` 은 감싼 함수(메서드는 `클래스.메서드`, const 화살표 함수는 그 이름)다.
+2. 정규화(`normalize_path`): 쿼리·조각을 떼고 `${...}`·`{...}` 를 `{}` 로, 겹 슬래시를 하나로, 끝 슬래시를 뗀다. `env_var` 를 모든 저장소의 `client_env` 에서 찾아 대상 서비스와 **경로 접두**를 얻고(`POST_API_URL` 은 `/api/v1`), 접두 + `raw_path` 의 비교 키를 대상의 엔드포인트(OpenAPI `paths`, OpenAPI 가 없는 BFF 는 inbound route)와 (메서드, 비교 키)로 맞춘다. 상태는 G-22.
+3. 스키마: `requestBody.content` 와 `responses["200"|"201"|"202"].content` 의 `application/json`(없으면 첫 미디어 타입. springdoc 은 `*/*` 다) 스키마 `$ref` 마지막 이름(`allOf` 하나짜리도). `type: array` 면 `items.$ref` 를 `이름[]` 로 적는다(이 앱의 목록 응답).
+4. `GET flows/{flow}/`(G-21):
 
 | flow | 시작 | hop |
 |---|---|---|
@@ -145,6 +155,8 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 | `publish` | 이 앱 `app/clients/publisher/post_be.py` | 에이전트 발행 → Spring `POST /api/v1/auth/login` → NestJS `POST /api/v1/posts` → 이 앱 `POST /api/internal/search/index/` |
 | `posts` | vans_story `src/app/api/posts/route.ts` | 글 목록·작성 → BFF `/api/posts` → NestJS `/api/v1/posts` → Spring `GET /api/v1/users/email/{}` |
 | `auth` | vans_story `src/app/api/auth/**/route.ts` | 로그인 → BFF `/api/auth/*` → Spring `/api/v1/auth/*` |
+
+   응답은 `{flow, title, hops[{caller, callee, http_method, path, request_schema, response_schema, call_sites[], verified}], mermaid}`. `path` 는 맞춘 엔드포인트의 경로 템플릿(OpenAPI 를 못 받았으면 비교 키), `call_sites` 는 `저장소:파일#심볼`(browser 가 부르는 hop 은 route 파일)이다. mermaid 는 `sequenceDiagram` 이고 participant 는 `서비스 (저장소)`, 메시지는 `메서드 경로 (요청 → 응답)`, 호출 지점을 못 찾은 hop 은 점선 `-->>` 이다.
 
 ## 저장과 장애 격리 (`repositories/code_graph.py`, `clients/github.py`)
 
@@ -162,12 +174,14 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 | `GET /` | 공개 | 분석 결과가 있는 저장소만, 설정 순서의 배열 `[{repo, commit_sha, analyzed_at, violation_count, cycle_count, orphan_count, hub_count}]` |
 | `GET {repo}/` | 공개, 캐시 10분(`CODE_GRAPH_TTL`. 같은 프로세스의 저장이 지운다) | 전체 그래프 + 진단(아래 구조) |
 | `GET {repo}/context/` | 공개 | `text/markdown`(위 템플릿). CLAUDE.md 갱신·프롬프트 주입용 |
-| `GET services/` | 공개, 캐시 | 서비스 그래프: 노드 = 엔드포인트·외부 서비스, 엣지 = 호출 (B) |
-| `GET flows/{flow}/` | 공개 | 한 e2e 경로와 hop 마다의 요청·응답 스키마, mermaid sequenceDiagram 텍스트 (B) |
+| `GET services/` | 공개, 캐시 10분(분석 저장이 지운다). OpenAPI 는 실패까지 `OPENAPI_TTL` 10분 | 서비스 그래프 `{nodes[{id, kind: endpoint/code/external, service, repo, http_method, path, file, symbol, request_schema, response_schema}], edges[{source, target, caller_repo, caller_file, caller_symbol, env_var, http_method, path, status}], openapi{서비스: ok/unavailable/none}, repos{서비스: 저장소}}`. 엔드포인트 노드는 OpenAPI 의 모든 경로와 BFF route 전부다 |
+| `GET flows/{flow}/` | 공개, 서비스 그래프 캐시를 쓴다 | 위 4절. 없는 흐름은 404 |
 
 `GET {repo}/` 구조: `repo, commit_sha, analyzed_at, tech_stack[], layers[{id, may_import[], file_count}], diagnostics{layer_violations[{source, target, from_layer, to_layer}], cycles[[path, ...]], orphan_files[], hub_files[{path, in_degree, out_degree, symbol_count}]}, graph{nodes[{id, layer, symbols[], in_degree, out_degree}], edges[{source, target, status: valid | violation}]}, outbound_calls[...]`. 영향 반경(ancestors·descendants, N-hop)은 프론트가 이 JSON 으로 계산한다.
 
 ## 로드맵
+
+B 단계 코드도 2026-11-03 에 들어갔다. `tests/e2e/test_code_graph.py::test_search_and_publish_flows_match_roadmap_b` 가 실제 tarball 네 개로 search·publish 의 모든 hop 에서 호출 지점을 찾고(verified), 이 앱 hop 의 스키마(`GET /api/v1/search/posts/` → `SearchResult`, `POST /api/internal/search/index/` `SearchIndexPayload → IndexingResult`)를 확인했다. NestJS·Spring hop 의 스키마는 `.env` 에 `POST_BE_URL`·`POST_BE_SWAGGER_PASSWORD`·`USER_SERVICE_URL` 을 넣고 같은 e2e 또는 `code-graph flow publish` 로 사용자가 확인한다(이 기기 `.env` 에 없다). 운영 반영은 `CODE_GRAPH_REPOS` 를 새 `repos.example.json` 으로 바꾸고 네 저장소를 다시 분석해야 한다(B 이전에 저장한 문서는 `outbound_calls` 가 비어 있다).
 
 A 단계 코드는 2026-11-03 에 들어갔다. `tests/e2e/test_code_graph.py` 가 실제 tarball 로 위반 수(이 앱 0, vans_story 21: `components → app` 17·`lib → store` 2·`lib → components` 1·`constants → lib` 1, 나머지 둘 0)를 확인했다. Mongo 저장(`code-graph analyze`)은 Atlas 허용 IP 에서 확인한다.
 

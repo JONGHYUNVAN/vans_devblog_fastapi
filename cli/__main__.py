@@ -17,6 +17,7 @@ from app.dependencies import (
     build_pipeline_runner,
     build_pipeline_view_service,
     build_round_service,
+    build_service_graph_service,
     ensure_agent_indexes,
     ensure_code_graph_indexes,
     get_index_setup_service,
@@ -370,6 +371,27 @@ def code_graph_context(repo: str) -> None:
             typer.echo(exc.message, err=True)
             raise typer.Exit(1) from exc
     typer.echo(context, nl=False)
+
+
+@code_graph.command("flow")
+def code_graph_flow(
+    flow: str,
+    mermaid: Annotated[bool, typer.Option("--mermaid", help="mermaid sequenceDiagram 텍스트만 찍는다")] = False,
+) -> None:
+    """저장된 호출 지점과 OpenAPI 로 e2e 흐름(search·publish·posts·auth)을 hop 마다 찍는다."""
+    from app.main import app  # 이 앱의 OpenAPI 는 HTTP 없이 app.openapi 로 받는다 (G-13)
+
+    settings = get_settings()
+    with open_clients(settings) as (_, mongo_client):
+        try:
+            result = build_service_graph_service(mongo_client, settings, self_openapi=app.openapi).get_flow(flow)
+        except NotFoundError as exc:
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(1) from exc
+    if mermaid:
+        typer.echo(result.mermaid, nl=False)
+        return
+    _echo(result.model_dump(mode="json", exclude={"mermaid"}))
 
 
 if __name__ == "__main__":

@@ -28,7 +28,8 @@
     "diagnostics": { "orphans": true, "hubs": true },
     "openapi": "self",
     "service": "fastapi",
-    "client_env": { "SEARCH_API_URL": "", "DJANGO_API_URL": "" }
+    "client_env": { "SEARCH_API_URL": "", "DJANGO_API_URL": "", "SEARCH_SERVICE_URL": "" },
+    "call_sites": ["app/clients/publisher/*.py"]
   },
   "vans_story": {
     "owner": "JONGHYUNVAN",
@@ -59,7 +60,9 @@
     "diagnostics": { "orphans": true, "hubs": true },
     "openapi": null,
     "service": "bff",
-    "client_env": {}
+    "client_env": {},
+    "call_sites": ["src/app/**/route.ts", "src/app/sitemap.ts", "src/lib/**/*.ts"],
+    "route_root": "src/app"
   },
   "vans_story_be_post": {
     "owner": "JONGHYUNVAN",
@@ -79,9 +82,14 @@
     "allowed_edges": [],
     "entry_points": ["src/main.ts", "src/**/*.module.ts"],
     "diagnostics": { "orphans": false, "hubs": false },
-    "openapi": { "base_setting": "post_be_url", "path": "/api/posts/swagger-json" },
+    "openapi": {
+      "base_setting": "post_be_url",
+      "path": "/api/posts/swagger-json",
+      "login": { "path": "/api/posts/swagger/auth", "password_setting": "post_be_swagger_password" }
+    },
     "service": "nestjs",
-    "client_env": { "POST_API_URL": "/api/v1" }
+    "client_env": { "POST_API_URL": "/api/v1", "POST_BE_URL": "" },
+    "call_sites": ["src/**/*.client.ts"]
   },
   "vans_story_be": {
     "owner": "JONGHYUNVAN",
@@ -98,6 +106,6 @@
     "diagnostics": { "orphans": false, "hubs": false },
     "openapi": { "base_setting": "user_service_url", "path": "/v3/api-docs" },
     "service": "spring",
-    "client_env": { "AUTH_API_URL": "/api" }
+    "client_env": { "AUTH_API_URL": "/api/v1", "USER_SERVICE_URL": "" }
   }
 }

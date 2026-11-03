@@ -43,3 +43,45 @@ def test_layer_violations_match_roadmap_a(repo, expected):
     assert code_graph is not None, "분석이 저장되지 않았다(경고 로그 참고)"
     violations = Counter(f"{each.from_layer} -> {each.to_layer}" for each in code_graph.diagnostics.layer_violations)
     assert violations == Counter(expected)
+
+
+def test_search_and_publish_flows_match_roadmap_b():
+    """로드맵 B 완료 기준: search·publish 흐름의 hop 마다 호출 지점과 스키마 이름이 나온다.
+
+    이 앱의 스키마는 app.openapi 로 늘 확인한다. NestJS·Spring 스키마는 .env 에 POST_BE_URL·POST_BE_SWAGGER_PASSWORD·
+    USER_SERVICE_URL 이 있을 때만 확인하고, 없으면 그 hop 은 호출 지점만 본다.
+    """
+    from app.clients.openapi import OpenApiClient
+    from app.core.config import get_settings
+    from app.main import app
+    from app.services.service_graph import ServiceGraphService
+
+    repository = FakeCodeGraphRepository()
+    code_graph_service = CodeGraphService(
+        repository,
+        GitHubClient(timeout_s=60, max_bytes=64 * 1024 * 1024),
+        REPOS,
+        run_in_background=lambda function, *args: function(*args),
+    )
+    for repo in REPOS:
+        code_graph_service.analyze_repo(repo)
+    settings = get_settings()
+
+    def setting_value(name: str) -> str:
+        value = getattr(settings, name, None)
+        return value.get_secret_value() if hasattr(value, "get_secret_value") else value or ""
+
+    # Mongo 대신 방금 분석한 결과를 읽는다
+    service = ServiceGraphService(repository, OpenApiClient(timeout_s=15), REPOS, app.openapi, setting_value)
+
+    openapi = service.get_service_graph().openapi
+    search, publish = service.get_flow("search"), service.get_flow("publish")
+
+    assert all(hop.verified for hop in [*search.hops, *publish.hops]), [*search.hops, *publish.hops]
+    assert (search.hops[1].path, search.hops[1].response_schema) == ("/api/v1/search/posts/", "SearchResult")
+    assert (publish.hops[2].request_schema, publish.hops[2].response_schema) == ("SearchIndexPayload", "IndexingResult")
+    if openapi["spring"] == "ok":
+        assert publish.hops[0].request_schema is not None
+    if openapi["nestjs"] == "ok":
+        assert publish.hops[1].request_schema is not None
+    print(openapi, search.mermaid, publish.mermaid, sep="\n")

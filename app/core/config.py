@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     code_graph_repos: dict[str, Any] = {}
     code_graph_download_timeout_s: int = 30
     code_graph_max_tarball_mb: int = 64
+    code_graph_openapi_timeout_s: int = 10  # 서비스 그래프의 NestJS·Spring OpenAPI 조회 (G-13)
+    # NestJS swagger-json 은 SwaggerAuthMiddleware 비밀번호 세션 뒤에 있다(그쪽 SWAGGER_ADMIN_PASSWORD). 비면 NestJS 스키마만 빈다
+    post_be_swagger_password: SecretStr | None = None
 
     @property
     def elasticsearch_url(self) -> str:

@@ -9,12 +9,13 @@ from fastapi import BackgroundTasks
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import ServiceUnavailableError
-from app.dependencies import get_code_graph_service
+from app.dependencies import get_code_graph_service, get_service_graph_service
 from app.main import app
 from app.services.code_graph import CodeGraphService
+from app.services.service_graph import ServiceGraphService
 from tests.conftest import GOLDEN_DIR, load_golden
 from tests.factories import make_tarball
-from tests.fakes import FakeCodeGraphRepository, FakeGitHubClient
+from tests.fakes import FakeCodeGraphRepository, FakeGitHubClient, FakeOpenApiClient
 
 REPOS = load_golden("code_graph/repos")
 KEY = {"X-Internal-Key": "secret"}
@@ -115,3 +116,43 @@ def test_get_code_graph_context_returns_markdown_matching_golden(client):
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/markdown; charset=utf-8"
     assert response.text == (GOLDEN_DIR / "code_graph_context.md").read_text(encoding="utf-8")
+
+
+def _use_service_graph(repository: FakeCodeGraphRepository) -> None:
+    app.dependency_overrides[get_service_graph_service] = lambda: ServiceGraphService(
+        repository, FakeOpenApiClient(), REPOS, self_openapi=app.openapi, setting_value=lambda name: ""
+    )
+
+
+def test_get_service_graph_returns_nodes_edges_and_openapi_status(client):
+    _use_service_graph(_seeded())
+
+    response = client.get("/api/v1/code-graph/services/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["openapi"] == {"fastapi": "ok", "bff": "none", "spring": "unavailable"}
+    assert body["repos"] == {"fastapi": "python_app", "bff": "ts_app", "spring": "kotlin_app"}
+    assert {"id": "bff GET /api/posts", "kind": "endpoint", "file": "src/app/api/posts/route.ts"}.items() <= next(
+        node for node in body["nodes"] if node["id"] == "bff GET /api/posts"
+    ).items()
+
+
+def test_get_flow_returns_hops_and_mermaid(client):
+    _use_service_graph(_seeded())
+
+    response = client.get("/api/v1/code-graph/flows/search/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["flow"] == "search"
+    assert [(hop["caller"], hop["callee"]) for hop in body["hops"]] == [("browser", "bff"), ("bff", "fastapi")]
+    assert body["mermaid"].startswith("sequenceDiagram\n")
+
+
+def test_get_flow_404_for_unknown_flow(client):
+    _use_service_graph(FakeCodeGraphRepository())
+
+    response = client.get("/api/v1/code-graph/flows/unknown/")
+
+    assert response.status_code == 404

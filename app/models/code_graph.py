@@ -1,6 +1,7 @@
 """코드 그래프 엔티티(code_graphs 컬렉션)와 저장소 설정, I/O 없는 진단 계산·context 마크다운 (code_graph_design/README.md)."""
 
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal, Self
 
@@ -37,8 +38,28 @@ class DiagnosticToggles(BaseModel):
     hubs: bool = False
 
 
+class OpenApiLogin(BaseModel):
+    """OpenAPI 문서 앞의 세션 로그인. NestJS 는 swagger-json 도 SwaggerAuthMiddleware 비밀번호 세션 뒤에 있다."""
+
+    path: str  # base_setting 호스트 기준. 본문 {"password": ...} 로 POST 하고 받은 쿠키로 문서를 받는다
+    password_setting: str  # Settings 필드 이름. 비어 있으면 문서를 받지 않는다(스키마만 빈다, G-08)
+
+
+class OpenApiSource(BaseModel):
+    """다른 프로세스의 OpenAPI 문서 위치. 호스트는 Settings 필드(base_setting) 값이다(G-13)."""
+
+    base_setting: str
+    path: str
+    login: OpenApiLogin | None = None
+
+
 class CodeGraphRepo(BaseModel):
-    """CODE_GRAPH_REPOS 의 저장소 하나. A 단계가 쓰는 필드만 둔다(openapi·service·client_env 는 B 단계라 무시한다)."""
+    """CODE_GRAPH_REPOS 의 저장소 하나.
+
+    B 단계(서비스 그래프) 필드: service 는 서비스 그래프의 이름, openapi 는 엔드포인트·스키마 출처("self" 는 이 앱),
+    client_env 는 다른 저장소가 이 서비스를 부를 때 쓰는 환경변수 → 그 값에 붙어 있는 경로 접두,
+    call_sites 는 호출 지점을 찾을 파일(glob), route_root 는 Next.js App Router 루트(그 아래 route.ts 가 inbound 엔드포인트).
+    """
 
     owner: str
     name: str
@@ -48,6 +69,14 @@ class CodeGraphRepo(BaseModel):
     allowed_edges: list[AllowedEdge] = []
     entry_points: list[str] = []  # orphan 에서 뺀다. `**/` 는 0개 이상의 디렉터리
     diagnostics: DiagnosticToggles = DiagnosticToggles()
+    service: str | None = None  # 비면 저장소 키를 서비스 이름으로 쓴다
+    openapi: Literal["self"] | OpenApiSource | None = None
+    client_env: dict[str, str] = {}
+    call_sites: list[str] = []
+    route_root: str | None = None
+
+    def is_call_site(self, path: str) -> bool:
+        return any(glob_regex(pattern).fullmatch(path) for pattern in self.call_sites)
 
 
 class SourceFile(BaseModel):
@@ -103,13 +132,21 @@ class CodeGraphDiagnostics(BaseModel):
 
 
 class OutboundCall(BaseModel):
-    """서비스 간 호출 지점 (B 단계). A 단계는 비워 둔다."""
+    """서비스 간 호출 지점. raw_path 는 기준 URL 뒤의 원문(`${...}`·`{...}`·쿼리 포함)이고 비교는 normalize_path 로 한다."""
 
     caller_file: str
-    caller_symbol: str
+    caller_symbol: str  # 감싼 함수. 메서드는 `클래스.메서드`, 모듈 수준이면 빈 문자열
     env_var: str
     http_method: str
     raw_path: str
+
+
+class InboundRoute(BaseModel):
+    """Next.js route.ts 가 export 하는 HTTP 메서드 함수 하나. path 는 파일 경로에서 만든다(`[id]` → `{id}`, `(group)` 은 뺀다)."""
+
+    file: str
+    http_method: str
+    path: str
 
 
 class CodeGraph(BaseModel):
@@ -128,6 +165,7 @@ class CodeGraph(BaseModel):
     edges: list[GraphEdge]
     diagnostics: CodeGraphDiagnostics
     outbound_calls: list[OutboundCall] = []
+    inbound_routes: list[InboundRoute] = []
 
     @classmethod
     def build(
@@ -140,6 +178,8 @@ class CodeGraph(BaseModel):
         repo_spec: CodeGraphRepo,
         files: list[SourceFile],
         imports: set[tuple[str, str]],
+        outbound_calls: Sequence[OutboundCall] = (),
+        inbound_routes: Sequence[InboundRoute] = (),
     ) -> Self:
         """파싱 결과로 그래프와 진단을 만든다. imports 의 양 끝은 files 에 있는 경로여야 한다."""
         file_by_path = {each.path: each for each in files}
@@ -161,7 +201,7 @@ class CodeGraph(BaseModel):
 
         orphans: list[str] = []
         if repo_spec.diagnostics.orphans:
-            entry_patterns = [_glob_regex(pattern) for pattern in repo_spec.entry_points]
+            entry_patterns = [glob_regex(pattern) for pattern in repo_spec.entry_points]
             orphans = [
                 path
                 for path in graph
@@ -220,6 +260,8 @@ class CodeGraph(BaseModel):
             diagnostics=CodeGraphDiagnostics(
                 layer_violations=violations, cycles=_find_cycles(graph), orphan_files=orphans, hub_files=hubs
             ),
+            outbound_calls=list(outbound_calls),
+            inbound_routes=list(inbound_routes),
         )
 
     def render_context(self) -> str:
@@ -298,7 +340,7 @@ def _find_cycles(graph: nx.DiGraph) -> list[list[str]]:
     return sorted(cycles)
 
 
-def _glob_regex(pattern: str) -> re.Pattern[str]:
+def glob_regex(pattern: str) -> re.Pattern[str]:
     # fnmatch 의 `*` 는 `/` 도 삼키고 `**/` 가 0개 디렉터리를 뜻하지 않아(src/app/page.tsx) 직접 바꾼다
     parts = re.split(r"(\*\*/|\*|\?)", pattern)
     return re.compile(

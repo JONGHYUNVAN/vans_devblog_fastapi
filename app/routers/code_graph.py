@@ -4,9 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 
-from app.dependencies import get_code_graph_service, verify_internal_key
-from app.schemas.code_graph import CodeGraphAnalysis, CodeGraphPublic, CodeGraphSummary
+from app.dependencies import get_code_graph_service, get_service_graph_service, verify_internal_key
+from app.schemas.code_graph import CodeGraphAnalysis, CodeGraphPublic, CodeGraphSummary, FlowPublic, ServiceGraphPublic
 from app.services.code_graph import CodeGraphService
+from app.services.service_graph import ServiceGraphService
 
 router = APIRouter(prefix="/api/v1/code-graph", tags=["Code Graph"])
 
@@ -17,6 +18,27 @@ def list_code_graphs(
 ) -> list[CodeGraphSummary]:
     """분석 결과가 있는 저장소마다 최신 commit·분석 시각·진단 건수."""
     return code_graph_service.list_code_graphs()
+
+
+# services/·flows/ 는 /{repo}/ 보다 먼저 등록해야 저장소 이름으로 잡히지 않는다
+@router.get("/services/", summary="서비스 그래프")
+def get_service_graph(
+    service_graph_service: Annotated[ServiceGraphService, Depends(get_service_graph_service)],
+) -> ServiceGraphPublic:
+    """저장된 호출 지점과 각 백엔드 OpenAPI 를 맞춘 서비스 간 호출 그래프. 10분 캐시한다.
+
+    OpenAPI 를 받지 못한 서비스는 `openapi` 가 unavailable 이고 그 서비스로 가는 엣지는 unknown 이다.
+    """
+    return service_graph_service.get_service_graph()
+
+
+@router.get("/flows/{flow}/", summary="e2e 흐름")
+def get_flow(
+    flow: str,
+    service_graph_service: Annotated[ServiceGraphService, Depends(get_service_graph_service)],
+) -> FlowPublic:
+    """search·publish·posts·auth 흐름을 hop 마다 요청·응답 스키마 이름, 호출 코드 위치와 mermaid 로. 없는 흐름은 404."""
+    return service_graph_service.get_flow(flow)
 
 
 @router.post(

@@ -13,6 +13,7 @@ from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.clients.publisher.base import PostCategory, PostCreatePayload, Publisher, PublishResult
 from app.core.config import Settings
+from app.core.exceptions import ServiceUnavailableError
 from app.models.agent_call import AgentCall, TokenUsage
 from app.models.code_graph import CodeGraph
 from app.models.enums import AgentSlot, PostStatus
@@ -178,6 +179,20 @@ class FakeCodeGraphRepository:
     def delete_stale(self, repo: str, keep: int) -> int:
         self.stale_calls.append((repo, keep))
         return 0
+
+
+class FakeOpenApiClient:
+    """URL → 문서. 없는 URL 은 ServiceUnavailableError 다. 받은 요청(url, login_url, password)을 남긴다."""
+
+    def __init__(self, documents: dict[str, dict] | None = None) -> None:
+        self.documents = documents or {}
+        self.calls: list[tuple[str, str | None, str]] = []
+
+    def fetch(self, url: str, *, login_url: str | None = None, password: str = "") -> dict:
+        self.calls.append((url, login_url, password))
+        if url not in self.documents:
+            raise ServiceUnavailableError(f"openapi fetch failed: {url}")
+        return self.documents[url]
 
 
 def kis_trade_body(**overrides: str) -> str:

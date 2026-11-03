@@ -4,13 +4,14 @@ CLI 는 open_clients·open_async_database 로 연결을 직접 열고 같은 get
 """
 
 import secrets
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Any
 
 from elasticsearch import Elasticsearch
 from fastapi import BackgroundTasks, Depends, Header, Request
+from pydantic import SecretStr
 from pymongo import MongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.database import Database
@@ -24,6 +25,7 @@ from app.clients.llm.google import GoogleClient
 from app.clients.llm.registry import LLMClientRegistry
 from app.clients.llm.xai import XAIClient
 from app.clients.mongo import create_async_mongo_client, create_mongo_client, is_mongo_reachable
+from app.clients.openapi import OpenApiClient
 from app.clients.publisher.post_be import PostBEPublisher
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
@@ -48,6 +50,7 @@ from app.services.publishing import PublishingService, UnconfiguredDraftPublishe
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
 from app.services.search import SearchService
+from app.services.service_graph import ServiceGraphService
 from app.services.sync import SyncService
 from app.services.topic_selection import TopicSelectionService
 from app.services.validation import ValidationGate
@@ -197,6 +200,35 @@ def build_code_graph_service(
         repos=settings.code_graph_repos,
         run_in_background=run_in_background,
     )
+
+
+def get_service_graph_service(
+    request: Request,
+    mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ServiceGraphService:
+    return build_service_graph_service(mongo_client, settings, self_openapi=request.app.openapi)
+
+
+def build_service_graph_service(
+    mongo_client: MongoClient, settings: Settings, self_openapi: Callable[[], dict[str, Any]]
+) -> ServiceGraphService:
+    """라우터와 CLI `code-graph services/flow` 가 같은 조립을 쓴다. self_openapi 는 이 앱의 app.openapi 다(HTTP 없이, G-13)."""
+    return ServiceGraphService(
+        repository=CodeGraphRepository(mongo_client[settings.mongodb_db_name]),
+        openapi_client=OpenApiClient(timeout_s=settings.code_graph_openapi_timeout_s),
+        repos=settings.code_graph_repos,
+        self_openapi=self_openapi,
+        setting_value=partial(_setting_value, settings),
+    )
+
+
+def _setting_value(settings: Settings, name: str) -> str:
+    # OpenApiSource 의 base_setting·password_setting 이 가리키는 Settings 필드. 없는 이름은 빈 값(기능만 꺼진다)
+    value = getattr(settings, name, None)
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    return value if isinstance(value, str) else ""
 
 
 def ensure_code_graph_indexes(database: Database) -> None:
