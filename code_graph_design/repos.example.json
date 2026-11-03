@@ -1,0 +1,103 @@
+{
+  "vans_devblog_fastapi": {
+    "owner": "JONGHYUNVAN",
+    "name": "vans_devblog_fastapi",
+    "ref": "main",
+    "source_roots": ["app", "cli"],
+    "layers": [
+      { "id": "routers", "path": "app/routers", "may_import": ["services", "schemas", "core"] },
+      { "id": "cli", "path": "cli", "may_import": ["services", "schemas", "core"] },
+      { "id": "services", "path": "app/services", "may_import": ["repositories", "models", "schemas", "agents", "clients", "core"] },
+      { "id": "agents", "path": "app/agents", "may_import": ["models", "core"] },
+      { "id": "repositories", "path": "app/repositories", "may_import": ["models", "clients", "core"] },
+      { "id": "models", "path": "app/models", "may_import": ["core"] },
+      { "id": "schemas", "path": "app/schemas", "may_import": ["core"] },
+      { "id": "clients", "path": "app/clients", "may_import": ["core"] },
+      { "id": "core", "path": "app/core", "may_import": [] }
+    ],
+    "allowed_edges": [
+      { "source": "app/routers/agent_rounds.py", "target": "app/models/enums.py" },
+      { "source": "cli/__main__.py", "target": "app/models/enums.py" },
+      { "source": "app/schemas/agent_pipeline.py", "target": "app/models/enums.py" },
+      { "source": "app/schemas/agent_pipeline.py", "target": "app/models/model_binding.py" },
+      { "source": "app/schemas/agent_pipeline.py", "target": "app/models/post_draft.py" },
+      { "source": "app/schemas/agent_pipeline.py", "target": "app/models/publishing_round.py" },
+      { "source": "app/schemas/agent_pipeline.py", "target": "app/models/topic.py" }
+    ],
+    "entry_points": ["app/main.py", "app/dependencies.py", "cli/__main__.py"],
+    "diagnostics": { "orphans": true, "hubs": true },
+    "openapi": "self",
+    "service": "fastapi",
+    "client_env": { "SEARCH_API_URL": "", "DJANGO_API_URL": "" }
+  },
+  "vans_story": {
+    "owner": "JONGHYUNVAN",
+    "name": "vans_story",
+    "ref": "main",
+    "source_roots": ["src"],
+    "layers": [
+      { "id": "app", "path": "src/app", "may_import": ["components", "hooks", "lib", "store", "constants", "types"] },
+      { "id": "components", "path": "src/components", "may_import": ["hooks", "lib", "store", "constants", "types"] },
+      { "id": "hooks", "path": "src/hooks", "may_import": ["lib", "store", "constants", "types"] },
+      { "id": "store", "path": "src/store", "may_import": ["lib", "constants", "types"] },
+      { "id": "lib", "path": "src/lib", "may_import": ["constants", "types"] },
+      { "id": "constants", "path": "src/constants", "may_import": ["types"] },
+      { "id": "types", "path": "src/types", "may_import": [] }
+    ],
+    "allowed_edges": [],
+    "entry_points": [
+      "src/app/**/page.tsx",
+      "src/app/**/layout.tsx",
+      "src/app/**/loading.tsx",
+      "src/app/**/error.tsx",
+      "src/app/**/not-found.tsx",
+      "src/app/**/template.tsx",
+      "src/app/**/route.ts",
+      "src/app/robots.ts",
+      "src/app/sitemap.ts"
+    ],
+    "diagnostics": { "orphans": true, "hubs": true },
+    "openapi": null,
+    "service": "bff",
+    "client_env": {}
+  },
+  "vans_story_be_post": {
+    "owner": "JONGHYUNVAN",
+    "name": "vans_story_be_post",
+    "ref": "main",
+    "source_roots": ["src"],
+    "layers": [
+      { "id": "posts", "path": "src/posts", "may_import": ["categories", "auth", "common", "config", "search-service", "user-service"] },
+      { "id": "categories", "path": "src/categories", "may_import": ["auth", "common", "config"] },
+      { "id": "auth", "path": "src/auth", "may_import": ["common", "config"] },
+      { "id": "search-service", "path": "src/search-service", "may_import": ["common", "config"] },
+      { "id": "user-service", "path": "src/user-service", "may_import": ["common", "config"] },
+      { "id": "swagger", "path": "src/swagger", "may_import": ["common", "config"] },
+      { "id": "common", "path": "src/common", "may_import": ["config"] },
+      { "id": "config", "path": "src/config", "may_import": [] }
+    ],
+    "allowed_edges": [],
+    "entry_points": ["src/main.ts", "src/**/*.module.ts"],
+    "diagnostics": { "orphans": false, "hubs": false },
+    "openapi": { "base_setting": "post_be_url", "path": "/api/posts/swagger-json" },
+    "service": "nestjs",
+    "client_env": { "POST_API_URL": "/api/v1" }
+  },
+  "vans_story_be": {
+    "owner": "JONGHYUNVAN",
+    "name": "vans_story_be",
+    "ref": "main",
+    "source_roots": ["src/main/kotlin/blog/vans_story_be"],
+    "layers": [
+      { "id": "config", "path": "src/main/kotlin/blog/vans_story_be/config", "may_import": ["domain", "global"] },
+      { "id": "domain", "path": "src/main/kotlin/blog/vans_story_be/domain", "may_import": ["global"] },
+      { "id": "global", "path": "src/main/kotlin/blog/vans_story_be/global", "may_import": [] }
+    ],
+    "allowed_edges": [],
+    "entry_points": ["src/main/kotlin/blog/vans_story_be/VansStoryBeApplication.kt"],
+    "diagnostics": { "orphans": false, "hubs": false },
+    "openapi": { "base_setting": "user_service_url", "path": "/v3/api-docs" },
+    "service": "spring",
+    "client_env": { "AUTH_API_URL": "/api" }
+  }
+}
