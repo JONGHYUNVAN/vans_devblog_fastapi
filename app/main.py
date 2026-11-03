@@ -9,14 +9,20 @@ from elasticsearch import Elasticsearch
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pymongo import AsyncMongoClient
+from pymongo import AsyncMongoClient, MongoClient
 
 from app.clients.kis.stream import create_kis_stream
 from app.clients.mongo import create_async_mongo_client
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
-from app.dependencies import build_pipeline_runner, ensure_agent_indexes, get_index_setup_service, open_clients
-from app.routers import agent_rounds, health, internal, kis, search, sync
+from app.dependencies import (
+    build_pipeline_runner,
+    ensure_agent_indexes,
+    ensure_code_graph_indexes,
+    get_index_setup_service,
+    open_clients,
+)
+from app.routers import agent_rounds, code_graph, health, internal, kis, search, sync
 from app.services.runner import PipelineRunner
 
 logging.basicConfig(
@@ -46,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.async_mongo_client = create_async_mongo_client(settings)
         app.state.kis_stream = create_kis_stream(settings)
         await _ensure_popular_index(es)
+        await _ensure_code_graph_indexes(mongo_client, settings.mongodb_db_name)
         await _ensure_agent_indexes(app.state.async_mongo_client, settings.mongodb_db_name)
         app.state.pipeline_runner = _start_pipeline_runner(app.state.async_mongo_client, settings.mongodb_db_name)
         try:
@@ -68,6 +75,17 @@ async def _ensure_popular_index(es: Elasticsearch) -> None:
     else:
         if created:
             logger.info("인기 검색어 인덱스를 만들었다")
+
+
+async def _ensure_code_graph_indexes(mongo_client: MongoClient, db_name: str) -> None:
+    # 코드 그래프가 꺼져 있으면(CODE_GRAPH_REPOS 가 비어 있음) 건너뛴다. Mongo 가 내려가 있어도 앱은 떠야 한다.
+    # 인덱스가 없으면 같은 commit 의 동시 분석이 문서를 둘 만들 수 있어 경고를 남긴다.
+    if not settings.code_graph_repos:
+        return
+    try:
+        await asyncio.to_thread(ensure_code_graph_indexes, mongo_client[db_name])
+    except Exception as exc:  # 기동 경계
+        logger.warning("코드 그래프 인덱스 확인 실패: %s", exc)
 
 
 def _start_pipeline_runner(async_mongo_client: AsyncMongoClient, db_name: str) -> PipelineRunner | None:
@@ -113,6 +131,7 @@ app.include_router(sync.router)
 app.include_router(internal.router)
 app.include_router(kis.router)
 app.include_router(agent_rounds.router)
+app.include_router(code_graph.router)
 
 
 @app.get("/", include_in_schema=False)

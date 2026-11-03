@@ -1,0 +1,6 @@
+[project]
+name = "python_app"
+dependencies = ["typer==0.3.0"]
+
+[tool.ruff]
+line-length = 120

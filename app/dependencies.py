@@ -13,8 +13,10 @@ from elasticsearch import Elasticsearch
 from fastapi import BackgroundTasks, Depends, Header, Request
 from pymongo import MongoClient
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.database import Database
 
 from app.clients.es import create_es, is_es_reachable
+from app.clients.github import GitHubClient
 from app.clients.kis.stream import KISStreamManager
 from app.clients.llm.anthropic import AnthropicClient
 from app.clients.llm.base import LLMClient
@@ -27,12 +29,14 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
+from app.repositories.code_graph import CodeGraphRepository
 from app.repositories.popular_search import PopularSearchRepository
 from app.repositories.post import PostRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_index import PostIndexRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
+from app.services.code_graph import CodeGraphService, RunInBackground
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService, DraftPublisher
 from app.services.health import HealthService
@@ -170,6 +174,34 @@ def get_sync_service(
 
 def get_index_setup_service(es: Elasticsearch) -> IndexSetupService:
     return IndexSetupService(popular_search_repository=PopularSearchRepository(es))
+
+
+def get_code_graph_service(
+    mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    background_tasks: BackgroundTasks,
+) -> CodeGraphService:
+    return build_code_graph_service(mongo_client, settings, run_in_background=background_tasks.add_task)
+
+
+def build_code_graph_service(
+    mongo_client: MongoClient, settings: Settings, run_in_background: RunInBackground
+) -> CodeGraphService:
+    """라우터와 CLI `code-graph` 가 같은 조립을 쓴다. CLI 는 분석을 바로 돌리는 run_in_background 를 넘긴다."""
+    return CodeGraphService(
+        repository=CodeGraphRepository(mongo_client[settings.mongodb_db_name]),
+        github_client=GitHubClient(
+            timeout_s=settings.code_graph_download_timeout_s,
+            max_bytes=settings.code_graph_max_tarball_mb * 1024 * 1024,
+        ),
+        repos=settings.code_graph_repos,
+        run_in_background=run_in_background,
+    )
+
+
+def ensure_code_graph_indexes(database: Database) -> None:
+    """code_graphs 컬렉션 인덱스를 만든다. 있으면 그대로 둔다. lifespan 과 CLI `code-graph analyze` 가 부른다."""
+    CodeGraphRepository(database).ensure_indexes()
 
 
 async def ensure_agent_indexes(database: AsyncDatabase) -> None:

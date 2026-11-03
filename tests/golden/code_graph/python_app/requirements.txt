@@ -1,0 +1,4 @@
+fastapi==0.1.0
+-r extra.txt
+uvicorn[standard]==0.2.0  # 서버
+pydantic>=2.0; python_version > '3.0'

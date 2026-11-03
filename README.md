@@ -30,6 +30,8 @@ cp .env.example .env                                          # 값 채우기
 .venv/Scripts/python -m cli sync-status                 # MongoDB·ES 연결과 게시글 수
 .venv/Scripts/python -m cli sync-posts --dry-run        # MongoDB → ES 동기화 (건수만 확인)
 .venv/Scripts/python -m cli setup-popular               # 인기 검색어 인덱스 생성
+.venv/Scripts/python -m cli code-graph analyze vans_devblog_fastapi   # 코드 그래프 분석·저장 (CODE_GRAPH_REPOS 필요)
+.venv/Scripts/python -m cli code-graph context vans_devblog_fastapi   # 저장된 분석의 context 마크다운
 ```
 
 컨테이너에서는 `python -m cli ...`. HTTP로는 `POST /api/v1/search/sync/`(`X-Internal-Key` 필요)가 같은 동기화를 한다.
@@ -70,6 +72,7 @@ Django 전용 변수(`DJANGO_SETTINGS_MODULE`, `SECRET_KEY`, `ALLOWED_HOSTS`, `D
 | vans_story_be_post | `POST /api/internal/search/index/`, `DELETE /api/internal/search/index/{post_id}/` (`X-Internal-Key`) |
 | CloudType | `GET /api/v1/search/health/` |
 | 운영자 | `GET /api/v1/search/sync/status/`, `POST /api/v1/search/sync/`·`sync/all/` (`X-Internal-Key`) |
+| 블로그 프로젝트 페이지·운영자 | `GET /api/v1/code-graph/`, `{repo}/`, `{repo}/context/`, `POST /api/v1/code-graph/{repo}/analyze/` (`X-Internal-Key`). 설계는 [code_graph_design/README.md](code_graph_design/README.md) |
 
 그 밖에 `GET /api/v1/search/categories/`와 Django에 있던 별칭 `/api/v1/search/internal/index/`도 그대로 받는다.
 응답 형식은 `tests/golden/`과 같고, Django와 달라진 곳은 [MIGRATION_PLAN.md](MIGRATION_PLAN.md) 각 Phase에 적었다.

@@ -15,6 +15,7 @@ POPULAR_TTL = 60
 HEALTH_TTL = 1800
 LAST_SYNC_TTL = 60 * 60 * 24 * 30
 KIS_APPROVAL_TTL = 82800  # KIS 접속키 유효기간 24시간보다 1시간 일찍 버린다
+CODE_GRAPH_TTL = 600  # 같은 프로세스의 분석 저장은 캐시를 지운다. CLI 로 저장한 결과는 이 시간 뒤에 보인다
 
 _MAX_ENTRIES = 1000
 

@@ -1,0 +1,57 @@
+{
+  "python_app": {
+    "owner": "JONGHYUNVAN",
+    "name": "python_app",
+    "ref": "main",
+    "source_roots": ["app", "cli"],
+    "layers": [
+      { "id": "routers", "path": "app/routers", "may_import": ["services"] },
+      { "id": "cli", "path": "cli", "may_import": ["services"] },
+      { "id": "services", "path": "app/services", "may_import": ["models"] },
+      { "id": "models", "path": "app/models", "may_import": [] }
+    ],
+    "allowed_edges": [{ "source": "cli/__main__.py", "target": "app/models/item.py" }],
+    "entry_points": ["app/main.py", "app/dependencies.py", "cli/__main__.py"],
+    "diagnostics": { "orphans": true, "hubs": true },
+    "openapi": "self",
+    "service": "fastapi",
+    "client_env": {}
+  },
+  "ts_app": {
+    "owner": "JONGHYUNVAN",
+    "name": "ts_app",
+    "ref": "main",
+    "source_roots": ["src"],
+    "layers": [
+      { "id": "app", "path": "src/app", "may_import": ["components", "hooks", "lib", "store", "constants"] },
+      { "id": "components", "path": "src/components", "may_import": ["hooks", "lib", "store", "constants"] },
+      { "id": "hooks", "path": "src/hooks", "may_import": ["lib", "store", "constants"] },
+      { "id": "store", "path": "src/store", "may_import": ["lib", "constants"] },
+      { "id": "lib", "path": "src/lib", "may_import": ["constants"] },
+      { "id": "constants", "path": "src/constants", "may_import": [] }
+    ],
+    "allowed_edges": [{ "source": "src/constants/site.ts", "target": "src/lib/format.service.ts" }],
+    "entry_points": ["src/app/**/page.tsx", "src/app/**/layout.tsx", "src/app/**/route.ts"],
+    "diagnostics": { "orphans": true, "hubs": true },
+    "openapi": null,
+    "service": "bff",
+    "client_env": {}
+  },
+  "kotlin_app": {
+    "owner": "JONGHYUNVAN",
+    "name": "kotlin_app",
+    "ref": "main",
+    "source_roots": ["src/main/kotlin/blog/demo"],
+    "layers": [
+      { "id": "config", "path": "src/main/kotlin/blog/demo/config", "may_import": ["domain", "global"] },
+      { "id": "domain", "path": "src/main/kotlin/blog/demo/domain", "may_import": ["global"] },
+      { "id": "global", "path": "src/main/kotlin/blog/demo/global", "may_import": [] }
+    ],
+    "allowed_edges": [],
+    "entry_points": ["src/main/kotlin/blog/demo/DemoApplication.kt"],
+    "diagnostics": { "orphans": false, "hubs": false },
+    "openapi": { "base_setting": "user_service_url", "path": "/v3/api-docs" },
+    "service": "spring",
+    "client_env": {}
+  }
+}

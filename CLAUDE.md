@@ -13,5 +13,5 @@
 
 내 저장소들의 의존 그래프를 이 앱이 만들고, 블로그(vans_story) 프로젝트 페이지가 그린다. 손으로 쓰는 아키텍처 문서·그림을 대체한다. 기획은 `code_graph_design/` 하나다.
 
-- 시작점은 [code_graph_design/README.md](code_graph_design/README.md)다. 확인된 전제, 결정 G-01~G-15, 저장소 설정(예시는 `code_graph_design/repos.example.json`), 코드 배치, API, 로드맵 A/B/C가 거기 있다. 설계 문서 세트는 만들지 않는다. 코드가 기획과 달라지면 같은 커밋에서 그 README 를 고친다.
-- 진행(2026-11-03): 기획만. 코드 없음. 다음은 A 단계.
+- 시작점은 [code_graph_design/README.md](code_graph_design/README.md)다. 확인된 전제, 결정 G-01~G-18, 저장소 설정(예시는 `code_graph_design/repos.example.json`), 코드 배치, API, 로드맵 A/B/C가 거기 있다. 설계 문서 세트는 만들지 않는다. 코드가 기획과 달라지면 같은 커밋에서 그 README 를 고친다.
+- 진행(2026-11-03): A 단계 완료(2026-11-03. 파일 그래프·진단·context, CLI `code-graph analyze/context`). Mongo 저장(`code-graph analyze`) 확인은 Atlas 허용 IP 에서 사용자가 한다. 다음은 B.

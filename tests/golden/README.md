@@ -29,6 +29,15 @@ FastAPI 전환 후 같은 요청의 응답 형식을 비교하는 기준으로 �
 | agents_calls.json | GET /api/v1/agents/calls/?round_id=round-1 | 200 |
 | tiptap_sample.json | `tiptap_sample.md` 의 변환 결과 (3단계) | – |
 
+코드 그래프 API(2026-11-03)는 `code_graph_design/README.md` "API" 절의 계약이다. `code_graph/ts_app` 트리를 실제 서비스로 분석하고 시각을 고정해 값까지 비교한다.
+`code_graph/` 의 소스 트리·`repos.json`·`{트리}.json` 은 파서 입력과 기대 그래프다(`tests/services/test_code_graph.py`).
+
+| 파일 | 요청 | 상태 |
+|---|---|---|
+| code_graph_list.json | GET /api/v1/code-graph/ | 200 |
+| code_graph_detail.json | GET /api/v1/code-graph/ts_app/ | 200 |
+| code_graph_context.md | GET /api/v1/code-graph/ts_app/context/ | 200, text/markdown |
+
 관찰 사항:
 - 슬래시 없는 경로(`/api/v1/search/popular`)는 301로 슬래시 경로에 리다이렉트된다.
 - KIS 스트림은 헤더만 오고 25초간 본문이 없었다. 운영에서 이미 동작하지 않는 상태.

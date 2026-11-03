@@ -1,0 +1,296 @@
+{
+  "tech_stack": [
+    "next ^16.0.0",
+    "react ^19.0.0"
+  ],
+  "layers": [
+    {
+      "id": "app",
+      "may_import": [
+        "components",
+        "hooks",
+        "lib",
+        "store",
+        "constants"
+      ],
+      "file_count": 5
+    },
+    {
+      "id": "components",
+      "may_import": [
+        "hooks",
+        "lib",
+        "store",
+        "constants"
+      ],
+      "file_count": 3
+    },
+    {
+      "id": "hooks",
+      "may_import": [
+        "lib",
+        "store",
+        "constants"
+      ],
+      "file_count": 1
+    },
+    {
+      "id": "store",
+      "may_import": [
+        "lib",
+        "constants"
+      ],
+      "file_count": 1
+    },
+    {
+      "id": "lib",
+      "may_import": [
+        "constants"
+      ],
+      "file_count": 3
+    },
+    {
+      "id": "constants",
+      "may_import": [],
+      "file_count": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "src/app/about/page.tsx",
+      "layer": "app",
+      "symbols": [
+        "AboutPage"
+      ],
+      "in_degree": 0,
+      "out_degree": 1
+    },
+    {
+      "id": "src/app/api/posts/route.ts",
+      "layer": "app",
+      "symbols": [
+        "GET"
+      ],
+      "in_degree": 0,
+      "out_degree": 1
+    },
+    {
+      "id": "src/app/layout.tsx",
+      "layer": "app",
+      "symbols": [
+        "RootLayout"
+      ],
+      "in_degree": 0,
+      "out_degree": 1
+    },
+    {
+      "id": "src/app/page.tsx",
+      "layer": "app",
+      "symbols": [
+        "Page"
+      ],
+      "in_degree": 0,
+      "out_degree": 2
+    },
+    {
+      "id": "src/app/shell.tsx",
+      "layer": "app",
+      "symbols": [
+        "AppShell"
+      ],
+      "in_degree": 1,
+      "out_degree": 0
+    },
+    {
+      "id": "src/components/Button.tsx",
+      "layer": "components",
+      "symbols": [
+        "Button"
+      ],
+      "in_degree": 2,
+      "out_degree": 1
+    },
+    {
+      "id": "src/components/Card.tsx",
+      "layer": "components",
+      "symbols": [
+        "Card"
+      ],
+      "in_degree": 1,
+      "out_degree": 2
+    },
+    {
+      "id": "src/components/index.ts",
+      "layer": "components",
+      "symbols": [],
+      "in_degree": 0,
+      "out_degree": 2
+    },
+    {
+      "id": "src/constants/site.ts",
+      "layer": "constants",
+      "symbols": [],
+      "in_degree": 2,
+      "out_degree": 1
+    },
+    {
+      "id": "src/hooks/useThing.ts",
+      "layer": "hooks",
+      "symbols": [
+        "useThing"
+      ],
+      "in_degree": 1,
+      "out_degree": 1
+    },
+    {
+      "id": "src/lib/api.ts",
+      "layer": "lib",
+      "symbols": [
+        "Post",
+        "Id",
+        "Kind",
+        "Client",
+        "get",
+        "fetchPosts"
+      ],
+      "in_degree": 5,
+      "out_degree": 2
+    },
+    {
+      "id": "src/lib/format.service.ts",
+      "layer": "lib",
+      "symbols": [
+        "format"
+      ],
+      "in_degree": 2,
+      "out_degree": 0
+    },
+    {
+      "id": "src/lib/orphan.ts",
+      "layer": "lib",
+      "symbols": [
+        "unused"
+      ],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "src/store/index.ts",
+      "layer": "store",
+      "symbols": [],
+      "in_degree": 1,
+      "out_degree": 1
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/app/about/page.tsx",
+      "target": "src/lib/api.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/app/api/posts/route.ts",
+      "target": "src/lib/api.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/app/layout.tsx",
+      "target": "src/constants/site.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/app/page.tsx",
+      "target": "src/components/Button.tsx",
+      "status": "valid"
+    },
+    {
+      "source": "src/app/page.tsx",
+      "target": "src/hooks/useThing.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/components/Button.tsx",
+      "target": "src/app/shell.tsx",
+      "status": "violation"
+    },
+    {
+      "source": "src/components/Card.tsx",
+      "target": "src/lib/api.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/components/Card.tsx",
+      "target": "src/lib/format.service.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/components/index.ts",
+      "target": "src/components/Button.tsx",
+      "status": "valid"
+    },
+    {
+      "source": "src/components/index.ts",
+      "target": "src/components/Card.tsx",
+      "status": "valid"
+    },
+    {
+      "source": "src/constants/site.ts",
+      "target": "src/lib/format.service.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/hooks/useThing.ts",
+      "target": "src/lib/api.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/lib/api.ts",
+      "target": "src/constants/site.ts",
+      "status": "valid"
+    },
+    {
+      "source": "src/lib/api.ts",
+      "target": "src/store/index.ts",
+      "status": "violation"
+    },
+    {
+      "source": "src/store/index.ts",
+      "target": "src/lib/api.ts",
+      "status": "valid"
+    }
+  ],
+  "diagnostics": {
+    "layer_violations": [
+      {
+        "source": "src/components/Button.tsx",
+        "target": "src/app/shell.tsx",
+        "from_layer": "components",
+        "to_layer": "app"
+      },
+      {
+        "source": "src/lib/api.ts",
+        "target": "src/store/index.ts",
+        "from_layer": "lib",
+        "to_layer": "store"
+      }
+    ],
+    "cycles": [
+      [
+        "src/lib/api.ts",
+        "src/store/index.ts",
+        "src/lib/api.ts"
+      ]
+    ],
+    "orphan_files": [
+      "src/lib/orphan.ts"
+    ],
+    "hub_files": [
+      {
+        "path": "src/lib/api.ts",
+        "in_degree": 5,
+        "out_degree": 2,
+        "symbol_count": 6
+      }
+    ]
+  }
+}

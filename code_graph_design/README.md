@@ -47,6 +47,9 @@
 | G-13 | 서비스 간 호출 지점(`outbound_calls`)은 파일 분석 때 뽑아 `CodeGraph` 문서에 저장한다. OpenAPI 매칭(엔드포인트 존재·스키마 이름)만 조회 때 하고 `core/cache` TTL 로 묶는다. 실패도 같은 TTL 로 캐시한다. 이 앱 자신의 OpenAPI 는 `dependencies.py` 가 `app.openapi` 를 넘겨 HTTP 없이 받고, NestJS·Spring 은 `post_be_url`·`user_service_url` + 고정 경로다 | OpenAPI 가 안 와도 호출 토폴로지는 남는다. 공개 GET 이 바깥을 매번 두드리지 않는다 |
 | G-14 | 레이어는 경로 접두(`path`)로 선언한다. 소스 루트 아래에 있지만 어느 레이어에도 안 속한 파일(`app/main.py`, `app/dependencies.py`, `src/main.ts`, `src/app.module.ts`, `VansStoryBeApplication.kt`)은 `root` 레이어이고, `root` 가 source 든 target 이든 위반으로 세지 않는다 | 이 앱의 `cli/` 는 `app/` 밖이라 "소스 루트 바로 아래 디렉터리" 규칙으로는 못 적는다. `routers → dependencies.py` 6건은 정상이다 |
 | G-15 | vans_story·vans_story_be_post 의 허용 표는 그쪽에 import 규칙 문서가 없어 여기서 처음 선언한 제안이다. 첫 분석의 위반 목록을 보고 코드를 고칠지 표를 넓힐지 정한다 | 그쪽 CONVENTIONS 는 파일을 어디에 둘지만 정한다 |
+| G-16 | 순환 대표 경로는 SCC 의 엣지를 정렬해 새로 만든 그래프에서 가장 작은 경로를 `source` 로 `find_cycle` 한다 | `G.subgraph(...)` 뷰는 노드·이웃을 set 순서로 돌 수 있어 해시 시드마다 경로가 달랐다(A 구현 때 확인). 같은 commit 은 같은 결과여야 한다 |
+| G-17 | `CodeGraph` 문서에 분석 때의 `allowed_edges` 를 같이 저장한다. API 응답에는 넣지 않는다 | context 의 Declared Exceptions 가 위반 목록과 같은 시점의 설정을 보인다. 같은 commit 은 다시 분석하지 않아(G-09) 설정만 바꾸면 둘이 어긋난다 |
+| G-18 | `tech_stack` 은 `이름 버전` 문자열. `package.json` 은 `dependencies` 만(devDependencies 제외), `build.gradle` 은 `plugins` 의 `id`·`version` 과 `test*` 가 아닌 구성의 좌표, Python 은 `pyproject.toml` `[project].dependencies` 와 `requirements.txt`(`-r` 등 옵션 줄 제외, extras 뗌) | 런타임 스택만 보인다. Spring Boot·Kotlin 버전은 Gradle plugins 에만 있다 |
 
 ## 저장소 설정 (`CODE_GRAPH_REPOS`)
 
@@ -60,6 +63,7 @@
 - 엔트리포인트(orphan 제외): 이 앱 `app/main.py`·`app/dependencies.py`·`cli/__main__.py`. vans_story `src/app/**/{page,layout,loading,error,not-found,template}.tsx`·`src/app/**/route.ts`·`src/app/{robots,sitemap}.ts`. NestJS `src/main.ts`·`src/**/*.module.ts`. Spring `**/VansStoryBeApplication.kt`. Python `__init__.py` 와 TS 배럴(`index.ts(x)` 중 `export ... from` 만 있는 파일)도 orphan 에서 뺀다.
 - `openapi`: 이 앱 `"self"`, NestJS `{"base_setting": "post_be_url", "path": "/api/posts/swagger-json"}`, Spring `{"base_setting": "user_service_url", "path": "/v3/api-docs"}`, vans_story `null`.
 - `client_env` 에 없는 환경변수(AI_API_URL, IMAGE_API_URL)는 서비스 그래프에서 환경변수 이름을 가진 외부 노드로 그린다.
+- 검증은 `services/code_graph.py` 가 `models/code_graph.py` 의 `CodeGraphRepo` 로 저장소 하나씩 한다. A 단계는 `openapi`·`service`·`client_env` 를 읽지 않는다(B). `CODE_GRAPH_REPOS` 를 빈 값으로 두면 JSON 이 아니라 기동이 실패하므로 끌 때는 `{}` 다.
 
 ## 코드 배치 (기존 계층, 새 폴더 없음)
 
@@ -67,14 +71,14 @@
 |---|---|
 | `clients/github.py` | tarball 받기(타임아웃·크기 상한), pax `comment` 에서 SHA, 임시 디렉터리에 풀기·삭제 |
 | `clients/openapi.py` | NestJS·Spring 의 OpenAPI 문서 받기 (B) |
-| `models/code_graph.py` | `CodeGraph`(repo, commit_sha, analyzed_at, tech_stack, layers, nodes, edges, diagnostics, outbound_calls)와 노드·엣지·진단 값 객체. I/O 없는 계산(레이어 위반 판정, 순환, orphan, hub, context 마크다운) |
+| `models/code_graph.py` | `CodeGraph`(repo, commit_sha, analyzed_at, tech_stack, layers, allowed_edges(G-17), nodes, edges, diagnostics, outbound_calls)와 노드·엣지·진단 값 객체, 저장소 설정 `CodeGraphRepo`. I/O 없는 계산(레이어 위반 판정, 순환, orphan, hub, context 마크다운) |
 | `repositories/code_graph.py` | `code_graphs` 컬렉션 upsert·최신 조회·보관 정리 |
 | `services/code_graph.py` | 분석 유스케이스(G-11), 파싱(언어별 정의·import 추출, 2-pass 경로 해석) → DiGraph → 진단 → 엔티티 |
 | `services/service_graph.py` | 저장된 `outbound_calls` + OpenAPI 매칭 → 서비스 그래프·흐름·mermaid (B) |
 | `schemas/code_graph.py` | 응답 스키마 |
 | `routers/code_graph.py` | 아래 API |
 | `cli/__main__.py` | `code-graph analyze <repo>`, `code-graph context <repo>` 추가 |
-| `tests/` | 같은 구조. 파서 테스트는 `tests/golden/code_graph/` 에 작은 소스 트리를 두고 기대 그래프와 비교 |
+| `tests/` | 같은 구조. 파서 테스트는 `tests/golden/code_graph/` 에 작은 소스 트리(python_app·ts_app·kotlin_app)와 설정(`repos.json`)을 두고 기대 그래프(`{트리}.json`)와 비교. 이 트리는 ruff 대상에서 뺀다. 실제 tarball 로 A 완료 기준을 보는 `tests/e2e/test_code_graph.py` |
 
 ## 파싱 규칙 (`services/code_graph.py`)
 
@@ -84,12 +88,12 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 |---|---|---|---|
 | Python | `function_definition`, `class_definition` | `import_statement`, `import_from_statement` | 상대 import 는 현재 패키지 기준 절대 모듈로 바꾼다. `from app.a.b import c` 는 `app/a/b/c.py` → `app/a/b/c/__init__.py` → `app/a/b.py` → `app/a/b/__init__.py` 순으로 찾는다 |
 | TS/TSX | `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`, `method_definition`, 최상위 `lexical_declaration` 의 `arrow_function` 바인딩(함수형 컴포넌트·훅) | `import_statement`, `source` 가 있는 `export_statement`(`export ... from`, `export * from`) | `@/` → `src/`, `src/` 는 그대로(NestJS tsconfig baseUrl, 35건), `./`·`../` 는 파일 기준. 그 다음 `{path}` → `{path}.ts` → `{path}.tsx` → `{path}/index.ts` → `{path}/index.tsx`. `posts.service` 처럼 점이 든 이름 때문에 `with_suffix` 가 아니라 이름 뒤에 붙인다 |
-| Kotlin | `class_declaration`, `object_declaration`, `function_declaration` | `package_header`, `import_header` | Pass 1 에서 `패키지.심볼 → 파일`, `패키지 → 파일들` 맵을 만든다. 내부 접두(`blog.vans_story_be.`)인 import 만 해석하고, `.*` 는 패키지의 모든 파일로 잇는다. 같은 패키지 안의 암묵 참조는 보이지 않는다(context 마크다운에 명시) |
+| Kotlin | `class_declaration`, `object_declaration`, `function_declaration` | `package_header`, `import_header` | Pass 1 에서 최상위 선언으로 `패키지.심볼 → 파일`, `패키지 → 파일들` 맵을 만든다. 이 맵에 있는 이름(곧 내부 접두 `blog.vans_story_be.`)만 해석하고, `.*` 는 패키지의 모든 파일로, `패키지.클래스.안쪽`(중첩·enum 항목)은 바깥 선언 파일로 잇는다. 같은 패키지 안의 암묵 참조는 보이지 않는다(context 마크다운에 명시) |
 
 ## 진단 계산식과 context 마크다운 (`models/code_graph.py`)
 
 - 레이어 위반: 위 "저장소 설정" 의 정의. 해당 엣지는 `graph.edges[].status = "violation"`.
-- 순환: `strongly_connected_components` 중 크기 2 이상인 집합마다 `find_cycle(G.subgraph(sorted(scc)))` 로 대표 경로 하나를 `[a, b, ..., a]` 로 적는다.
+- 순환: `strongly_connected_components` 중 크기 2 이상인 집합마다 `find_cycle(DiGraph(sorted(G.subgraph(scc).edges)), source=min(scc))` 로 대표 경로 하나를 `[a, b, ..., a]` 로 적는다(G-16).
 - orphan: `diagnostics.orphans` 가 켜진 저장소에서 `in_degree == 0` 이고 `entry_points` 에 안 걸리며 `__init__.py`·배럴이 아닌 파일. 오름차순.
 - hub: `diagnostics.hubs` 가 켜진 저장소에서 `in_degree >= 5` 인 파일을 `in_degree` 내림차순(동률은 `out_degree` 내림차순)으로 최대 15개.
 - `GET {repo}/context/` 템플릿:
@@ -100,6 +104,7 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 - Analyzed At: {analyzed_at}
 - Files: {node_count} | Internal Edges: {edge_count} | Symbols: {symbol_count}
 - Tech Stack: {tech_stack 쉼표 구분}
+- Note: Kotlin same-package references have no import and are not edges.   ← .kt 파일이 있을 때만
 
 ## 1. Layers & Allowed Imports
 | Layer | Files | May Import |
@@ -121,6 +126,8 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 |---|---|---|---|---|
 | `{path}` | {layer} | {in_degree} | {out_degree} | {정의 순서 앞 5개} |
 ```
+
+  건수가 0 이면 `- Violations (0)` 처럼 콜론과 항목 없이 쓰고, Cycles·Orphans 의 여러 항목은 한 줄에 쉼표로 잇는다. May Import 가 비면 `-` 다. orphan·hub 를 끈 저장소는 0 건이다.
 
 ## 서비스 그래프 (`services/service_graph.py`, B)
 
@@ -144,15 +151,16 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 - `code_graphs` 인덱스: unique `(repo, commit_sha)`, 조회 `(repo, analyzed_at desc)`. 저장소마다 최신 5개만 남기고 오래된 문서는 지운다.
 - 다운로드: 타임아웃·크기 상한은 G-11 의 `Settings`. 상한을 넘으면 중단하고 `ServiceUnavailableError`.
 - 압축 해제: `tarfile.extractall(path, filter="data")`. 임시 디렉터리는 `finally` 에서 지운다.
-- 백그라운드 분석 중 예외: `logger.warning` 만 남기고 기존 최신 문서는 건드리지 않는다(G-09).
+- 백그라운드 분석 중 예외: `logger.warning` 만 남기고 기존 최신 문서는 건드리지 않는다(G-09). CLI `code-graph analyze` 는 분석을 그 자리에서 돌리고 저장되지 않았으면 종료 코드 1 이다.
+- 인덱스는 lifespan 이 만든다. `CODE_GRAPH_REPOS` 가 비어 있으면 건너뛰고, Mongo 가 내려가 있으면 경고만 남긴다.
 
 ## API (`/api/v1/code-graph/`, trailing slash)
 
 | 메서드·경로 | 인증 | 응답 |
 |---|---|---|
 | `POST {repo}/analyze/` | `X-Internal-Key` | tarball 을 받아 SHA 를 뽑은 뒤, 저장된 문서가 있으면 200 `{repo, commit_sha, status: "stored"}`, 없으면 202 `{repo, commit_sha, status: "queued"}` 와 함께 백그라운드 분석(G-11) |
-| `GET /` | 공개 | 저장소별 최신 commit_sha·analyzed_at·진단 건수 |
-| `GET {repo}/` | 공개, 캐시 | 전체 그래프 + 진단(아래 구조) |
+| `GET /` | 공개 | 분석 결과가 있는 저장소만, 설정 순서의 배열 `[{repo, commit_sha, analyzed_at, violation_count, cycle_count, orphan_count, hub_count}]` |
+| `GET {repo}/` | 공개, 캐시 10분(`CODE_GRAPH_TTL`. 같은 프로세스의 저장이 지운다) | 전체 그래프 + 진단(아래 구조) |
 | `GET {repo}/context/` | 공개 | `text/markdown`(위 템플릿). CLAUDE.md 갱신·프롬프트 주입용 |
 | `GET services/` | 공개, 캐시 | 서비스 그래프: 노드 = 엔드포인트·외부 서비스, 엣지 = 호출 (B) |
 | `GET flows/{flow}/` | 공개 | 한 e2e 경로와 hop 마다의 요청·응답 스키마, mermaid sequenceDiagram 텍스트 (B) |
@@ -160,6 +168,8 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 `GET {repo}/` 구조: `repo, commit_sha, analyzed_at, tech_stack[], layers[{id, may_import[], file_count}], diagnostics{layer_violations[{source, target, from_layer, to_layer}], cycles[[path, ...]], orphan_files[], hub_files[{path, in_degree, out_degree, symbol_count}]}, graph{nodes[{id, layer, symbols[], in_degree, out_degree}], edges[{source, target, status: valid | violation}]}, outbound_calls[...]`. 영향 반경(ancestors·descendants, N-hop)은 프론트가 이 JSON 으로 계산한다.
 
 ## 로드맵
+
+A 단계 코드는 2026-11-03 에 들어갔다. `tests/e2e/test_code_graph.py` 가 실제 tarball 로 위반 수(이 앱 0, vans_story 21: `components → app` 17·`lib → store` 2·`lib → components` 1·`constants → lib` 1, 나머지 둘 0)를 확인했다. Mongo 저장(`code-graph analyze`)은 Atlas 허용 IP 에서 확인한다.
 
 | 단계 | 내용 | 완료 기준 |
 |---|---|---|

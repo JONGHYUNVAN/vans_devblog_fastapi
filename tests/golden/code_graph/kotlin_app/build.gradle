@@ -1,0 +1,13 @@
+plugins {
+    id 'org.springframework.boot' version '4.0.5'
+    id 'org.jetbrains.kotlin.jvm' version '2.2.21'
+}
+
+group = 'blog'
+
+dependencies {
+    implementation platform("org.springframework.boot:spring-boot-dependencies:4.0.5")
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.jetbrains.exposed:exposed-core:1.2.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.0.0'
+}

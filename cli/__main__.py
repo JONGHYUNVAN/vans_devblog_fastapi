@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from typing import Annotated, Any
 
 import typer
@@ -11,11 +12,13 @@ from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.dependencies import (
     build_agent_call_service,
+    build_code_graph_service,
     build_draft_decision_service,
     build_pipeline_runner,
     build_pipeline_view_service,
     build_round_service,
     ensure_agent_indexes,
+    ensure_code_graph_indexes,
     get_index_setup_service,
     get_sync_service,
     open_async_database,
@@ -29,6 +32,8 @@ from app.services.pipeline_views import build_draft_public
 cli = typer.Typer(help="VansDevBlog 검색 서비스 운영 명령", no_args_is_help=True)
 agents = typer.Typer(help="에이전트 파이프라인 (설계 agents_design/06 문서 3절 cli)", no_args_is_help=True)
 cli.add_typer(agents, name="agents")
+code_graph = typer.Typer(help="코드 그래프 (code_graph_design/README.md)", no_args_is_help=True)
+cli.add_typer(code_graph, name="code-graph")
 
 
 @cli.callback()
@@ -323,6 +328,48 @@ def run() -> None:
         _run_agents(_run)
     except KeyboardInterrupt:
         typer.echo("러너를 멈췄다.")
+
+
+def _run_now(function: Callable[..., Any], *args: Any) -> None:
+    """CLI 에는 응답이 없으므로 백그라운드로 넘길 분석을 그 자리에서 돌린다."""
+    function(*args)
+
+
+@code_graph.command("analyze")
+def analyze_code_graph(repo: str) -> None:
+    """GitHub tarball 을 받아 파일 그래프·진단을 만들고 Mongo 에 저장한다. 같은 commit 이 이미 있으면 저장된 것을 쓴다.
+
+    저장하지 못하면(경고 로그 참고) 종료 코드 1.
+    """
+    settings = get_settings()
+    with open_clients(settings) as (_, mongo_client):
+        ensure_code_graph_indexes(mongo_client[settings.mongodb_db_name])
+        service = build_code_graph_service(mongo_client, settings, run_in_background=_run_now)
+        try:
+            analysis = service.analyze_repo(repo)
+        except NotFoundError as exc:
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(1) from exc
+        latest = next((each for each in service.list_code_graphs() if each.repo == repo), None)
+    if latest is None or (analysis.status == "queued" and latest.commit_sha != analysis.commit_sha):
+        typer.echo(f"{repo}@{analysis.commit_sha[:7]} 분석을 저장하지 못했다.", err=True)
+        raise typer.Exit(1)
+    _echo({"status": analysis.status, **latest.model_dump(mode="json")})
+
+
+@code_graph.command("context")
+def code_graph_context(repo: str) -> None:
+    """저장된 최신 분석의 context 마크다운을 찍는다(CLAUDE.md 갱신용)."""
+    settings = get_settings()
+    with open_clients(settings) as (_, mongo_client):
+        try:
+            context = build_code_graph_service(
+                mongo_client, settings, run_in_background=_run_now
+            ).get_code_graph_context(repo)
+        except NotFoundError as exc:
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(1) from exc
+    typer.echo(context, nl=False)
 
 
 if __name__ == "__main__":

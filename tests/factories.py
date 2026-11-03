@@ -1,8 +1,11 @@
 """테스트 데이터 생성 함수. 모델 테스트와 서비스 테스트가 함께 쓴다."""
 
+import io
 import json
+import tarfile
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
@@ -337,3 +340,16 @@ def proposal(title: str, keywords: list[str]) -> dict[str, Any]:
 
 def proposals_output(*topics: tuple[str, list[str]]) -> str:
     return json.dumps({"proposals": [proposal(title, keywords) for title, keywords in topics]}, ensure_ascii=False)
+
+
+CODE_GRAPH_TREES = Path(__file__).parent / "golden" / "code_graph"
+
+
+def make_tarball(tree: str, commit_sha: str = "a" * 40) -> bytes:
+    """tests/golden/code_graph/{tree} 를 codeload 와 같은 모양(최상위 {tree}-main, pax 전역 헤더 comment 에 SHA)의 tar.gz 로."""
+    buffer = io.BytesIO()
+    with tarfile.open(
+        fileobj=buffer, mode="w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": commit_sha}
+    ) as archive:
+        archive.add(CODE_GRAPH_TREES / tree, arcname=f"{tree}-main")
+    return buffer.getvalue()

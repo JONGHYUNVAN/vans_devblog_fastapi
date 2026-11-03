@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     prompt_version: str = "v1"
     llm_concurrency_per_provider: int = 2
 
+    # 코드 그래프 (code_graph_design/README.md G-04·G-11). 저장소 키 → 저장소 설정. JSON 문자열, 예시는 code_graph_design/repos.example.json
+    # 원문 그대로 둔다. 검증은 CodeGraphService 가 한다(core 는 models 를 import 하지 않는다). 비어 있으면 기능이 꺼진다
+    code_graph_repos: dict[str, Any] = {}
+    code_graph_download_timeout_s: int = 30
+    code_graph_max_tarball_mb: int = 64
+
     @property
     def elasticsearch_url(self) -> str:
         return f"https://{self.elasticsearch_host}"

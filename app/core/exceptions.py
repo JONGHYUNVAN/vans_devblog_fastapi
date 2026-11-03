@@ -33,6 +33,13 @@ class AuthenticationError(AppError):
     error = "Authentication failed"
 
 
+class ServiceUnavailableError(AppError):
+    """외부 원천이 응답하지 않거나 받은 데이터를 쓸 수 없다(GitHub tarball 다운로드 실패·크기 초과 등)."""
+
+    status_code = 503
+    error = "Service unavailable"
+
+
 class InvalidRequestError(AppError):
     """요청 값이 현재 데이터와 맞지 않는다(재개 상한이 사용량 이하, 결정에 필요한 값 누락 등). 형식 오류(RequestValidationError)와 구분한다."""
 

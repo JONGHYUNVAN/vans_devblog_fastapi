@@ -1,0 +1,143 @@
+{
+  "tech_stack": [
+    "org.springframework.boot 4.0.5",
+    "org.jetbrains.kotlin.jvm 2.2.21",
+    "org.springframework.boot:spring-boot-dependencies 4.0.5",
+    "org.springframework.boot:spring-boot-starter-web",
+    "org.jetbrains.exposed:exposed-core 1.2.0"
+  ],
+  "layers": [
+    {
+      "id": "config",
+      "may_import": [
+        "domain",
+        "global"
+      ],
+      "file_count": 1
+    },
+    {
+      "id": "domain",
+      "may_import": [
+        "global"
+      ],
+      "file_count": 2
+    },
+    {
+      "id": "global",
+      "may_import": [],
+      "file_count": 2
+    }
+  ],
+  "nodes": [
+    {
+      "id": "src/main/kotlin/blog/demo/DemoApplication.kt",
+      "layer": "root",
+      "symbols": [
+        "DemoApplication",
+        "main"
+      ],
+      "in_degree": 0,
+      "out_degree": 1
+    },
+    {
+      "id": "src/main/kotlin/blog/demo/config/WebConfig.kt",
+      "layer": "config",
+      "symbols": [
+        "WebConfig",
+        "userService"
+      ],
+      "in_degree": 2,
+      "out_degree": 1
+    },
+    {
+      "id": "src/main/kotlin/blog/demo/domain/user/User.kt",
+      "layer": "domain",
+      "symbols": [
+        "User",
+        "UserDefaults"
+      ],
+      "in_degree": 0,
+      "out_degree": 1
+    },
+    {
+      "id": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+      "layer": "domain",
+      "symbols": [
+        "UserService",
+        "find"
+      ],
+      "in_degree": 1,
+      "out_degree": 2
+    },
+    {
+      "id": "src/main/kotlin/blog/demo/global/AppException.kt",
+      "layer": "global",
+      "symbols": [
+        "AppException"
+      ],
+      "in_degree": 1,
+      "out_degree": 1
+    },
+    {
+      "id": "src/main/kotlin/blog/demo/global/ErrorCode.kt",
+      "layer": "global",
+      "symbols": [
+        "ErrorCode"
+      ],
+      "in_degree": 2,
+      "out_degree": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/main/kotlin/blog/demo/DemoApplication.kt",
+      "target": "src/main/kotlin/blog/demo/config/WebConfig.kt",
+      "status": "valid"
+    },
+    {
+      "source": "src/main/kotlin/blog/demo/config/WebConfig.kt",
+      "target": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+      "status": "valid"
+    },
+    {
+      "source": "src/main/kotlin/blog/demo/domain/user/User.kt",
+      "target": "src/main/kotlin/blog/demo/global/ErrorCode.kt",
+      "status": "valid"
+    },
+    {
+      "source": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+      "target": "src/main/kotlin/blog/demo/global/AppException.kt",
+      "status": "valid"
+    },
+    {
+      "source": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+      "target": "src/main/kotlin/blog/demo/global/ErrorCode.kt",
+      "status": "valid"
+    },
+    {
+      "source": "src/main/kotlin/blog/demo/global/AppException.kt",
+      "target": "src/main/kotlin/blog/demo/config/WebConfig.kt",
+      "status": "violation"
+    }
+  ],
+  "diagnostics": {
+    "layer_violations": [
+      {
+        "source": "src/main/kotlin/blog/demo/global/AppException.kt",
+        "target": "src/main/kotlin/blog/demo/config/WebConfig.kt",
+        "from_layer": "global",
+        "to_layer": "config"
+      }
+    ],
+    "cycles": [
+      [
+        "src/main/kotlin/blog/demo/config/WebConfig.kt",
+        "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+        "src/main/kotlin/blog/demo/global/AppException.kt",
+        "src/main/kotlin/blog/demo/config/WebConfig.kt"
+      ]
+    ],
+    "orphan_files": [],
+    "hub_files": []
+  }
+}

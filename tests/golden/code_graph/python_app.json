@@ -1,0 +1,231 @@
+{
+  "tech_stack": [
+    "typer 0.3.0",
+    "fastapi 0.1.0",
+    "uvicorn 0.2.0",
+    "pydantic >=2.0"
+  ],
+  "layers": [
+    {
+      "id": "routers",
+      "may_import": [
+        "services"
+      ],
+      "file_count": 2
+    },
+    {
+      "id": "cli",
+      "may_import": [
+        "services"
+      ],
+      "file_count": 2
+    },
+    {
+      "id": "services",
+      "may_import": [
+        "models"
+      ],
+      "file_count": 2
+    },
+    {
+      "id": "models",
+      "may_import": [],
+      "file_count": 4
+    }
+  ],
+  "nodes": [
+    {
+      "id": "app/__init__.py",
+      "layer": "root",
+      "symbols": [],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "app/dependencies.py",
+      "layer": "root",
+      "symbols": [
+        "get_item_service"
+      ],
+      "in_degree": 2,
+      "out_degree": 1
+    },
+    {
+      "id": "app/main.py",
+      "layer": "root",
+      "symbols": [
+        "create_app"
+      ],
+      "in_degree": 0,
+      "out_degree": 2
+    },
+    {
+      "id": "app/models/__init__.py",
+      "layer": "models",
+      "symbols": [],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "app/models/base.py",
+      "layer": "models",
+      "symbols": [
+        "Base"
+      ],
+      "in_degree": 1,
+      "out_degree": 0
+    },
+    {
+      "id": "app/models/item.py",
+      "layer": "models",
+      "symbols": [
+        "Item",
+        "to_service"
+      ],
+      "in_degree": 3,
+      "out_degree": 2
+    },
+    {
+      "id": "app/models/unused.py",
+      "layer": "models",
+      "symbols": [
+        "unused"
+      ],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "app/routers/__init__.py",
+      "layer": "routers",
+      "symbols": [],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "app/routers/items.py",
+      "layer": "routers",
+      "symbols": [
+        "list_items"
+      ],
+      "in_degree": 1,
+      "out_degree": 3
+    },
+    {
+      "id": "app/services/__init__.py",
+      "layer": "services",
+      "symbols": [],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "app/services/items.py",
+      "layer": "services",
+      "symbols": [
+        "ItemService",
+        "list_items"
+      ],
+      "in_degree": 4,
+      "out_degree": 1
+    },
+    {
+      "id": "cli/__init__.py",
+      "layer": "cli",
+      "symbols": [],
+      "in_degree": 0,
+      "out_degree": 0
+    },
+    {
+      "id": "cli/__main__.py",
+      "layer": "cli",
+      "symbols": [
+        "main"
+      ],
+      "in_degree": 0,
+      "out_degree": 2
+    }
+  ],
+  "edges": [
+    {
+      "source": "app/dependencies.py",
+      "target": "app/services/items.py",
+      "status": "valid"
+    },
+    {
+      "source": "app/main.py",
+      "target": "app/dependencies.py",
+      "status": "valid"
+    },
+    {
+      "source": "app/main.py",
+      "target": "app/routers/items.py",
+      "status": "valid"
+    },
+    {
+      "source": "app/models/item.py",
+      "target": "app/models/base.py",
+      "status": "valid"
+    },
+    {
+      "source": "app/models/item.py",
+      "target": "app/services/items.py",
+      "status": "violation"
+    },
+    {
+      "source": "app/routers/items.py",
+      "target": "app/dependencies.py",
+      "status": "valid"
+    },
+    {
+      "source": "app/routers/items.py",
+      "target": "app/models/item.py",
+      "status": "violation"
+    },
+    {
+      "source": "app/routers/items.py",
+      "target": "app/services/items.py",
+      "status": "valid"
+    },
+    {
+      "source": "app/services/items.py",
+      "target": "app/models/item.py",
+      "status": "valid"
+    },
+    {
+      "source": "cli/__main__.py",
+      "target": "app/models/item.py",
+      "status": "valid"
+    },
+    {
+      "source": "cli/__main__.py",
+      "target": "app/services/items.py",
+      "status": "valid"
+    }
+  ],
+  "diagnostics": {
+    "layer_violations": [
+      {
+        "source": "app/models/item.py",
+        "target": "app/services/items.py",
+        "from_layer": "models",
+        "to_layer": "services"
+      },
+      {
+        "source": "app/routers/items.py",
+        "target": "app/models/item.py",
+        "from_layer": "routers",
+        "to_layer": "models"
+      }
+    ],
+    "cycles": [
+      [
+        "app/models/item.py",
+        "app/services/items.py",
+        "app/models/item.py"
+      ]
+    ],
+    "orphan_files": [
+      "app/models/unused.py"
+    ],
+    "hub_files": []
+  }
+}

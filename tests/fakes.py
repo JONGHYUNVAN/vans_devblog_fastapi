@@ -14,6 +14,7 @@ from app.clients.llm.registry import LLMClientRegistry
 from app.clients.publisher.base import PostCategory, PostCreatePayload, Publisher, PublishResult
 from app.core.config import Settings
 from app.models.agent_call import AgentCall, TokenUsage
+from app.models.code_graph import CodeGraph
 from app.models.enums import AgentSlot, PostStatus
 from app.models.popular_search import PopularSearch
 from app.models.post import Post, PostSearchCriteria, PostSearchPage
@@ -137,6 +138,46 @@ class FakePostRepository:
         if self.error:
             raise self.error
         return [post.post_id for post in self.posts if post.post_id]
+
+
+class FakeGitHubClient:
+    """어느 저장소든 같은 tarball 을 준다. error 가 있으면 던진다."""
+
+    def __init__(self, tarball: bytes = b"", error: Exception | None = None) -> None:
+        self.tarball = tarball
+        self.error = error
+        self.calls: list[tuple[str, str, str]] = []
+
+    def download_tarball(self, owner: str, name: str, ref: str) -> bytes:
+        self.calls.append((owner, name, ref))
+        if self.error:
+            raise self.error
+        return self.tarball
+
+
+class FakeCodeGraphRepository:
+    """(repo, commit_sha) → CodeGraph. upsert_error 는 저장에서 던진다."""
+
+    def __init__(self, code_graphs: Iterable[CodeGraph] = (), upsert_error: Exception | None = None) -> None:
+        self.code_graphs = {(each.repo, each.commit_sha): each for each in code_graphs}
+        self.upsert_error = upsert_error
+        self.stale_calls: list[tuple[str, int]] = []
+
+    def get_by_commit(self, repo: str, commit_sha: str) -> CodeGraph | None:
+        return self.code_graphs.get((repo, commit_sha))
+
+    def get_latest(self, repo: str) -> CodeGraph | None:
+        candidates = [each for (key, _), each in self.code_graphs.items() if key == repo]
+        return max(candidates, key=lambda each: each.analyzed_at, default=None)
+
+    def upsert(self, code_graph: CodeGraph) -> None:
+        if self.upsert_error:
+            raise self.upsert_error
+        self.code_graphs[(code_graph.repo, code_graph.commit_sha)] = code_graph
+
+    def delete_stale(self, repo: str, keep: int) -> int:
+        self.stale_calls.append((repo, keep))
+        return 0
 
 
 def kis_trade_body(**overrides: str) -> str:
