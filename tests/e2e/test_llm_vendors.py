@@ -7,6 +7,8 @@
 
 import json
 import os
+from collections.abc import Callable
+from functools import partial
 
 import pytest
 from pydantic import BaseModel
@@ -52,25 +54,28 @@ def _messages(schema: type[BaseModel]) -> list[LLMMessage]:
     ]
 
 
-def _clients() -> list[tuple[str, LLMClient, str]]:
+def _clients() -> list[tuple[str, Callable[[], LLMClient], str]]:
+    """클라이언트는 테스트마다 만든다. 이벤트 루프가 테스트마다 달라 공유하면 anthropic SDK 연결이 'Event loop is closed' 로 실패한다."""
     found = []
     if key := os.environ.get("ANTHROPIC_API_KEY"):
-        found.append(("anthropic", AnthropicClient(key), os.environ.get("E2E_ANTHROPIC_MODEL", "claude-opus-5-5")))
+        found.append(
+            ("anthropic", partial(AnthropicClient, key), os.environ.get("E2E_ANTHROPIC_MODEL", "claude-opus-5-5"))
+        )
     if key := os.environ.get("GOOGLE_API_KEY"):
-        found.append(("google", GoogleClient(key), os.environ.get("E2E_GOOGLE_MODEL", "gemini-2.5-pro")))
+        found.append(("google", partial(GoogleClient, key), os.environ.get("E2E_GOOGLE_MODEL", "gemini-2.5-pro")))
     if key := os.environ.get("XAI_API_KEY"):
-        found.append(("xai", XAIClient(key), os.environ.get("E2E_XAI_MODEL", "grok-4")))
+        found.append(("xai", partial(XAIClient, key), os.environ.get("E2E_XAI_MODEL", "grok-4")))
     return found
 
 
 @pytest.mark.parametrize("schema", CONTRACTS, ids=lambda schema: schema.__name__)
 @pytest.mark.parametrize(
-    ("provider", "client", "model_id"), _clients(), ids=lambda value: value if isinstance(value, str) else ""
+    ("provider", "make_client", "model_id"), _clients(), ids=lambda value: value if isinstance(value, str) else ""
 )
-async def test_vendor_accepts_each_contract_schema_and_returns_matching_json(provider, client, model_id, schema):
+async def test_vendor_accepts_each_contract_schema_and_returns_matching_json(provider, make_client, model_id, schema):
     params = LLMParams(model_id=model_id, temperature=0.7, max_output_tokens=4000)
 
-    response = await client.complete(_messages(schema), schema.model_json_schema(), params, timeout=_TIMEOUT)
+    response = await make_client().complete(_messages(schema), schema.model_json_schema(), params, timeout=_TIMEOUT)
 
     schema.model_validate_json(response.text)
     assert response.usage.prompt_tokens > 0 and response.usage.completion_tokens > 0
