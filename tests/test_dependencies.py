@@ -36,36 +36,32 @@ def test_build_publisher_requires_post_be_url():
     assert build_publisher(Settings(_env_file=None, post_be_url="https://post.test")) is not None
 
 
-def test_build_publisher_carries_the_publishing_account():
+def test_build_publisher_carries_only_complete_provider_accounts():
     settings = Settings(
         _env_file=None,
         post_be_url="https://post.test",
         user_service_url="https://user.test",
-        publisher_email="bot@example.com",
-        publisher_password="Password1!",
+        anthropic_publisher_email="claude@example.com",
+        anthropic_publisher_password="Password1!",
+        google_publisher_email="gemini@example.com",  # 비밀번호 없음
     )
 
     publisher = build_publisher(settings)
 
     assert publisher is not None
-    assert (publisher._user_service_url, publisher._email, publisher._password) == (  # noqa: SLF001
-        "https://user.test",
-        "bot@example.com",
-        "Password1!",
-    )
+    assert publisher.has_account("anthropic")
+    assert not publisher.has_account("google")
+    assert not publisher.has_account("xai")
 
 
-def test_build_pipeline_runner_publishes_through_publishing_service_only_when_fully_configured():
+def test_build_pipeline_runner_publishes_through_publishing_service_only_with_post_be_url():
     database = FakeAsyncDatabase()
-    account = {"user_service_url": "https://user.test", "publisher_email": "bot@x.io", "publisher_password": "pw"}
 
-    configured = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test", **account))
-    url_only = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test"))
+    configured = build_pipeline_runner(database, Settings(_env_file=None, post_be_url="https://post.test"))
     without = build_pipeline_runner(database, Settings(_env_file=None))
 
+    # 벤더별 계정 검사는 PublishingService 가 글마다 한다
     assert isinstance(configured._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
-    # 계정이 비면 발행 의도를 저장하기 전에 멈춘다(재개 때 PUBLISH_UNCERTAIN 으로 격리되지 않게)
-    assert not isinstance(url_only._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
     assert not isinstance(without._draft_pipeline._publisher, PublishingService)  # noqa: SLF001
     assert isinstance(build_draft_decision_service(database, Settings(_env_file=None)), DraftDecisionService)
     assert isinstance(build_pipeline_view_service(database, Settings(_env_file=None)), PipelineViewService)

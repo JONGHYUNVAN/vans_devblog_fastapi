@@ -1,6 +1,6 @@
 """실제 Post BE 에서 활성 카테고리를 읽고(5단계), 발행 계정으로 로그인해 본다(6단계). 기본 실행에서 빠진다.
 
-사용: POST_BE_URL=... USER_SERVICE_URL=... PUBLISHER_EMAIL=... PUBLISHER_PASSWORD=... pytest -m e2e tests/e2e/test_post_be.py
+사용: POST_BE_URL=... USER_SERVICE_URL=... ANTHROPIC_PUBLISHER_EMAIL=... ANTHROPIC_PUBLISHER_PASSWORD=... (GOOGLE_·XAI_ 도 같다) pytest -m e2e tests/e2e/test_post_be.py
 실제 발행은 라운드를 돌려 확인한다(agents start-round --wait + agents run + agents approve).
 """
 
@@ -9,6 +9,7 @@ import os
 import httpx2
 import pytest
 
+from app.clients.publisher.base import PublisherAccount
 from app.clients.publisher.post_be import PostBEPublisher
 from app.services.round import category_options
 
@@ -29,18 +30,17 @@ async def test_active_categories_form_main_sub_pairs():
     assert all(option.main_category_id != option.sub_category_id for option in options)
 
 
-async def test_publisher_account_can_log_in():
-    """발행 계정으로 로그인만 해 본다(글은 만들지 않는다). 6단계."""
+@pytest.mark.parametrize("provider", ["ANTHROPIC", "GOOGLE", "XAI"])
+async def test_publisher_account_can_log_in(provider):
+    """벤더별 발행 계정으로 로그인만 해 본다(글은 만들지 않는다). 6단계."""
     user_service_url = os.environ.get("USER_SERVICE_URL", "")
-    email = os.environ.get("PUBLISHER_EMAIL", "")
-    password = os.environ.get("PUBLISHER_PASSWORD", "")
+    email = os.environ.get(f"{provider}_PUBLISHER_EMAIL", "")
+    password = os.environ.get(f"{provider}_PUBLISHER_PASSWORD", "")
     if not (POST_BE_URL and user_service_url and email and password):
-        pytest.skip("USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD 가 없다")
+        pytest.skip(f"USER_SERVICE_URL, {provider}_PUBLISHER_EMAIL, {provider}_PUBLISHER_PASSWORD 가 없다")
 
-    publisher = PostBEPublisher(
-        POST_BE_URL, timeout_s=30, user_service_url=user_service_url, email=email, password=password
-    )
+    publisher = PostBEPublisher(POST_BE_URL, timeout_s=30, user_service_url=user_service_url)
     async with httpx2.AsyncClient(timeout=30) as client:
-        token = await publisher._login(client)  # noqa: SLF001
+        token = await publisher._login(client, PublisherAccount(email=email, password=password))  # noqa: SLF001
 
     assert token.count(".") == 2  # JWT

@@ -251,7 +251,7 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
 4. `failed_at`이 없는 `publication_intent`가 남아 있으면 직전 호출이 Post BE에 닿았는지 모른다(호출 중 프로세스 종료). 다시 호출하지 않고 `ESCALATED(PUBLISH_UNCERTAIN)`로 보낸다. 그래서 정상 종료(`runner.stop`)는 발행 호출 중인 코루틴을 끊지 않고 결과 반영까지 기다린다. 끊으면 재배포마다 이 격리가 생긴다.
 5. 최종 버전 본문 뒤에 요약 노트를 붙여 아래 변환표로 Tiptap JSON을 만들고, 아래 매핑표로 `CreatePostDto`를 채운다.
 6. `status==READY_TO_PUBLISH`인 문서에만 `attempt = publish_attempts + 1`인 발행 의도를 저장한다. 이 쓰기가 실패하면 발행을 호출하지 않는다.
-7. 에이전트 전용 관리자 계정으로 `vans_story_be`의 `POST /api/v1/auth/login`에 로그인해 액세스 토큰(기본 900초)을 받고, Bearer 토큰으로 `POST /api/v1/posts`를 호출한다. 토큰은 저장하지 않고 발행마다 받는다. 게시글 작성자는 이 계정이다.
+7. 글을 쓴 슬롯의 벤더 전용 관리자 계정(D-45)으로 `vans_story_be`의 `POST /api/v1/auth/login`에 로그인해 액세스 토큰(기본 900초)을 받고, Bearer 토큰으로 `POST /api/v1/posts`를 호출한다. 토큰은 저장하지 않고 발행마다 받는다. 게시글 작성자는 이 계정이다.
 8. 성공하면 `status==READY_TO_PUBLISH`인 글에만 `Publication`(응답의 게시글 id)과 상태 `PUBLISHED`를 조건 갱신하고, 이어서 레지스트리를 `PUBLISHED`로 쓴다(1절 순서). 검색 색인은 Post BE가 생성 시 스스로 요청한다.
 9. 그 조건 갱신이 실패하면 `PUBLISHED`로 쓰지 않고, 상태와 무관하게 반환된 `external_post_id`를 의도에만 남긴다(`reject_by_abort`도 의도를 지우지 않는다). 이 경쟁이 생기는 쓰기는 라운드 중단뿐이다. 자동으로 내리지 않는다. 운영자가 그 ID로 블로그 글을 회수한다.
 10. 결과가 확정된 실패(로그인 단계의 모든 실패, 글 생성 호출의 2xx 아닌 500 미만 응답(4xx·리다이렉트)·연결 거부)면 의도에 `failed_at`을 쓰고 `publish_attempts`를 그 `attempt`로 맞춘다. 상한 미만이면 지수 백오프 뒤 다시 호출하고, 상한이면 `ESCALATED(PUBLISH_FAILED)`다. 로그인에서는 글이 생기지 않으므로 그 단계의 타임아웃·5xx도 여기에 든다.

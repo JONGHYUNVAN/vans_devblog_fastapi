@@ -1,13 +1,15 @@
-"""vans_story_be_post 호출: 카테고리 조회, 봇 계정 로그인(vans_story_be), 글 생성 (설계 06 문서 3절 clients/publisher, 07 문서 D-40).
+"""vans_story_be_post 호출: 카테고리 조회, 작성 벤더 계정 로그인(vans_story_be), 글 생성 (설계 06 문서 3절 clients/publisher, 07 문서 D-40·D-45).
 
 실패 분류(04 문서 8절 10·11단계): 로그인 단계의 모든 실패와 글 생성의 2xx 아닌 500 미만 응답(4xx·리다이렉트)·연결 거부는
 PublishFailedError(결과 확정),
 글 생성의 응답 전 타임아웃·연결 끊김·5xx 는 PublishUncertainError(글이 생겼을 수 있다). 토큰은 저장하지 않고 발행마다 받는다.
 """
 
+from collections.abc import Mapping
+
 import httpx2
 
-from app.clients.publisher.base import PostCategory, PostCreatePayload, PublishResult
+from app.clients.publisher.base import PostCategory, PostCreatePayload, PublisherAccount, PublishResult
 from app.core.exceptions import PublishFailedError, PublishUncertainError
 
 _BEARER = "Bearer "
@@ -22,14 +24,12 @@ class PostBEPublisher:
         timeout_s: float,
         *,
         user_service_url: str = "",
-        email: str = "",
-        password: str = "",
+        accounts: Mapping[str, PublisherAccount] | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         self._post_be_url = post_be_url.rstrip("/")
         self._user_service_url = user_service_url.rstrip("/")
-        self._email = email
-        self._password = password
+        self._accounts = dict(accounts or {})  # provider → 계정
         self._timeout_s = timeout_s
         self._transport = transport
 
@@ -55,22 +55,23 @@ class PostBEPublisher:
             for row in rows
         ]
 
-    async def publish(self, payload: PostCreatePayload) -> PublishResult:
-        """로그인 → POST /api/v1/posts. 계정 설정이 비어 있으면 ValueError(설정 오류, 러너가 INTERNAL_ERROR 로 멈춘다)."""
-        if not (self._user_service_url and self._email and self._password):
-            raise ValueError(
-                "publisher account is not configured (USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)"
-            )
+    def has_account(self, provider: str) -> bool:
+        return bool(self._user_service_url) and provider in self._accounts
+
+    async def publish(self, payload: PostCreatePayload, provider: str) -> PublishResult:
+        """작성 벤더의 계정으로 로그인 → POST /api/v1/posts. 계정 설정이 없으면 ValueError(설정 오류, 러너가 INTERNAL_ERROR 로 멈춘다)."""
+        if not self.has_account(provider):
+            raise ValueError(f"publisher account for {provider!r} is not configured")
         async with httpx2.AsyncClient(transport=self._transport, timeout=self._timeout_s) as client:
-            token = await self._login(client)
+            token = await self._login(client, self._accounts[provider])
             return await self._create_post(client, token, payload)
 
-    async def _login(self, client: httpx2.AsyncClient) -> str:
+    async def _login(self, client: httpx2.AsyncClient, account: PublisherAccount) -> str:
         """POST /api/v1/auth/login. 액세스 토큰은 응답의 Authorization 헤더(Bearer)로 온다(vans_story_be AuthService.login)."""
         try:
             response = await client.post(
                 f"{self._user_service_url}/api/v1/auth/login",
-                json={"email": self._email, "password": self._password},
+                json={"email": account.email, "password": account.password.get_secret_value()},
             )
         except httpx2.HTTPError as exc:
             raise PublishFailedError(f"login failed: {type(exc).__name__}: {exc}") from exc

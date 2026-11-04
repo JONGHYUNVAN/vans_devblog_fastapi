@@ -6,7 +6,14 @@ CreatePostDto 매핑(본문 Tiptap 변환, 요약 노트)은 서비스가 한다
 
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+
+class PublisherAccount(BaseModel):
+    """vans_story_be 관리자 계정 하나. 이 계정으로 로그인해 만든 글의 작성자가 된다 (설계 07 문서 D-45)."""
+
+    email: str
+    password: SecretStr
 
 
 class PostCategory(BaseModel):
@@ -49,6 +56,10 @@ class Publisher(Protocol):
         """활성 카테고리 전부. 실패는 PublishFailedError (라운드를 만들지 않는다)."""
         ...
 
-    async def publish(self, payload: PostCreatePayload) -> PublishResult:
-        """로그인 뒤 글을 만든다. 결과가 확정된 실패는 PublishFailedError, 결과 불명은 PublishUncertainError (설계 04 문서 8절)."""
+    def has_account(self, provider: str) -> bool:
+        """이 벤더의 발행 계정으로 로그인할 설정이 있는가. 발행 의도를 저장하기 전에 검사한다."""
+        ...
+
+    async def publish(self, payload: PostCreatePayload, provider: str) -> PublishResult:
+        """작성 벤더의 계정으로 로그인한 뒤 글을 만든다. 결과가 확정된 실패는 PublishFailedError, 결과 불명은 PublishUncertainError (설계 04 문서 8절)."""
         ...

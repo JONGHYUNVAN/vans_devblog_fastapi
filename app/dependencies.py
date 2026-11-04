@@ -26,6 +26,7 @@ from app.clients.llm.registry import LLMClientRegistry
 from app.clients.llm.xai import XAIClient
 from app.clients.mongo import create_async_mongo_client, create_mongo_client, is_mongo_reachable
 from app.clients.openapi import OpenApiClient
+from app.clients.publisher.base import PublisherAccount
 from app.clients.publisher.post_be import PostBEPublisher
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
@@ -256,10 +257,24 @@ def build_llm_registry(settings: Settings) -> LLMClientRegistry:
     return LLMClientRegistry(clients, concurrency_per_provider=settings.llm_concurrency_per_provider)
 
 
+def build_publisher_accounts(settings: Settings) -> dict[str, PublisherAccount]:
+    """이메일과 비밀번호가 다 있는 벤더만 넣는다."""
+    candidates = {
+        "anthropic": (settings.anthropic_publisher_email, settings.anthropic_publisher_password),
+        "google": (settings.google_publisher_email, settings.google_publisher_password),
+        "xai": (settings.xai_publisher_email, settings.xai_publisher_password),
+    }
+    return {
+        provider: PublisherAccount(email=email, password=password)
+        for provider, (email, password) in candidates.items()
+        if email and password
+    }
+
+
 def build_publisher(settings: Settings) -> PostBEPublisher | None:
     """POST_BE_URL 이 없으면 None. 라운드 생성이 카테고리를 읽을 수 없어 ValueError 로 거절한다.
 
-    발행 계정(USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)이 비어 있으면 발행 호출이 ValueError 라 러너가 INTERNAL_ERROR 로 멈춘다.
+    글을 쓴 벤더의 계정(또는 USER_SERVICE_URL)이 없으면 PublishingService 가 ValueError 를 던져 러너가 INTERNAL_ERROR 로 멈춘다.
     """
     if not settings.post_be_url:
         return None
@@ -267,8 +282,7 @@ def build_publisher(settings: Settings) -> PostBEPublisher | None:
         settings.post_be_url,
         settings.publish_timeout_s,
         user_service_url=settings.user_service_url,
-        email=settings.publisher_email,
-        password=settings.publisher_password.get_secret_value() if settings.publisher_password else "",
+        accounts=build_publisher_accounts(settings),
     )
 
 
@@ -315,7 +329,6 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     publisher = build_publisher(settings)
     round_service = RoundService(round_repository, draft_repository, topic_registry_repository, publisher=publisher)
     agent_call_service = build_agent_call_service(database, settings)
-    account_ready = bool(settings.user_service_url and settings.publisher_email and settings.publisher_password)
     draft_publisher: DraftPublisher = (
         PublishingService(
             draft_repository=draft_repository,
@@ -323,7 +336,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             publisher=publisher,
             settings=settings,
         )
-        if publisher is not None and account_ready
+        if publisher is not None
         else UnconfiguredDraftPublisher()
     )
     return PipelineRunner(

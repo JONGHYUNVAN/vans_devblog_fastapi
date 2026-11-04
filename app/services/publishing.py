@@ -147,6 +147,10 @@ class PublishingService:
             draft.escalate(EscalationReason.PUBLISH_UNCERTAIN)
             await self._drafts.save(draft)
             return
+        provider = publishing_round.slot_bindings[draft.author_slot].provider
+        if not self._publisher.has_account(provider):
+            # 의도를 저장하기 전에 멈춘다. 설정을 고치고 재개하면 결과 불명으로 격리되지 않고 바로 발행한다
+            raise ValueError(f"publishing account for provider {provider!r} is not configured (USER_SERVICE_URL too)")
         previous = draft.publication_intent
         if previous is not None:
             await self._sleep(_BACKOFF_BASE_S * 2 ** (previous.attempt - 1))  # 결과 확정 실패 뒤 재호출
@@ -156,7 +160,7 @@ class PublishingService:
         await self._drafts.save(draft)  # 이 쓰기가 실패(충돌)하면 호출하지 않는다 (8절 6단계)
         # 호출과 결과 반영은 글 코루틴이 cancel 돼도(runner.stop) 끝까지 간다. 끊기면 결과를 모르는 의도가 남아
         # 평범한 재배포가 PUBLISH_UNCERTAIN 을 만들기 때문이다. 종료는 drain 으로 기다린다
-        task = asyncio.create_task(self._call_and_record(draft, intent, payload, note, requires_approval))
+        task = asyncio.create_task(self._call_and_record(draft, intent, payload, note, provider, requires_approval))
         self._in_flight.add(task)
         task.add_done_callback(self._in_flight.discard)
         await asyncio.shield(task)
@@ -172,10 +176,11 @@ class PublishingService:
         intent: PublicationIntent,
         payload: PostCreatePayload,
         note: str,
+        provider: str,
         requires_approval: bool,
     ) -> None:
         try:
-            result = await self._publisher.publish(payload)
+            result = await self._publisher.publish(payload, provider)
         except PublishFailedError as exc:
             logger.warning("draft %s publish attempt %s failed: %s", draft.draft_id, intent.attempt, exc)
             draft.fail_publish(self._settings.max_publish_attempts)
@@ -231,15 +236,13 @@ class PublishingService:
 
 
 class UnconfiguredDraftPublisher:
-    """발행 설정(POST_BE_URL 또는 발행 계정)이 비어 있을 때 꽂는 DraftPublisher. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다.
+    """POST_BE_URL 이 비어 있을 때 꽂는 DraftPublisher. 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다.
 
     발행 의도를 저장하기 전에 멈춰야 설정을 고치고 재개했을 때 결과 불명(PUBLISH_UNCERTAIN)으로 격리되지 않는다.
     """
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        raise ValueError(
-            "Post BE publishing is not configured (POST_BE_URL, USER_SERVICE_URL, PUBLISHER_EMAIL, PUBLISHER_PASSWORD)"
-        )
+        raise ValueError("Post BE publishing is not configured (POST_BE_URL)")
 
     async def drain(self) -> None:
         return None

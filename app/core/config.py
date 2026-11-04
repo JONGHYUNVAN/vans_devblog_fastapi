@@ -51,8 +51,13 @@ class Settings(BaseSettings):
     agent_slot_bindings: dict[str, Any] = {}
     post_be_url: str = ""  # vans_story_be_post. 카테고리 조회·발행
     user_service_url: str = ""  # vans_story_be. 발행 계정 로그인 (설계 07 문서 D-40)
-    publisher_email: str = ""  # 에이전트 전용 관리자 계정. 게시글 작성자가 된다
-    publisher_password: SecretStr | None = None
+    # 벤더별 발행 계정(관리자). 글을 쓴 슬롯의 벤더 계정이 게시글 작성자가 된다 (D-45)
+    anthropic_publisher_email: str = ""
+    anthropic_publisher_password: SecretStr | None = None
+    google_publisher_email: str = ""
+    google_publisher_password: SecretStr | None = None
+    xai_publisher_email: str = ""
+    xai_publisher_password: SecretStr | None = None
     publish_timeout_s: int = 30
     max_iterations: int = 2
     max_topic_attempts: int = 2

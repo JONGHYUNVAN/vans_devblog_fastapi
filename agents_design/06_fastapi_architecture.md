@@ -11,7 +11,7 @@
 | 요청 모델 | 짧은 동기 요청, 캐시 | 분 단위 장기 실행 백그라운드 태스크 |
 | DB 드라이버 | 동기 pymongo, 동기 elasticsearch | 비동기(`AsyncMongoClient`) |
 | 장애 영향 | 블로그 검색 다운 | 글 생성 지연 (사용자 영향 없음) |
-| 비밀 | ES·Mongo·KIS 키 | LLM 벤더 키 3종 + 발행용 에이전트 관리자 계정 비밀번호 |
+| 비밀 | ES·Mongo·KIS 키 | LLM 벤더 키 3종 + 벤더별 발행 관리자 계정 비밀번호 3종 |
 | 배포 주기 | 안정 | 프롬프트·페르소나 튜닝으로 잦음 |
 
 차이는 같은 앱 안에서 이렇게 수용한다.
@@ -30,7 +30,7 @@ app/
 ├─ main.py                     lifespan: Mongo(async) 연결, 인덱스 보장, PipelineRunner 시작·종료(DB 이름이 없으면 러너를 돌리지 않는다)
 ├─ dependencies.py             build_pipeline_runner·build_llm_registry·build_publisher·build_round_service·build_draft_decision_service·build_pipeline_view_service·build_agent_call_service(lifespan·CLI 공용 조립), open_async_database(CLI 연결), get_async_database·get_round_service·get_draft_decision_service·get_pipeline_view_service(라우터), verify_agents_key(AGENTS_INTERNAL_API_KEY, 07 문서 D-44). 라우터·CLI 에 리포지토리를 직접 주지 않는다
 ├─ core/
-│  ├─ config.py                Settings: 벤더 키, 슬롯 바인딩(원문 dict. 검증은 RoundService.create_round. core 는 models 를 import 하지 않는다), 반복·예산 상수, 승인 토글, 발행 계정
+│  ├─ config.py                Settings: 벤더 키, 슬롯 바인딩(원문 dict. 검증은 RoundService.create_round. core 는 models 를 import 하지 않는다), 반복·예산 상수, 승인 토글, 벤더별 발행 계정
 │  └─ exceptions.py            AppError + InvalidTransitionError(409), ConcurrentUpdateError(409), BudgetExceededError, LLMTransportError, LLMOutputError, LLMRetriesExhaustedError, PublishFailedError, PublishUncertainError
 ├─ routers/
 │  └─ agent_rounds.py          내부 API (X-Internal-Key)
@@ -161,7 +161,7 @@ class DraftPipelineService:
             case PostStatus.READY_TO_PUBLISH:                    await self._publisher.publish(draft, round); return draft
 ```
 
-- `POST_BE_URL`이나 발행 계정(`USER_SERVICE_URL`·`PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD`)이 없으면 `dependencies.build_pipeline_runner`가 `PublishingService` 대신 `_UnconfiguredDraftPublisher`를 꽂아 발행 단계에 닿은 글을 `ValueError` → `FAILED(INTERNAL_ERROR)`로 멈춘다. 발행 의도를 저장하기 전에 멈추므로 설정을 고치고 재개하면 바로 발행한다(의도 뒤에 멈추면 `PUBLISH_UNCERTAIN`으로 격리된다).
+- `POST_BE_URL`이 없으면 `dependencies.build_pipeline_runner`가 `PublishingService` 대신 `UnconfiguredDraftPublisher`를 꽂아 발행 단계에 닿은 글을 `ValueError` → `FAILED(INTERNAL_ERROR)`로 멈춘다. 글을 쓴 슬롯의 벤더 계정이나 `USER_SERVICE_URL`이 없으면 `PublishingService`가 같은 `ValueError`로 멈춘다(`Publisher.has_account`). 발행 의도를 저장하기 전에 멈추므로 설정을 고치고 재개하면 바로 발행한다(의도 뒤에 멈추면 `PUBLISH_UNCERTAIN`으로 격리된다).
 
 - `_should_run`은 라운드가 `IN_PROGRESS`이고, 글이 `is_active`이며, 승인 대기(`READY_TO_PUBLISH`, 승인 토글 켜짐, `approved_by` 없음)가 아닐 때만 참이다. 거짓이면 루프를 끝낸다. 사람 결정이 상태를 바꾸면 다음 스캔이 다시 띄운다.
 - `_write`는 `revision_cause`(없으면 v1 작성)로 호출 종류(`WRITE_DRAFT`·`REVISE_DRAFT`)와 입력을 정한다. 새 버전·리뷰·중재의 `call_id`는 `CallResult.call_id`다. 새 버전의 `origin_cause`가 `HUMAN`이면 게이트 재작성이어도 `human_instruction`을 넣는다. `DRAFTING`에서 재시작해도 같은 호출을 만든다.
@@ -171,7 +171,7 @@ class DraftPipelineService:
 
 ### `services/publishing.py`
 
-- `PublishingService.publish(draft, round)`가 04 문서 8절을 그대로 따른다. 글·라운드 재확인(3단계)과 승인 대기(1단계)는 글 코루틴이 매 걸음 다시 읽어 검사하므로 되풀이하지 않는다. 순서: `has_uncertain_publication`이면 호출 없이 `ESCALATED(PUBLISH_UNCERTAIN)` → 직전 의도가 결과 확정 실패면 지수 백오프(`2 × 2^(attempt-1)`초, `sleep` 주입) → `build_peer_review_note`(05 문서 5절 템플릿, 순수 함수) → `build_payload`(발행본 + 노트를 `markdown_to_tiptap`, `CreatePostDto` 매핑) → `begin_publish` 저장 → `Publisher.publish` → 성공이면 `publish` 저장과 레지스트리 `PUBLISHED`, `PublishFailedError`면 `fail_publish`, `PublishUncertainError`면 `escalate(PUBLISH_UNCERTAIN)`.
+- `PublishingService.publish(draft, round)`가 04 문서 8절을 그대로 따른다. 글·라운드 재확인(3단계)과 승인 대기(1단계)는 글 코루틴이 매 걸음 다시 읽어 검사하므로 되풀이하지 않는다. 순서: `has_uncertain_publication`이면 호출 없이 `ESCALATED(PUBLISH_UNCERTAIN)` → 작성 슬롯 벤더의 계정이 없으면 `ValueError`(D-45) → 직전 의도가 결과 확정 실패면 지수 백오프(`2 × 2^(attempt-1)`초, `sleep` 주입) → `build_peer_review_note`(05 문서 5절 템플릿, 순수 함수) → `build_payload`(발행본 + 노트를 `markdown_to_tiptap`, `CreatePostDto` 매핑) → `begin_publish` 저장 → `Publisher.publish(payload, provider)` → 성공이면 `publish` 저장과 레지스트리 `PUBLISHED`, `PublishFailedError`면 `fail_publish`, `PublishUncertainError`면 `escalate(PUBLISH_UNCERTAIN)`.
 - `begin_publish` 저장 뒤의 호출과 결과 반영은 별도 태스크로 띄워 `asyncio.shield`로 기다린다. 글 코루틴이 cancel 돼도(`runner.stop`) 결과를 반영해야 재배포마다 `PUBLISH_UNCERTAIN`이 생기지 않는다. `drain()`이 진행 중인 발행을 기다리고, `DraftPublisher` 계약에도 `drain`이 있다.
 - 성공 반영 저장이 충돌하면(라운드 중단) 글을 다시 읽어 상태와 무관하게 `publication_intent.external_post_id`만 남기고 `ConcurrentUpdateError`를 다시 던진다. 운영자가 그 id로 블로그 글을 회수한다(8절 9단계). 요약 응답(`DraftPublic`)과 `agents status`의 `external_post_id`가 `Publication`이 없으면 이 값을 보여 준다.
 - 노트의 LLM 텍스트(`comment`, `reason`, `reasoning`)는 줄바꿈을 공백으로 바꾸고 ASCII 구두점을 백슬래시로 이스케이프해 문단 텍스트로만 들어간다. 기각 항목은 CRITICAL > MAJOR 순으로 3건까지 인용문으로 넣고, 인용문 안의 줄은 줄 끝 `\`(hardBreak)로 나눈다.
@@ -274,9 +274,13 @@ class Settings(BaseSettings):
 
     # 발행 (07 문서 D-27, D-40)
     post_be_url: str = ""                 # 비어 있으면 publisher 가 None 이라 start-round 가 거절한다
-    user_service_url: str = ""            # vans_story_be. 봇 계정 로그인. 셋 중 하나라도 비면 발행 호출이 ValueError(INTERNAL_ERROR)
-    publisher_email: str = ""             # 에이전트 전용 관리자 계정
-    publisher_password: SecretStr | None = None
+    user_service_url: str = ""            # vans_story_be. 발행 계정 로그인. 이것이나 작성 벤더 계정이 비면 발행이 ValueError(INTERNAL_ERROR)
+    anthropic_publisher_email: str = ""   # 벤더별 관리자 계정. 글을 쓴 슬롯의 벤더 계정이 게시글 작성자다 (D-45)
+    anthropic_publisher_password: SecretStr | None = None
+    google_publisher_email: str = ""
+    google_publisher_password: SecretStr | None = None
+    xai_publisher_email: str = ""
+    xai_publisher_password: SecretStr | None = None
     agents_internal_api_key: str = ""     # /api/v1/agents/ 의 X-Internal-Key. 비어 있으면 모두 403 (07 문서 D-44)
     publish_timeout_s: int = 30
 
@@ -314,9 +318,9 @@ class Settings(BaseSettings):
 | `AgentCallService.replay` | 영수증 메시지를 그대로 보내고 새 영수증을 남기지 않음, 바인딩 덮어쓰기, `REVIEW` 영수증의 scope 로 출력 계약 선택 |
 | `services/publishing.py` | `CreatePostDto` 매핑. 외부 호출 후 로컬 반영 전 장애를 재현하면 다시 `drive`해도 호출하지 않고 `PUBLISH_UNCERTAIN`. `PublishFailedError`는 재시도 후 상한에서 `PUBLISH_FAILED`, `PublishUncertainError`는 즉시 `PUBLISH_UNCERTAIN`. `CONFIRM_PUBLISHED`는 호출 없이 `PUBLISHED`, `PUBLISH_AS_IS`·`REVISE`는 카운터·의도를 지움. 로그인 단계 실패는 결과 확정. 요약 노트에 HTML·여러 줄이 든 지적이 있어도 변환 성공. 응답 반영 전에 `REJECTED`이면 `PUBLISHED`로 쓰지 않고 `external_post_id`만 의도에 남긴다 |
 | `agents/parsers.py` | 없는 앵커·빈 체크리스트는 `LLMOutputError`. SPOT_CHECK의 MAJOR는 버리고 로그(그 앵커·렌즈는 검사하지 않음). `item_checks` 누락·중복·입력 외 ID·미해소 빈 note는 오류. 제안 카테고리가 입력 목록에 없음, 제목 100자 초과, 빈 `summary`는 오류 |
-| `clients/publisher/post_be.py` | `httpx2.MockTransport`. 로그인 요청·토큰 추출, `CreatePostDto` 전송, 로그인 단계의 어떤 실패(401·5xx·토큰 없음·타임아웃)든 `PublishFailedError`, 글 생성의 4xx·3xx·연결 거부·연결 타임아웃은 `PublishFailedError`, 5xx·읽기 타임아웃·연결 끊김·`_id` 없는 응답은 `PublishUncertainError`, 계정 설정 없음은 `ValueError` |
+| `clients/publisher/post_be.py` | `httpx2.MockTransport`. 로그인 요청·토큰 추출, `CreatePostDto` 전송, 로그인 단계의 어떤 실패(401·5xx·토큰 없음·타임아웃)든 `PublishFailedError`, 글 생성의 4xx·3xx·연결 거부·연결 타임아웃은 `PublishFailedError`, 5xx·읽기 타임아웃·연결 끊김·`_id` 없는 응답은 `PublishUncertainError`, 벤더 계정 설정 없음은 `ValueError`, 주어진 벤더의 계정으로 로그인 |
 | `cli/` | `_is_waiting_on_human`: 승인 대기·사람 결정 대기·종결만 멈춘 것으로 보고, 승인됐거나 토글이 꺼진 `READY_TO_PUBLISH` 는 계속 폴링 |
 | `routers/` | `dependency_overrides`로 서비스 교체, `tests/golden/`에 응답 계약. 에이전트 API는 `get_async_database`를 `FakeAsyncDatabase`로 바꿔 실제 리포지토리·서비스가 돌고, 시각을 고정한 시드로 `agents_*.json` golden 과 값까지 비교한다 |
-| e2e | `@pytest.mark.e2e`. `tests/e2e/test_llm_vendors.py` 가 키 있는 벤더마다 계약 출력 스키마 6종(`$defs`·`anyOf`·길이·개수 제약 포함)을 보내(6 × 벤더 수 호출) 구조화 출력 호환을 확인하고, `tests/e2e/test_post_be.py` 가 `POST_BE_URL` 의 활성 카테고리가 메인·서브 쌍을 이루는지와 발행 계정 로그인(글은 만들지 않는다)을 본다. 키·URL 이 없으면 건너뛴다. 기본 실행 제외 |
+| e2e | `@pytest.mark.e2e`. `tests/e2e/test_llm_vendors.py` 가 키 있는 벤더마다 계약 출력 스키마 6종(`$defs`·`anyOf`·길이·개수 제약 포함)을 보내(6 × 벤더 수 호출) 구조화 출력 호환을 확인하고, `tests/e2e/test_post_be.py` 가 `POST_BE_URL` 의 활성 카테고리가 메인·서브 쌍을 이루는지와 벤더별 발행 계정 로그인(글은 만들지 않는다)을 본다. 키·URL 이 없으면 건너뛴다. 기본 실행 제외 |
 
 `tests/fakes.py`에 `FakeLLMClient`를 두고 응답(본문·`LLMResponse`·예외)을 순서대로 스크립트한다. `FakePostBE`는 `delay_s`로 발행 HTTP 호출 시간을 흉내 낸다. `LLMClient` 계약에는 호출 종류가 없으므로 `ScriptedLLMClient`(4단계)가 시스템 프롬프트의 템플릿 문구로 종류(`PROPOSE_TOPIC`·`WRITE_DRAFT`·`REVISE_DRAFT`·`REVIEW_FULL`·`SPOT_CHECK`·`ARBITRATE`)를 가려 종류별 스크립트를 소비한다. 값이 callable 이면 입력 JSON 을 받아 응답을 만든다(SPOT_CHECK 의 `item_checks` 처럼 입력에 따라 달라지는 응답). 슬롯은 입력의 페르소나로 가린다. 파이프라인 테스트는 `FakePostDraftRepository` 대신 `FakeAsyncDatabase` 위의 실제 리포지토리를 써서 저장 조건(revision)까지 같이 검사한다. 토큰 사용량도 가짜로 돌려 소프트 예산을 테스트한다. Mongo 리포지토리는 `FakeAsyncCollection`(같음·`$in`·`$gte` 조건, `$group`/`$sum` 집계만)으로 질의·저장 조건을 검사한다.

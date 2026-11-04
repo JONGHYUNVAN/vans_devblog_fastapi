@@ -490,9 +490,15 @@ class FakePostBE:
     """
 
     def __init__(
-        self, outcomes: Iterable[Any] = (), categories: list[PostCategory] | None = None, delay_s: float = 0.0
+        self,
+        outcomes: Iterable[Any] = (),
+        categories: list[PostCategory] | None = None,
+        delay_s: float = 0.0,
+        accounts: set[str] | None = None,
     ) -> None:
         self.outcomes = list(outcomes)
+        self.accounts = accounts  # None 이면 모든 벤더에 계정이 있다
+        self.providers: list[str] = []  # publish 에 넘어온 벤더
         self.categories = categories or []
         self.delay_s = delay_s
         self.payloads: list[PostCreatePayload] = []
@@ -501,8 +507,12 @@ class FakePostBE:
     async def list_categories(self) -> list[PostCategory]:
         return self.categories
 
-    async def publish(self, payload: PostCreatePayload) -> PublishResult:
+    def has_account(self, provider: str) -> bool:
+        return self.accounts is None or provider in self.accounts
+
+    async def publish(self, payload: PostCreatePayload, provider: str) -> PublishResult:
         self.payloads.append(payload)
+        self.providers.append(provider)
         if self.delay_s:
             await asyncio.sleep(self.delay_s)
         outcome = self.outcomes.pop(0) if self.outcomes else None

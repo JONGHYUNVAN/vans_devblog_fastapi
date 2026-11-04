@@ -5,7 +5,7 @@ import json
 import httpx2
 import pytest
 
-from app.clients.publisher.base import PostCategory, PostCreatePayload
+from app.clients.publisher.base import PostCategory, PostCreatePayload, PublisherAccount
 from app.clients.publisher.post_be import PostBEPublisher
 from app.core.exceptions import PublishFailedError, PublishUncertainError
 
@@ -73,8 +73,10 @@ def _account(handler) -> PostBEPublisher:
         "https://post.test/",
         timeout_s=5,
         user_service_url="https://user.test/",
-        email="bot@example.com",
-        password="Password1!",
+        accounts={
+            "anthropic": PublisherAccount(email="claude@example.com", password="Password1!"),
+            "xai": PublisherAccount(email="grok@example.com", password="Password2!"),
+        },
         transport=httpx2.MockTransport(handler),
     )
 
@@ -94,11 +96,11 @@ async def test_publish_logs_in_then_creates_the_post_with_the_bearer_token():
             return _login_ok()
         return httpx2.Response(201, json={"_id": "507f1f77bcf86cd799439011", "title": "제목"})
 
-    result = await _account(handler).publish(PAYLOAD)
+    result = await _account(handler).publish(PAYLOAD, "anthropic")
 
     assert result.external_post_id == "507f1f77bcf86cd799439011"
     login, create = requests
-    assert json.loads(login.content) == {"email": "bot@example.com", "password": "Password1!"}
+    assert json.loads(login.content) == {"email": "claude@example.com", "password": "Password1!"}
     assert str(create.url) == POSTS_URL and create.headers["Authorization"] == "Bearer tok-1"
     assert json.loads(create.content) == {
         "title": "제목",
@@ -133,7 +135,7 @@ async def test_any_login_failure_is_a_certain_failure(login_response):
         return httpx2.Response(201, json={"_id": "x"})
 
     with pytest.raises(PublishFailedError):
-        await _account(handler).publish(PAYLOAD)
+        await _account(handler).publish(PAYLOAD, "anthropic")
     assert posts_called == []
 
 
@@ -161,9 +163,31 @@ async def test_post_creation_failures_are_classified_by_whether_the_post_may_exi
         return outcome
 
     with pytest.raises(expected):
-        await _account(handler).publish(PAYLOAD)
+        await _account(handler).publish(PAYLOAD, "anthropic")
 
 
 async def test_publish_without_account_settings_is_a_configuration_error():
-    with pytest.raises(ValueError, match="PUBLISHER_EMAIL"):
-        await _publisher(lambda request: httpx2.Response(201, json={"_id": "x"})).publish(PAYLOAD)
+    with pytest.raises(ValueError, match="anthropic"):
+        await _publisher(lambda request: httpx2.Response(201, json={"_id": "x"})).publish(PAYLOAD, "anthropic")
+
+
+async def test_publish_logs_in_with_the_account_of_the_given_provider():
+    logins: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if str(request.url) == LOGIN_URL:
+            logins.append(json.loads(request.content))
+            return _login_ok()
+        return httpx2.Response(201, json={"_id": "x"})
+
+    await _account(handler).publish(PAYLOAD, "xai")
+
+    assert logins == [{"email": "grok@example.com", "password": "Password2!"}]
+
+
+async def test_has_account_needs_the_provider_account_and_the_user_service_url():
+    publisher = _account(lambda request: httpx2.Response(200))
+
+    assert publisher.has_account("anthropic")
+    assert not publisher.has_account("google")
+    assert not _publisher(lambda request: httpx2.Response(200)).has_account("anthropic")

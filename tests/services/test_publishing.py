@@ -104,6 +104,35 @@ async def test_crash_after_post_be_call_escalates_publish_uncertain_without_call
     assert draft.publication_intent is not None and draft.publication_intent.failed_at is None
 
 
+async def test_publish_uses_the_account_of_the_provider_that_wrote_the_draft():
+    harness = PipelineHarness(_fast_track(), publisher=FakePostBE(["post-1"]))
+    draft = await _approved(harness)
+    publishing_round = await harness.rounds.get("round-1")
+    assert publishing_round is not None
+    for slot, provider in ((A, "anthropic"), (B, "google"), (C, "xai")):
+        publishing_round.slot_bindings[slot] = publishing_round.slot_bindings[slot].model_copy(
+            update={"provider": provider}
+        )
+
+    await harness.publishing.publish(draft, publishing_round)
+
+    assert harness.publisher.providers == ["anthropic"]
+
+
+async def test_missing_provider_account_stops_before_saving_the_publication_intent():
+    harness = PipelineHarness(_fast_track(), publisher=FakePostBE(accounts={"other"}))
+    draft = await _approved(harness)
+    publishing_round = await harness.rounds.get("round-1")
+    assert publishing_round is not None
+
+    with pytest.raises(ValueError, match="not configured"):
+        await harness.publishing.publish(draft, publishing_round)
+
+    stored = await harness.drafts.get(draft.draft_id)
+    assert stored is not None and stored.publication_intent is None
+    assert harness.publisher.payloads == []
+
+
 async def test_failed_attempts_retry_until_the_limit_then_escalate_publish_failed():
     harness = PipelineHarness(_fast_track(), publisher=FakePostBE([PublishFailedError("401")] * 3))
     await _approved(harness)
