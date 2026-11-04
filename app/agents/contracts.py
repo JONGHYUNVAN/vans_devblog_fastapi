@@ -6,12 +6,12 @@ item_id·source_review_id·reviewer_slot·is_new_in_version 은 출력에 없고
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agents.personas import PersonaProfile
 from app.models.enums import ArbitrationOutcome, IssueSeverity, ReviewLens, ReviewVerdict
 from app.models.post_draft import ItemCheck, ItemResolution, ReviewItem, VerificationChecklist
-from app.models.sections import REQUIRED_SECTIONS
+from app.models.sections import REQUIRED_SECTIONS, normalize_section_id
 from app.models.topic import CategoryOption, TopicProposal
 
 TITLE_MAX_CHARS = 100  # Post BE CreatePostDto.title 상한
@@ -177,6 +177,11 @@ class ReviewItemOutput(BaseModel):
     severity: IssueSeverity
     comment: str
     suggested_fix: str | None = None
+
+    @field_validator("section_id")
+    @classmethod
+    def _normalize_section_id(cls, value: str) -> str:
+        return normalize_section_id(value)
 
 
 class ReviewOutput(BaseModel):

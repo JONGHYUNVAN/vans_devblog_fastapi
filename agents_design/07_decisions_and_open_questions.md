@@ -49,6 +49,7 @@
 | D-43 | 파이프라인 컬렉션 4개(`agent_rounds`·`agent_drafts`·`agent_calls`·`agent_topics`)는 검색 서비스와 같은 Mongo, 같은 DB(`MONGODB_URI`·`mongodb_db_name`)에 둔다. 비동기 클라이언트만 별도로 만든다 | 사용자 결정(2026-11-02). 개인 블로그라 Mongo 인스턴스를 더 띄울 비용을 늘리지 않는다. 컬렉션 이름의 `agent_` 접두로 게시글 컬렉션과 구분한다 | 별도 `AGENTS_MONGODB_URI`로 standalone `vans_devblog_mongodb`를 가리키기 |
 | D-44 | 에이전트 내부 API(`/api/v1/agents/`)의 `X-Internal-Key`는 검색 내부 키(`INTERNAL_API_KEY`)와 별개인 `AGENTS_INTERNAL_API_KEY`다 | Q-16 해소(2026-11-02). 검색 키는 NestJS Post BE와 공유하는데, 같은 키면 Post BE 설정이 새면 라운드 생성·발행 승인까지 열린다. 에이전트 API는 사람(CLI·curl)만 부른다 | `INTERNAL_API_KEY` 공유 |
 | D-45 | 발행 계정은 벤더마다 하나다(`{ANTHROPIC,GOOGLE,XAI}_PUBLISHER_EMAIL`·`_PASSWORD`). 글을 쓴 슬롯(`author_slot`)의 바인딩 `provider` 계정으로 로그인해 그 계정이 게시글 작성자가 된다. 계정이 없으면 발행 의도를 저장하기 전에 `FAILED(INTERNAL_ERROR)`로 멈춘다 | 계정 하나면 블로그에서 어느 AI가 쓴 글인지 알 수 없다(2026-11-04, 사용자 결정). 슬롯이 아니라 벤더에 묶어 바인딩이 바뀌어도 이름이 벤더를 따라간다 | 공용 계정 하나(`PUBLISHER_EMAIL`), 공용 계정을 대체값으로 두기(작성자가 다시 흐려진다) |
+| D-46 | 리뷰 항목 `section_id`·수정 `section_id_after` 는 받을 때 `sec:` 접두사를 뗀다(`normalize_section_id`). 없는 앵커는 그대로 계약 위반이다 | 프롬프트의 `<!-- sec:id -->` 표기 때문에 Gemini 는 `sec:body-3` 처럼 답한다. 같은 메시지로 재시도해도 고치지 못해 있는 앵커를 가리킨 리뷰로 글이 FAILED 됐다(2026-11-05) | 프롬프트만 고치기(벤더 편차가 남는다) |
 
 ## 2. 미결 사항
 

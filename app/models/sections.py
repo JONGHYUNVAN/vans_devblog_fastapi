@@ -16,6 +16,11 @@ CODE_ANCHOR_PATTERN = re.compile(r"^code-\d+$")
 REQUIRED_SECTIONS = ["intro", "body-1", "tradeoff", "conclusion"]
 
 
+def normalize_section_id(section_id: str) -> str:
+    """모델이 앵커 표기를 그대로 옮긴 `sec:body-3` 을 앵커 id `body-3` 으로 바꾼다 (설계 07 문서 D-46)."""
+    return section_id.strip().removeprefix("sec:")
+
+
 def section_anchor(section_id: str) -> str:
     return f"<!-- sec:{section_id} -->"
 

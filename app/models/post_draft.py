@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.exceptions import InvalidTransitionError
 from app.models.enums import (
@@ -27,6 +27,7 @@ from app.models.enums import (
     RevisionCause,
     RoundAbortReason,
 )
+from app.models.sections import normalize_section_id
 from app.models.topic import TopicProposal
 
 _TERMINAL = frozenset({PostStatus.PUBLISHED, PostStatus.REJECTED})
@@ -104,6 +105,11 @@ class ItemResolution(BaseModel):
     status: ResolutionStatus
     reason: str | None = None  # REJECTED_WITH_REASON 이면 필수
     section_id_after: str | None = None  # 수정으로 섹션이 바뀌었으면 새 앵커
+
+    @field_validator("section_id_after")
+    @classmethod
+    def _normalize_section_id_after(cls, value: str | None) -> str | None:
+        return normalize_section_id(value) if value is not None else None
 
     @model_validator(mode="after")
     def _rejection_has_reason(self) -> Self:

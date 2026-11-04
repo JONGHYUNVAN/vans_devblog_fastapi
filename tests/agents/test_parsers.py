@@ -23,6 +23,10 @@ SECTIONS = ["intro", "body-1", "conclusion"]
 LENSES = [ReviewLens.FACT_STRUCTURE]
 
 
+def test_review_item_accepts_section_id_written_as_the_anchor() -> None:
+    assert _item("sec:body-3").section_id == "body-3"
+
+
 def _item(section_id: str = "body-1", severity: IssueSeverity = IssueSeverity.CRITICAL, lens=ReviewLens.FACT_STRUCTURE):
     return ReviewItemOutput(section_id=section_id, lens=lens, severity=severity, comment="지적")
 
