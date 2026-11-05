@@ -80,10 +80,7 @@ async def _ensure_popular_index(es: Elasticsearch) -> None:
 
 
 async def _ensure_code_graph_indexes(mongo_client: MongoClient, db_name: str) -> None:
-    # 코드 그래프가 꺼져 있으면(CODE_GRAPH_REPOS 가 비어 있음) 건너뛴다. Mongo 가 내려가 있어도 앱은 떠야 한다.
-    # 인덱스가 없으면 같은 commit 의 동시 분석이 문서를 둘 만들 수 있어 경고를 남긴다.
-    if not settings.code_graph_repos:
-        return
+    # Mongo 가 내려가 있어도 앱은 떠야 한다. 인덱스가 없으면 같은 commit 의 동시 분석이 문서를 둘 만들 수 있어 경고를 남긴다.
     try:
         await asyncio.to_thread(ensure_code_graph_indexes, mongo_client[db_name])
     except Exception as exc:  # 기동 경계

@@ -30,7 +30,7 @@ cp .env.example .env                                          # 값 채우기
 .venv/Scripts/python -m cli sync-status                 # MongoDB·ES 연결과 게시글 수
 .venv/Scripts/python -m cli sync-posts --dry-run        # MongoDB → ES 동기화 (건수만 확인)
 .venv/Scripts/python -m cli setup-popular               # 인기 검색어 인덱스 생성
-.venv/Scripts/python -m cli code-graph analyze vans_devblog_fastapi   # 코드 그래프 분석·저장 (CODE_GRAPH_REPOS 필요)
+.venv/Scripts/python -m cli code-graph analyze vans_devblog_fastapi   # 코드 그래프 분석·저장 (먼저 code-graph seed-repos 파일)
 .venv/Scripts/python -m cli code-graph context vans_devblog_fastapi   # 저장된 분석의 context 마크다운
 .venv/Scripts/python -m cli code-graph impact vans_story src/types/post.ts --hops 2  # 파일을 고칠 때의 영향 반경
 .venv/Scripts/python -m cli code-graph flow publish --mermaid           # 서비스 간 흐름(search·publish·posts·auth)

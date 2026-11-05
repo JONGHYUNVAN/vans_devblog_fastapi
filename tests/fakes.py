@@ -715,3 +715,18 @@ class PipelineHarness:
         """시나리오 준비용. 전이 규칙을 거치지 않고 상태만 바꿔 저장한다."""
         draft.status = status
         await self.drafts.save(draft)
+
+
+class FakeCodeGraphRepoConfigRepository:
+    """저장소 키 → 설정. replace_calls 는 넣은 횟수다."""
+
+    def __init__(self, repos: dict[str, dict[str, Any]] | None = None) -> None:
+        self.repos = dict(repos or {})
+        self.replace_calls = 0
+
+    def list_all(self) -> dict[str, dict[str, Any]]:
+        return dict(sorted(self.repos.items()))
+
+    def replace_all(self, repos: dict[str, dict[str, Any]]) -> None:
+        self.replace_calls += 1
+        self.repos = dict(repos)

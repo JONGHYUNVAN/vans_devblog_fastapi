@@ -64,7 +64,7 @@ class OpenApiSource(BaseModel):
 
 
 class CodeGraphRepo(BaseModel):
-    """CODE_GRAPH_REPOS 의 저장소 하나.
+    """Mongo code_graph_repos 의 저장소 하나.
 
     B 단계(서비스 그래프) 필드: service 는 서비스 그래프의 이름, openapi 는 엔드포인트·스키마 출처("self" 는 이 앱),
     client_env 는 다른 저장소가 이 서비스를 부를 때 쓰는 환경변수 → 그 값에 붙어 있는 경로 접두,

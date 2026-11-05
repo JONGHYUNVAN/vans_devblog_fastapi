@@ -44,7 +44,7 @@ def _step(caller: str, callee: str, http_method: str, path: str) -> FlowStep:
     return FlowStep(caller=caller, callee=callee, http_method=http_method, path=path)
 
 
-# README "서비스 그래프" 4절 표. 서비스 이름은 CODE_GRAPH_REPOS 의 service 다
+# README "서비스 그래프" 4절 표. 서비스 이름은 저장소 설정(code_graph_repos)의 service 다
 FLOWS: dict[str, Flow] = {
     "search": Flow(
         title="블로그 검색",
@@ -81,7 +81,7 @@ FLOWS: dict[str, Flow] = {
 
 class ServiceNode(BaseModel):
     """endpoint: 서비스의 HTTP 엔드포인트, code: 엔드포인트가 아닌 호출 지점(클라이언트 클래스 등),
-    external: CODE_GRAPH_REPOS 의 client_env 에 없는 환경변수가 가리키는 서비스와 코드에 박힌 외부 호스트."""
+    external: 저장소 설정(code_graph_repos)의 client_env 에 없는 환경변수가 가리키는 서비스와 코드에 박힌 외부 호스트."""
 
     id: str
     kind: Literal["endpoint", "code", "external"]

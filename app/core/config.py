@@ -1,15 +1,10 @@
 """환경변수 설정. 이름은 Django 서비스와 같게 유지해 CloudType 환경변수를 그대로 옮길 수 있게 한다."""
 
-import json
-import logging
 from functools import lru_cache
-from typing import Annotated, Any
 from urllib.parse import urlparse
 
-from pydantic import SecretStr, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-
-logger = logging.getLogger(__name__)
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -80,31 +75,12 @@ class Settings(BaseSettings):
     prompt_version: str = "v3"
     llm_concurrency_per_provider: int = 2
 
-    # 코드 그래프 (code_graph_design/README.md G-04·G-11). 저장소 키 → 저장소 설정. JSON 문자열, 예시는 code_graph_design/repos.example.json
-    # 원문 그대로 둔다. 검증은 CodeGraphService 가 한다(core 는 models 를 import 하지 않는다). 비어 있으면 기능이 꺼진다
-    code_graph_repos: Annotated[dict[str, Any], NoDecode] = {}
+    # 코드 그래프 (code_graph_design/README.md G-11). 분석 대상 저장소 설정은 Mongo code_graph_repos 다 (G-35)
     code_graph_download_timeout_s: int = 30
     code_graph_max_tarball_mb: int = 64
     code_graph_openapi_timeout_s: int = 10  # 서비스 그래프의 NestJS·Spring OpenAPI 조회 (G-13)
     # NestJS swagger-json 은 SwaggerAuthMiddleware 비밀번호 세션 뒤에 있다(그쪽 SWAGGER_ADMIN_PASSWORD). 비면 NestJS 스키마만 빈다
     post_be_swagger_password: SecretStr | None = None
-
-    @field_validator("code_graph_repos", mode="before")
-    @classmethod
-    def _parse_code_graph_repos(cls, value: Any) -> Any:
-        # 긴 JSON 을 환경변수로 넣는 값이라 오타가 나기 쉽다. 그 오타로 검색·KIS 까지 기동에 실패하면 안 되므로
-        # 코드 그래프만 끈다(G-24). 원문은 로그에 남기지 않는다
-        if not isinstance(value, str):
-            return value
-        try:
-            parsed = json.loads(value) if value.strip() else {}
-        except json.JSONDecodeError as exc:
-            logger.error("CODE_GRAPH_REPOS 가 JSON 이 아니라 코드 그래프를 끈다: %s (위치 %s)", exc.msg, exc.pos)
-            return {}
-        if not isinstance(parsed, dict):
-            logger.error("CODE_GRAPH_REPOS 가 객체가 아니라 코드 그래프를 끈다")
-            return {}
-        return parsed
 
     @property
     def elasticsearch_url(self) -> str:
