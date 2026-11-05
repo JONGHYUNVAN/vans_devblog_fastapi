@@ -120,9 +120,10 @@ def _preserved_violation(before: str, after: str) -> str | None:
         return "빈 패치"
     if any(token.type not in _PARAGRAPH_TOKENS for token in parse_markdown(after)):
         return "문단이 아닌 구조"
-    if _inline_markup(before) != _inline_markup(after):
-        return "서식 변경"
-    return "보존 대상 변경" if _signature(before) != _signature(after) else None
+    # 인라인 코드를 지우면 서식 개수도 줄어든다. 사유 집계가 내용 훼손을 서식 문제로 세지 않게 보존 대상을 먼저 본다
+    if _signature(before) != _signature(after):
+        return "보존 대상 변경"
+    return "서식 변경" if _inline_markup(before) != _inline_markup(after) else None
 
 
 def _format_violation(before: str, after: str) -> str | None:
