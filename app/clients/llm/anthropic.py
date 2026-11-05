@@ -9,7 +9,8 @@ import httpx2
 from app.clients.llm.base import LLMCitation, LLMMessage, LLMParams, LLMResponse, LLMUsage
 from app.core.exceptions import LLMTransportError
 
-_WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search"}
+# 기본값(코드 실행 경유, 동적 필터링)은 응답 text 블록에 citations 가 오지 않아(e2e 재현) 사실 확인의 출처가 모두 사라진다. 직접 호출로 받는다
+_WEB_SEARCH_TOOL = {"type": "web_search_20260318", "name": "web_search", "allowed_callers": ["direct"]}
 _MAX_CONTINUATIONS = 5  # 긴 검색이 pause_turn 으로 멈췄을 때 이어 가는 횟수
 
 

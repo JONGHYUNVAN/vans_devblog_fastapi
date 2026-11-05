@@ -148,7 +148,8 @@ async def test_web_search_sends_the_tool_without_a_format_and_reads_citations():
     response = await _client(handler).complete(MESSAGES, None, params, timeout=30)
 
     body = json.loads(requests[0].content)
-    assert body["tools"] == [{"type": "web_search_20260209", "name": "web_search"}]
+    # 코드 실행 경유(기본값)는 citations 를 주지 않아 직접 호출로 고정한다
+    assert body["tools"] == [{"type": "web_search_20260318", "name": "web_search", "allowed_callers": ["direct"]}]
     assert "output_config" not in body  # 인용과 구조화 출력을 함께 쓰면 400 이다
     assert response.text == "찾아본다. 문서와 일치한다"
     assert [(citation.url, citation.title) for citation in response.citations] == [("https://docs.test/a", "A")]
