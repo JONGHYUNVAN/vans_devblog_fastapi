@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     review_timeout_s: int = 300
     draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
     scan_interval_s: int = 15
-    prompt_version: str = "v1"
+    prompt_version: str = "v2"
     llm_concurrency_per_provider: int = 2
 
     # 코드 그래프 (code_graph_design/README.md G-04·G-11). 저장소 키 → 저장소 설정. JSON 문자열, 예시는 code_graph_design/repos.example.json

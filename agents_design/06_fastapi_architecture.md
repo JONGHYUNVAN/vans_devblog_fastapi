@@ -286,7 +286,7 @@ class Settings(BaseSettings):
 
     # 운영
     publish_requires_approval: bool = True
-    prompt_version: str = "v1"
+    prompt_version: str = "v2"
     llm_concurrency_per_provider: int = 2
 ```
 

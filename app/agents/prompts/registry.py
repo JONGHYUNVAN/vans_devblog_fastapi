@@ -7,7 +7,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 TEMPLATE_NAMES = ("propose_topic", "write_draft", "revise_draft", "review_full", "review_spot_check", "arbitrate")
 
 _PROMPTS_DIR = Path(__file__).parent
