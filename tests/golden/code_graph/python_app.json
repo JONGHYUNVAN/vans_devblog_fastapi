@@ -148,57 +148,68 @@
     {
       "source": "app/dependencies.py",
       "target": "app/services/items.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "app/main.py",
       "target": "app/dependencies.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "app/main.py",
       "target": "app/routers/items.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "app/models/item.py",
       "target": "app/models/base.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "app/models/item.py",
       "target": "app/services/items.py",
-      "status": "violation"
+      "status": "violation",
+      "kind": "static"
     },
     {
       "source": "app/routers/items.py",
       "target": "app/dependencies.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "app/routers/items.py",
       "target": "app/models/item.py",
-      "status": "violation"
+      "status": "violation",
+      "kind": "static"
     },
     {
       "source": "app/routers/items.py",
       "target": "app/services/items.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "app/services/items.py",
       "target": "app/models/item.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "cli/__main__.py",
       "target": "app/models/item.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "cli/__main__.py",
       "target": "app/services/items.py",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     }
   ],
   "diagnostics": {
@@ -207,13 +218,15 @@
         "source": "app/models/item.py",
         "target": "app/services/items.py",
         "from_layer": "models",
-        "to_layer": "services"
+        "to_layer": "services",
+        "type_only": false
       },
       {
         "source": "app/routers/items.py",
         "target": "app/models/item.py",
         "from_layer": "routers",
-        "to_layer": "models"
+        "to_layer": "models",
+        "type_only": false
       }
     ],
     "cycles": [
@@ -223,9 +236,17 @@
         "app/models/item.py"
       ]
     ],
+    "cycle_groups": [
+      [
+        "app/models/item.py",
+        "app/services/items.py"
+      ]
+    ],
+    "type_only_cycle_groups": [],
     "orphan_files": [
       "app/models/unused.py"
     ],
-    "hub_files": []
+    "hub_files": [],
+    "unassigned_files": []
   }
 }

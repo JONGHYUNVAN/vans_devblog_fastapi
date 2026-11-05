@@ -3,10 +3,14 @@
 ts_app 트리를 실제로 분석해 가짜 리포지토리에 넣고, 서비스 그래프 입력으로 쓴다.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.core.cache import SERVICE_GRAPH_CACHE_KEY, cache
 from app.core.exceptions import NotFoundError
+from app.models.code_graph import CodeGraph, CodeGraphDiagnostics, CodeGraphRepo, InboundRoute, OutboundCall
+from app.models.service_graph import Flow, FlowHop, FlowStep, ServiceGraph, ServiceSource
 from app.services.code_graph import CodeGraphService
 from app.services.service_graph import ServiceGraphService
 from tests.conftest import load_golden
@@ -124,3 +128,100 @@ def test_get_flow_traces_known_flow_and_rejects_unknown():
     assert flow.mermaid.startswith("sequenceDiagram\n")
     with pytest.raises(NotFoundError):
         service.get_flow("nope")
+
+
+def _source(repo: str, *, calls=(), routes=(), client_env=None, service=None) -> ServiceSource:
+    spec = CodeGraphRepo(
+        owner="x", name=repo, source_roots=["src"], layers=[], service=service or repo, client_env=client_env or {}
+    )
+    code_graph = CodeGraph(
+        repo=repo,
+        commit_sha="a" * 40,
+        analyzed_at=datetime(2026, 11, 5, tzinfo=UTC),
+        tech_stack=[],
+        layers=[],
+        allowed_edges=[],
+        nodes=[],
+        edges=[],
+        diagnostics=CodeGraphDiagnostics(),
+        outbound_calls=list(calls),
+        inbound_routes=list(routes),
+    )
+    return ServiceSource(repo=repo, spec=spec, code_graph=code_graph, openapi=None, openapi_status="unavailable")
+
+
+def _call(env_var: str, method: str, path: str, host: str | None = None) -> OutboundCall:
+    return OutboundCall(
+        caller_file="src/c.ts",
+        caller_symbol="C.call",
+        env_var=env_var,
+        http_method=method,
+        raw_path=path,
+        external_host=host,
+    )
+
+
+def test_external_host_becomes_external_node():
+    graph = ServiceGraph.build([_source("bff", calls=[_call("", "GET", "/v8/chart", "query1.finance.yahoo.com")])])
+
+    [edge] = graph.edges
+    assert (edge.target, edge.status) == ("host:query1.finance.yahoo.com", "external")
+    assert any(node.id == edge.target and node.kind == "external" for node in graph.nodes)
+
+
+def test_source_routes_match_calls_when_openapi_is_unavailable():
+    # Spring 의 /v3/api-docs 는 운영에서 비공개라 소스에서 읽은 라우트로 맞춘다 (G-29)
+    caller = _source("nest", calls=[_call("USER_URL", "GET", "/users/email/${email}")])
+    callee = _source(
+        "spring",
+        routes=[InboundRoute(file="U.kt", http_method="GET", path="/api/v1/users/email/{email}")],
+        client_env={"USER_URL": "/api/v1"},
+    )
+
+    [edge] = ServiceGraph.build([caller, callee]).edges
+
+    assert edge.status == "matched"
+    assert edge.path == "/api/v1/users/email/{email}"
+
+
+def _hop(graph: ServiceGraph, caller: str, callee: str, path: str) -> FlowHop:
+    flow = Flow(title="t", steps=[FlowStep(caller=caller, callee=callee, http_method="GET", path=path)])
+    return graph.trace("f", flow).hops[0]
+
+
+def test_hop_is_verified_only_when_call_site_and_target_endpoint_both_exist():
+    matched = ServiceGraph.build(
+        [
+            _source("nest", calls=[_call("USER_URL", "GET", "/users")]),
+            _source(
+                "spring",
+                routes=[InboundRoute(file="U.kt", http_method="GET", path="/api/v1/users")],
+                client_env={"USER_URL": "/api/v1"},
+            ),
+        ]
+    )
+    hop = _hop(matched, "nest", "spring", "/api/v1/users")
+    assert (hop.status, hop.verified) == ("matched", True)
+
+    missing = ServiceGraph.build(
+        [
+            _source("nest", calls=[_call("USER_URL", "GET", "/gone")]),
+            _source(
+                "spring",
+                routes=[InboundRoute(file="U.kt", http_method="GET", path="/api/v1/users")],
+                client_env={"USER_URL": "/api/v1"},
+            ),
+        ]
+    )
+    hop = _hop(missing, "nest", "spring", "/api/v1/gone")
+    assert hop.call_sites != []
+    assert (hop.status, hop.verified) == ("missing", False)
+
+    unknown = ServiceGraph.build(
+        [
+            _source("nest", calls=[_call("USER_URL", "GET", "/users")]),
+            _source("spring", client_env={"USER_URL": "/api/v1"}),
+        ]
+    )
+    hop = _hop(unknown, "nest", "spring", "/api/v1/users")
+    assert (hop.status, hop.verified) == ("unknown", False)

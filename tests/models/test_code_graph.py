@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from app.models.code_graph import CodeGraph, CodeGraphRepo, SourceFile
+from app.models.code_graph import CodeGraph, CodeGraphRepo, SourceFile, stronger_kind
 
 
 def _build(paths: list[str], imports: list[tuple[str, str]], **spec: object) -> CodeGraph:
@@ -26,7 +26,7 @@ def _build(paths: list[str], imports: list[tuple[str, str]], **spec: object) -> 
         tech_stack=[],
         repo_spec=repo_spec,
         files=[SourceFile(path=path, symbols=[], is_barrel=path.endswith("index.ts")) for path in paths],
-        imports=set(imports),
+        imports=dict.fromkeys(imports, "static"),
     )
 
 
@@ -119,13 +119,98 @@ def test_build_hubs_rank_by_in_then_out_degree_up_to_limit():
     assert (code_graph.diagnostics.hub_files[0].in_degree, code_graph.diagnostics.hub_files[0].out_degree) == (6, 1)
 
 
-def test_render_context_marks_empty_sections_and_kotlin_limit():
+def test_render_context_marks_empty_sections():
     code_graph = _build(["src/upper/App.kt"], [], diagnostics={"orphans": True, "hubs": True})
 
     context = code_graph.render_context()
 
     assert context.startswith("# Code Graph Context: demo (`ccccccc`)\n")
-    assert "- Note: Kotlin same-package references have no import and are not edges.\n" in context
     assert "- Violations (0)\n- Declared Exceptions (0)\n" in context
-    assert "- Cycles (0)\n- Orphans (1): `src/upper/App.kt`\n" in context
+    assert "- Runtime Cycles (0)\n- Orphans (1): `src/upper/App.kt`\n" in context
     assert "| lower | 0 | - |" in context
+
+
+def _build_kinds(paths: list[str], imports: dict[tuple[str, str], str]) -> CodeGraph:
+    repo_spec = CodeGraphRepo.model_validate(
+        {
+            "owner": "JONGHYUNVAN",
+            "name": "demo",
+            "source_roots": ["src"],
+            "layers": [
+                {"id": "upper", "path": "src/upper", "may_import": ["lower"]},
+                {"id": "lower", "path": "src/lower", "may_import": []},
+            ],
+        }
+    )
+    return CodeGraph.build(
+        repo="demo",
+        commit_sha="c" * 40,
+        analyzed_at=datetime(2026, 11, 3, tzinfo=UTC),
+        tech_stack=[],
+        repo_spec=repo_spec,
+        files=[SourceFile(path=path, symbols=[]) for path in paths],
+        imports=imports,
+    )
+
+
+def test_type_only_violation_is_flagged_and_marked_in_context():
+    code_graph = _build_kinds(
+        ["src/upper/a.ts", "src/lower/b.ts", "src/lower/c.ts"],
+        {("src/lower/b.ts", "src/upper/a.ts"): "type", ("src/lower/c.ts", "src/upper/a.ts"): "static"},
+    )
+
+    assert [(each.source, each.type_only) for each in code_graph.diagnostics.layer_violations] == [
+        ("src/lower/b.ts", True),
+        ("src/lower/c.ts", False),
+    ]
+    context = code_graph.render_context()
+    assert "- Violations, type-only 1 (2):" in context
+    assert "`src/upper/a.ts` (upper) [type-only]" in context
+
+
+def test_cycle_group_lists_every_member_not_only_the_representative_path():
+    files = ["src/lower/a.ts", "src/lower/b.ts", "src/lower/c.ts", "src/lower/d.ts"]
+    imports = {
+        ("src/lower/a.ts", "src/lower/b.ts"): "static",
+        ("src/lower/b.ts", "src/lower/a.ts"): "static",
+        ("src/lower/a.ts", "src/lower/c.ts"): "static",
+        ("src/lower/c.ts", "src/lower/a.ts"): "dynamic",
+        ("src/lower/a.ts", "src/lower/d.ts"): "static",
+        ("src/lower/d.ts", "src/lower/a.ts"): "type",
+    }
+
+    diagnostics = _build_kinds(files, imports).diagnostics
+
+    assert diagnostics.cycle_groups == [["src/lower/a.ts", "src/lower/b.ts", "src/lower/c.ts"]]
+    assert diagnostics.type_only_cycle_groups == [files]
+
+
+def test_unassigned_files_reports_new_folders_but_not_files_at_the_source_root():
+    diagnostics = _build_kinds(["src/main.ts", "src/orders/a.ts", "src/upper/b.ts"], {}).diagnostics
+
+    assert diagnostics.unassigned_files == ["src/orders/a.ts"]
+
+
+def test_impact_limits_hops_and_can_skip_type_edges():
+    files = ["src/lower/a.ts", "src/lower/b.ts", "src/lower/c.ts", "src/lower/d.ts"]
+    code_graph = _build_kinds(
+        files,
+        {
+            ("src/lower/b.ts", "src/lower/a.ts"): "static",
+            ("src/lower/c.ts", "src/lower/b.ts"): "static",
+            ("src/lower/d.ts", "src/lower/a.ts"): "type",
+            ("src/lower/a.ts", "src/lower/c.ts"): "dynamic",
+        },
+    )
+
+    one_hop = code_graph.impact("src/lower/a.ts", 1)
+    assert one_hop.upstream == ["src/lower/b.ts", "src/lower/d.ts"]
+    assert one_hop.downstream == ["src/lower/c.ts"]
+    assert code_graph.impact("src/lower/a.ts", 1, runtime_only=True).upstream == ["src/lower/b.ts"]
+    assert code_graph.impact("src/lower/nope.ts", 1) is None
+
+
+def test_stronger_kind_prefers_runtime():
+    assert stronger_kind("type", "dynamic") == "dynamic"
+    assert stronger_kind("static", "dynamic") == "static"
+    assert stronger_kind("type", "type") == "type"

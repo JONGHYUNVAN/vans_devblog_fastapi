@@ -56,7 +56,7 @@
         "User",
         "UserDefaults"
       ],
-      "in_degree": 0,
+      "in_degree": 1,
       "out_degree": 1
     },
     {
@@ -67,7 +67,7 @@
         "find"
       ],
       "in_degree": 1,
-      "out_degree": 2
+      "out_degree": 3
     },
     {
       "id": "src/main/kotlin/blog/demo/global/AppException.kt",
@@ -92,32 +92,44 @@
     {
       "source": "src/main/kotlin/blog/demo/DemoApplication.kt",
       "target": "src/main/kotlin/blog/demo/config/WebConfig.kt",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "src/main/kotlin/blog/demo/config/WebConfig.kt",
       "target": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "src/main/kotlin/blog/demo/domain/user/User.kt",
       "target": "src/main/kotlin/blog/demo/global/ErrorCode.kt",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
+    },
+    {
+      "source": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+      "target": "src/main/kotlin/blog/demo/domain/user/User.kt",
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
       "target": "src/main/kotlin/blog/demo/global/AppException.kt",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "src/main/kotlin/blog/demo/domain/user/UserService.kt",
       "target": "src/main/kotlin/blog/demo/global/ErrorCode.kt",
-      "status": "valid"
+      "status": "valid",
+      "kind": "static"
     },
     {
       "source": "src/main/kotlin/blog/demo/global/AppException.kt",
       "target": "src/main/kotlin/blog/demo/config/WebConfig.kt",
-      "status": "violation"
+      "status": "violation",
+      "kind": "static"
     }
   ],
   "diagnostics": {
@@ -126,7 +138,8 @@
         "source": "src/main/kotlin/blog/demo/global/AppException.kt",
         "target": "src/main/kotlin/blog/demo/config/WebConfig.kt",
         "from_layer": "global",
-        "to_layer": "config"
+        "to_layer": "config",
+        "type_only": false
       }
     ],
     "cycles": [
@@ -137,7 +150,16 @@
         "src/main/kotlin/blog/demo/config/WebConfig.kt"
       ]
     ],
+    "cycle_groups": [
+      [
+        "src/main/kotlin/blog/demo/config/WebConfig.kt",
+        "src/main/kotlin/blog/demo/domain/user/UserService.kt",
+        "src/main/kotlin/blog/demo/global/AppException.kt"
+      ]
+    ],
+    "type_only_cycle_groups": [],
     "orphan_files": [],
-    "hub_files": []
+    "hub_files": [],
+    "unassigned_files": []
   }
 }

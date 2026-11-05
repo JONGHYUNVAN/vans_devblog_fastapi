@@ -13,8 +13,13 @@ RUN pip install -r requirements.txt
 COPY app ./app
 COPY cli ./cli
 
-RUN useradd --create-home --uid 1000 appuser
+RUN useradd --create-home --uid 1000 appuser && install -d -o appuser /srv/grammars
 USER appuser
+
+# 문법은 wheel 에 없고 첫 사용 때 GitHub 에서 받는다. 이미지에 넣어 실행 중 네트워크와 쓰기 권한에 기대지 않는다(G-24).
+# 목록은 app/services/code_graph.py 의 GRAMMARS 와 같아야 한다 (tests/test_dockerfile.py)
+ENV TREE_SITTER_LANGUAGE_PACK_CACHE_DIR=/srv/grammars
+RUN python -c "from tree_sitter_language_pack import prefetch; prefetch(['kotlin', 'python', 'tsx', 'typescript'])"
 
 EXPOSE 8000
 

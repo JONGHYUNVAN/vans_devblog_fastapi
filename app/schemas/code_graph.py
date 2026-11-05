@@ -7,11 +7,22 @@ from pydantic import BaseModel, Field
 
 
 class CodeGraphAnalysis(BaseModel):
-    """분석 요청 결과. stored 는 같은 commit 의 저장된 결과가 있다(200), queued 는 백그라운드 분석을 시작했다(202)."""
+    """분석 요청 결과. stored 는 저장된 결과가 그대로 유효하다(200), queued 는 백그라운드 분석을 시작했다(202),
+    running 은 이 저장소 분석이 이미 돌고 있다(202)."""
 
     repo: str
     commit_sha: str
-    status: Literal["stored", "queued"]
+    status: Literal["stored", "queued", "running"]
+
+
+class AnalysisStatusPublic(BaseModel):
+    """이 프로세스에서의 마지막 분석. 백그라운드 실패가 여기에 드러난다. error 는 예외 종류 이름뿐이다."""
+
+    repo: str
+    state: Literal["idle", "running", "done", "failed"]
+    commit_sha: str | None = None
+    updated_at: datetime | None = None
+    error: str | None = None
 
 
 class CodeGraphSummary(BaseModel):
@@ -21,7 +32,10 @@ class CodeGraphSummary(BaseModel):
     commit_sha: str
     analyzed_at: datetime
     violation_count: int
-    cycle_count: int
+    type_only_violation_count: int = Field(
+        description="violation_count 중 타입으로만 쓰는 import. 실행 시 의존은 아니다"
+    )
+    cycle_count: int = Field(description="실행 시 순환 묶음 수. 타입 import 로만 생기는 순환은 세지 않는다")
     orphan_count: int
     hub_count: int
 
@@ -37,6 +51,7 @@ class LayerViolation(BaseModel):
     target: str
     from_layer: str
     to_layer: str
+    type_only: bool = Field(description="타입으로만 쓰는 import. 구조 규칙 위반이지만 실행 시 의존은 아니다")
 
 
 class HubFile(BaseModel):
@@ -48,9 +63,16 @@ class HubFile(BaseModel):
 
 class GraphDiagnostics(BaseModel):
     layer_violations: list[LayerViolation]
-    cycles: list[list[str]] = Field(description="순환마다 대표 경로 하나 [a, b, ..., a]")
+    cycles: list[list[str]] = Field(description="실행 시 순환마다 대표 경로 하나 [a, b, ..., a]")
+    cycle_groups: list[list[str]] = Field(description="cycles 와 같은 순서. 그 순환 묶음의 파일 전부")
+    type_only_cycle_groups: list[list[str]] = Field(
+        description="타입 import 까지 넣어야 생기는 순환 묶음. 실행에는 없다"
+    )
     orphan_files: list[str] = Field(description="아무도 import 하지 않는 파일. 이 진단을 끈 저장소는 빈 목록")
     hub_files: list[HubFile] = Field(description="in_degree 5 이상, 내림차순 최대 15개. 이 진단을 끈 저장소는 빈 목록")
+    unassigned_files: list[str] = Field(
+        description="어느 레이어에도 안 걸린 하위 폴더 파일. 레이어 규칙 검사에서 빠져 있다"
+    )
 
 
 class GraphNode(BaseModel):
@@ -65,6 +87,9 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     status: Literal["valid", "violation"]
+    kind: Literal["static", "dynamic", "type"] = Field(
+        description="static 모듈을 읽을 때 실행, dynamic `import()` 로 지연 실행, type 타입으로만 쓰여 실행 때 사라진다"
+    )
 
 
 class Graph(BaseModel):
@@ -75,15 +100,28 @@ class Graph(BaseModel):
 class OutboundCall(BaseModel):
     caller_file: str
     caller_symbol: str = Field(description="감싼 함수. 메서드는 `클래스.메서드`, 모듈 수준이면 빈 문자열")
-    env_var: str = Field(description="기준 URL 을 담은 환경변수")
+    env_var: str = Field(description="기준 URL 을 담은 환경변수. 주소가 코드에 박힌 호출은 빈 문자열")
     http_method: str
     raw_path: str = Field(description="기준 URL 뒤의 원문. `${...}`·쿼리를 그대로 둔다")
+    external_host: str | None = Field(description="주소가 코드에 박힌 호출의 호스트. 코드에서 못 정하면 unresolved")
 
 
 class InboundRoute(BaseModel):
     file: str
     http_method: str
-    path: str = Field(description="Next.js route.ts 경로에서 만든 URL. `[id]` 는 `{id}`")
+    path: str = Field(
+        description="소스에서 읽은 경로(Next.js route.ts, NestJS 데코레이터, Spring 어노테이션). 변수는 `{id}`"
+    )
+
+
+class ImpactPublic(BaseModel):
+    """파일 하나의 영향 반경. upstream 은 이 파일을 쓰는 쪽(바꾸면 깨지는 곳), downstream 은 이 파일이 쓰는 쪽이다."""
+
+    file: str
+    hops: int
+    upstream: list[str]
+    downstream: list[str]
+    edges: list[GraphEdge]
 
 
 class CodeGraphPublic(BaseModel):
@@ -98,13 +136,13 @@ class CodeGraphPublic(BaseModel):
     graph: Graph
     outbound_calls: list[OutboundCall] = Field(description="서비스 간 호출 지점(설정의 call_sites 파일에서만)")
     inbound_routes: list[InboundRoute] = Field(
-        description="Next.js route.ts 엔드포인트. route_root 가 없는 저장소는 빈 목록"
+        description="소스에서 읽은 엔드포인트. route_root·route_framework 가 없는 저장소는 빈 목록"
     )
 
 
 class ServiceNode(BaseModel):
     id: str = Field(
-        description="endpoint 는 `서비스 메서드 경로`, code 는 `서비스:파일#심볼`, external 은 `env:환경변수`"
+        description="endpoint 는 `서비스 메서드 경로`, code 는 `서비스:파일#심볼`, external 은 `env:환경변수` 또는 `host:호스트`"
     )
     kind: Literal["endpoint", "code", "external"]
     service: str | None
@@ -151,7 +189,10 @@ class FlowHop(BaseModel):
     request_schema: str | None
     response_schema: str | None
     call_sites: list[str] = Field(description="이 호출을 하는 코드 `저장소:파일#심볼`")
-    verified: bool = Field(description="코드에서 호출 지점을 찾았다")
+    status: Literal["matched", "missing", "unknown"] = Field(
+        description="matched 대상에 엔드포인트가 있다, missing 없다, unknown 대상 엔드포인트 목록을 모른다"
+    )
+    verified: bool = Field(description="호출 코드를 찾았고 대상 엔드포인트도 있다. 흐름 표가 코드와 맞는다는 뜻이다")
 
 
 class FlowPublic(BaseModel):

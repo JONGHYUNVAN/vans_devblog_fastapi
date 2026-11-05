@@ -9,6 +9,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
+from app.clients.github import read_commit_sha
 from app.clients.llm.base import LLMCitation, LLMMessage, LLMParams, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.clients.publisher.base import PostCategory, PostCreatePayload, Publisher, PublishResult
@@ -162,7 +163,14 @@ class FakeGitHubClient:
     def __init__(self, tarball: bytes = b"", error: Exception | None = None) -> None:
         self.tarball = tarball
         self.error = error
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []  # 전체 다운로드만 센다. commit 확인은 sha_calls 다
+        self.sha_calls: list[tuple[str, str, str]] = []
+
+    def fetch_commit_sha(self, owner: str, name: str, ref: str) -> str:
+        self.sha_calls.append((owner, name, ref))
+        if self.error:
+            raise self.error
+        return read_commit_sha(self.tarball)
 
     def download_tarball(self, owner: str, name: str, ref: str) -> bytes:
         self.calls.append((owner, name, ref))

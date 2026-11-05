@@ -23,6 +23,7 @@ from app.dependencies import (
     open_clients,
 )
 from app.routers import agent_rounds, code_graph, health, internal, kis, search, sync
+from app.services.code_graph import AnalysisTracker
 from app.services.runner import PipelineRunner
 
 logging.basicConfig(
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.async_mongo_client = create_async_mongo_client(settings)
         app.state.kis_stream = create_kis_stream(settings)
         await _ensure_popular_index(es)
+        app.state.code_graph_tracker = AnalysisTracker()
         await _ensure_code_graph_indexes(mongo_client, settings.mongodb_db_name)
         await _ensure_agent_indexes(app.state.async_mongo_client, settings.mongodb_db_name)
         app.state.pipeline_runner = _start_pipeline_runner(app.state.async_mongo_client, settings.mongodb_db_name)

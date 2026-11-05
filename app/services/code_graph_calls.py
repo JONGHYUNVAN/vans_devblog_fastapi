@@ -10,13 +10,17 @@
 - Python: f-string `f"{self._x_url}/경로"` 이고 환경변수는 필드 이름을 대문자로 바꾼 것이다(Settings 의 이름 규칙).
 """
 
+from __future__ import annotations
+
 import posixpath
 import re
 from collections.abc import Iterator
-
-from tree_sitter import Node
+from typing import TYPE_CHECKING
 
 from app.models.code_graph import InboundRoute, OutboundCall
+
+if TYPE_CHECKING:
+    from tree_sitter import Node  # 네이티브 모듈은 분석할 때만 읽는다 (G-24)
 
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
@@ -25,12 +29,28 @@ _TS_SCOPES = {"function_declaration", "method_definition", "arrow_function", "fu
 # URL 값이 호출 인자로 가기 전에 거칠 수 있는 식
 _TS_PASS_THROUGH = {"ternary_expression", "parenthesized_expression", "binary_expression", "await_expression"}
 _PY_URL_FIELD = re.compile(r"_?([a-z][a-z0-9_]*_url)")
+_LITERAL_URL = re.compile(r"https?://(?P<host>[^/`'\"$?#]*)(?P<path>.*)", re.S)
+UNRESOLVED_HOST = "unresolved"  # `https://${host}/...` 처럼 호스트를 코드에서 정할 수 없는 호출
+_NEST_METHODS = {"Get": "GET", "Post": "POST", "Put": "PUT", "Patch": "PATCH", "Delete": "DELETE"}
+_SPRING_METHODS = {
+    "GetMapping": "GET",
+    "PostMapping": "POST",
+    "PutMapping": "PUT",
+    "PatchMapping": "PATCH",
+    "DeleteMapping": "DELETE",
+}
+_ANNOTATION = re.compile(r"@(?:\w+\.)*(\w+)\s*(?:\(\s*(?:value\s*=\s*|path\s*=\s*)?[\"']([^\"']*)[\"'])?")
 
 
 def extract_ts_calls(path: str, root_node: Node) -> list[OutboundCall]:
     aliases = _ts_aliases(root_node)
     calls = []
     for node in _walk(root_node):
+        if node.type in ("template_string", "string"):
+            external = _ts_external_call(path, node)
+            if external is not None:
+                calls.append(external)
+                continue
         if node.type == "template_string":
             site = _ts_template_site(node, aliases)
         elif node.type == "object":
@@ -53,6 +73,24 @@ def extract_ts_calls(path: str, root_node: Node) -> list[OutboundCall]:
                 )
             )
     return _unique(calls)
+
+
+def _ts_external_call(path: str, node: Node) -> OutboundCall | None:
+    """`fetch('https://host/...')` 처럼 주소가 코드에 박힌 호출. Referer 헤더 같은 문자열은 호출을 못 찾아 버려진다."""
+    match = _LITERAL_URL.match(_text(node)[1:-1])
+    if match is None:
+        return None
+    method = _ts_method(node, first_argument_only=True)
+    if method is None:
+        return None
+    return OutboundCall(
+        caller_file=path,
+        caller_symbol=_ts_caller(node),
+        env_var="",
+        http_method=method,
+        raw_path=match.group("path") or "/",
+        external_host=match.group("host") or UNRESOLVED_HOST,
+    )
 
 
 def extract_python_calls(path: str, root_node: Node) -> list[OutboundCall]:
@@ -101,6 +139,88 @@ def extract_next_routes(path: str, root_node: Node, route_root: str) -> list[Inb
             if name in HTTP_METHODS:
                 routes.append(InboundRoute(file=path, http_method=name, path=url))
     return routes
+
+
+def extract_nest_routes(path: str, root_node: Node) -> list[InboundRoute]:
+    """`@Controller('api/v1/posts')` 클래스의 `@Get(':id')` 메서드. `:id` 는 `{id}` 다."""
+    routes = []
+    for node in _walk(root_node):
+        if node.type != "class_declaration":
+            continue
+        prefix = next((value for name, value in _ts_decorators(node) if name == "Controller"), None)
+        if prefix is None:
+            continue
+        body = node.child_by_field_name("body")
+        members = body.named_children if body is not None else []
+        for index, member in enumerate(members):
+            if member.type != "method_definition":
+                continue
+            # 문법에 따라 데코레이터가 메서드의 자식이거나 class_body 에서 바로 앞 형제다
+            for name, value in [*_ts_decorators(member), *_preceding_decorators(members, index)]:
+                if name in _NEST_METHODS:
+                    routes.append(
+                        InboundRoute(file=path, http_method=_NEST_METHODS[name], path=_route_path(prefix, value))
+                    )
+    return routes
+
+
+def extract_spring_routes(path: str, root_node: Node) -> list[InboundRoute]:
+    """`@RequestMapping("/api/v1/users")` 클래스의 `@GetMapping("/{id}")` 함수."""
+    routes = []
+    for node in _walk(root_node):
+        if node.type != "class_declaration":
+            continue
+        annotations = _kotlin_annotations(node)
+        if not any(name in ("RestController", "Controller") for name, _ in annotations):
+            continue
+        prefix = next((value for name, value in annotations if name == "RequestMapping"), "")
+        for member in _walk(node):
+            if member.type != "function_declaration":
+                continue
+            for name, value in _kotlin_annotations(member):
+                if name in _SPRING_METHODS:
+                    routes.append(
+                        InboundRoute(file=path, http_method=_SPRING_METHODS[name], path=_route_path(prefix, value))
+                    )
+    return routes
+
+
+def _ts_decorators(node: Node) -> list[tuple[str, str]]:
+    """(데코레이터 이름, 첫 문자열 인자). 클래스 데코레이터는 export 문에 붙을 수 있어 부모까지 본다."""
+    owners = [node]
+    if node.parent is not None and node.parent.type == "export_statement":
+        owners.append(node.parent)
+    return [_decorator(child) for owner in owners for child in owner.children if child.type == "decorator"]
+
+
+def _preceding_decorators(members: list[Node], index: int) -> list[tuple[str, str]]:
+    found = []
+    for member in reversed(members[:index]):
+        if member.type != "decorator":
+            break
+        found.append(_decorator(member))
+    return found
+
+
+def _decorator(node: Node) -> tuple[str, str]:
+    match = _ANNOTATION.match(_text(node))
+    return (match.group(1), match.group(2) or "") if match else ("", "")
+
+
+def _kotlin_annotations(node: Node) -> list[tuple[str, str]]:
+    modifiers = next((child for child in node.children if child.type == "modifiers"), None)
+    if modifiers is None:
+        return []
+    found = []
+    for child in modifiers.named_children:
+        if child.type == "annotation" and (match := _ANNOTATION.match(_text(child))):
+            found.append((match.group(1), match.group(2) or ""))
+    return found
+
+
+def _route_path(prefix: str, value: str) -> str:
+    joined = "/" + "/".join(part.strip("/") for part in (prefix, value) if part.strip("/"))
+    return re.sub(r":(\w+)", r"{\1}", joined)
 
 
 def _exported_names(declaration: Node | None) -> list[str]:
@@ -332,7 +452,10 @@ def _ancestor(node: Node, node_type: str) -> Node | None:
 
 
 def _unique(calls: list[OutboundCall]) -> list[OutboundCall]:
-    keyed = {(each.caller_symbol, each.env_var, each.http_method, each.raw_path): each for each in calls}
+    keyed = {
+        (each.caller_symbol, each.env_var, each.external_host or "", each.http_method, each.raw_path): each
+        for each in calls
+    }
     return [keyed[key] for key in sorted(keyed)]
 
 

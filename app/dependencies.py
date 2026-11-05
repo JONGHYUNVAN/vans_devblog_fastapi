@@ -41,7 +41,7 @@ from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_index import PostIndexRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
-from app.services.code_graph import CodeGraphService, RunInBackground
+from app.services.code_graph import AnalysisTracker, CodeGraphService, RunInBackground
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService, DraftPublisher
 from app.services.health import HealthService
@@ -183,15 +183,24 @@ def get_index_setup_service(es: Elasticsearch) -> IndexSetupService:
 
 
 def get_code_graph_service(
+    request: Request,
     mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
     settings: Annotated[Settings, Depends(get_settings)],
     background_tasks: BackgroundTasks,
 ) -> CodeGraphService:
-    return build_code_graph_service(mongo_client, settings, run_in_background=background_tasks.add_task)
+    return build_code_graph_service(
+        mongo_client,
+        settings,
+        run_in_background=background_tasks.add_task,
+        tracker=request.app.state.code_graph_tracker,
+    )
 
 
 def build_code_graph_service(
-    mongo_client: MongoClient, settings: Settings, run_in_background: RunInBackground
+    mongo_client: MongoClient,
+    settings: Settings,
+    run_in_background: RunInBackground,
+    tracker: AnalysisTracker | None = None,
 ) -> CodeGraphService:
     """라우터와 CLI `code-graph` 가 같은 조립을 쓴다. CLI 는 분석을 바로 돌리는 run_in_background 를 넘긴다."""
     return CodeGraphService(
@@ -202,6 +211,7 @@ def build_code_graph_service(
         ),
         repos=settings.code_graph_repos,
         run_in_background=run_in_background,
+        tracker=tracker,
     )
 
 

@@ -2,7 +2,14 @@
 
 from tree_sitter_language_pack import get_parser
 
-from app.services.code_graph_calls import extract_next_routes, extract_python_calls, extract_ts_calls
+from app.services.code_graph_calls import (
+    UNRESOLVED_HOST,
+    extract_nest_routes,
+    extract_next_routes,
+    extract_python_calls,
+    extract_spring_routes,
+    extract_ts_calls,
+)
 
 
 def _ts_calls(source: str, path: str = "src/app/api/demo/route.ts") -> list[tuple[str, str, str, str]]:
@@ -176,3 +183,100 @@ export const dynamic = 'force-dynamic';
     ]
     assert extract_next_routes("src/app/api/posts/page.tsx", root, "src/app") == []
     assert extract_next_routes("src/lib/route.ts", root, "src/app") == []
+
+
+def _externals(source: str) -> list[tuple[str, str, str]]:
+    root = get_parser("typescript").parse(source.encode()).root_node
+    return [(each.external_host, each.http_method, each.raw_path) for each in extract_ts_calls("route.ts", root)]
+
+
+def test_ts_external_literal_url_through_const_and_directly():
+    source = """
+export async function GET() {
+  const url = `https://query1.finance.yahoo.com/v8/chart/${symbol}?range=1d`;
+  const res = await fetch(url, { headers: H });
+  const other = await fetch('https://api.alternative.me/fng/?limit=30', { method: 'POST' });
+}
+"""
+    assert sorted(_externals(source)) == [
+        ("api.alternative.me", "POST", "/fng/?limit=30"),
+        ("query1.finance.yahoo.com", "GET", "/v8/chart/${symbol}?range=1d"),
+    ]
+
+
+def test_ts_external_host_from_variable_is_unresolved():
+    source = """
+export async function GET() {
+  const r = await fetch(`https://${host}${path}`);
+}
+"""
+    assert _externals(source)[0][0] == UNRESOLVED_HOST
+
+
+def test_ts_literal_urls_that_are_not_requests_are_ignored():
+    source = """
+const headers = { Referer: 'https://m.stock.naver.com/' };
+export async function GET() {
+  const item = { detailUrl: `https://dart.fss.or.kr/x?no=${no}` };
+  return item;
+}
+"""
+    assert _externals(source) == []
+
+
+def test_nest_routes_join_controller_prefix_and_convert_params():
+    source = """
+@Controller('api/v1/posts')
+export class PostsController {
+  @Roles(Role.Admin)
+  @Post()
+  create() {}
+
+  @Get(':id/edit')
+  edit() {}
+
+  helper() {}
+}
+
+export class NotAController {
+  @Get('nope')
+  nope() {}
+}
+"""
+    root = get_parser("typescript").parse(source.encode()).root_node
+    routes = {(each.http_method, each.path) for each in extract_nest_routes("src/posts.controller.ts", root)}
+    assert routes == {("POST", "/api/v1/posts"), ("GET", "/api/v1/posts/{id}/edit")}
+
+
+def test_spring_routes_join_request_mapping_and_method_mapping():
+    source = """
+package demo
+
+@RestController
+@RequestMapping("/api/v1/users")
+class UserController {
+    @PostMapping
+    fun create() {}
+
+    @GetMapping("/{id}")
+    fun get() {}
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping(value = "/{id}")
+    fun delete() {}
+
+    fun helper() {}
+}
+
+class NotAController {
+    @GetMapping("/nope")
+    fun nope() {}
+}
+"""
+    root = get_parser("kotlin").parse(source.encode()).root_node
+    routes = {(each.http_method, each.path) for each in extract_spring_routes("UserController.kt", root)}
+    assert routes == {
+        ("POST", "/api/v1/users"),
+        ("GET", "/api/v1/users/{id}"),
+        ("DELETE", "/api/v1/users/{id}"),
+    }

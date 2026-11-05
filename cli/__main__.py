@@ -466,8 +466,9 @@ def analyze_code_graph(repo: str) -> None:
             typer.echo(exc.message, err=True)
             raise typer.Exit(1) from exc
         latest = next((each for each in service.list_code_graphs() if each.repo == repo), None)
-    if latest is None or (analysis.status == "queued" and latest.commit_sha != analysis.commit_sha):
-        typer.echo(f"{repo}@{analysis.commit_sha[:7]} 분석을 저장하지 못했다.", err=True)
+        progress = service.get_analysis_status(repo)
+    if latest is None or progress.state == "failed":
+        typer.echo(f"{repo}@{analysis.commit_sha[:7]} 분석을 저장하지 못했다: {progress.error}", err=True)
         raise typer.Exit(1)
     _echo({"status": analysis.status, **latest.model_dump(mode="json")})
 
@@ -485,6 +486,26 @@ def code_graph_context(repo: str) -> None:
             typer.echo(exc.message, err=True)
             raise typer.Exit(1) from exc
     typer.echo(context, nl=False)
+
+
+@code_graph.command("impact")
+def code_graph_impact(
+    repo: str,
+    file: str,
+    hops: Annotated[int, typer.Option(min=1, max=5, help="따라갈 깊이")] = 1,
+    runtime_only: Annotated[bool, typer.Option(help="타입으로만 쓰는 import 를 따라가지 않는다")] = False,
+) -> None:
+    """파일 하나를 고칠 때의 영향 반경: 이 파일을 쓰는 쪽(upstream)과 이 파일이 쓰는 쪽(downstream)."""
+    settings = get_settings()
+    with open_clients(settings) as (_, mongo_client):
+        try:
+            result = build_code_graph_service(mongo_client, settings, run_in_background=_run_now).get_impact(
+                repo, file, hops, runtime_only=runtime_only
+            )
+        except NotFoundError as exc:
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(1) from exc
+    _echo(result.model_dump(mode="json", exclude={"edges"}))
 
 
 @code_graph.command("flow")

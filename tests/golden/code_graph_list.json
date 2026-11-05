@@ -4,6 +4,7 @@
     "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "analyzed_at": "2026-11-03T12:00:00Z",
     "violation_count": 2,
+    "type_only_violation_count": 0,
     "cycle_count": 1,
     "orphan_count": 1,
     "hub_count": 1

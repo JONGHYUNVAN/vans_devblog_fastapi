@@ -22,7 +22,7 @@
   - `src/constants/site.ts` -> `src/lib/format.service.ts`
 
 ## 3. Cycles & Orphans
-- Cycles (1): `src/lib/api.ts -> src/store/index.ts -> src/lib/api.ts`
+- Runtime Cycles (1): `src/lib/api.ts -> src/store/index.ts -> src/lib/api.ts (2 files)`
 - Orphans (1): `src/lib/orphan.ts`
 
 ## 4. Hub Files (Top In-Degree)

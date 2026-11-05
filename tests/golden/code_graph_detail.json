@@ -64,13 +64,15 @@
         "source": "src/components/Button.tsx",
         "target": "src/app/shell.tsx",
         "from_layer": "components",
-        "to_layer": "app"
+        "to_layer": "app",
+        "type_only": false
       },
       {
         "source": "src/lib/api.ts",
         "target": "src/store/index.ts",
         "from_layer": "lib",
-        "to_layer": "store"
+        "to_layer": "store",
+        "type_only": false
       }
     ],
     "cycles": [
@@ -80,6 +82,13 @@
         "src/lib/api.ts"
       ]
     ],
+    "cycle_groups": [
+      [
+        "src/lib/api.ts",
+        "src/store/index.ts"
+      ]
+    ],
+    "type_only_cycle_groups": [],
     "orphan_files": [
       "src/lib/orphan.ts"
     ],
@@ -90,7 +99,8 @@
         "out_degree": 2,
         "symbol_count": 6
       }
-    ]
+    ],
+    "unassigned_files": []
   },
   "graph": {
     "nodes": [
@@ -224,80 +234,101 @@
       {
         "source": "src/app/about/page.tsx",
         "target": "src/lib/api.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/app/api/posts/route.ts",
         "target": "src/lib/api.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/app/layout.tsx",
         "target": "src/constants/site.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/app/page.tsx",
         "target": "src/components/Button.tsx",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/app/page.tsx",
         "target": "src/hooks/useThing.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/components/Button.tsx",
         "target": "src/app/shell.tsx",
-        "status": "violation"
+        "status": "violation",
+        "kind": "static"
       },
       {
         "source": "src/components/Card.tsx",
         "target": "src/lib/api.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/components/Card.tsx",
         "target": "src/lib/format.service.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/components/index.ts",
         "target": "src/components/Button.tsx",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/components/index.ts",
         "target": "src/components/Card.tsx",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/constants/site.ts",
         "target": "src/lib/format.service.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/hooks/useThing.ts",
         "target": "src/lib/api.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/lib/api.ts",
         "target": "src/constants/site.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       },
       {
         "source": "src/lib/api.ts",
         "target": "src/store/index.ts",
-        "status": "violation"
+        "status": "violation",
+        "kind": "static"
       },
       {
         "source": "src/store/index.ts",
         "target": "src/lib/api.ts",
-        "status": "valid"
+        "status": "valid",
+        "kind": "static"
       }
     ]
   },
   "outbound_calls": [],
-  "inbound_routes": [{ "file": "src/app/api/posts/route.ts", "http_method": "GET", "path": "/api/posts" }]
+  "inbound_routes": [
+    {
+      "file": "src/app/api/posts/route.ts",
+      "http_method": "GET",
+      "path": "/api/posts"
+    }
+  ]
 }

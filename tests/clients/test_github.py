@@ -1,6 +1,7 @@
 """GitHubClient·tarball 함수 테스트 (다운로드·크기 상한·pax comment SHA·임시 디렉터리). HTTP 는 httpx2.MockTransport 로 대신한다."""
 
 import io
+import os
 import tarfile
 
 import httpx2
@@ -73,3 +74,46 @@ def test_extract_tarball_yields_top_directory_and_removes_it():
         assert (root / "build.gradle").is_file()
 
     assert not root.exists()
+
+
+def _large_tarball(sha: str, size: int = 2_000_000) -> bytes:
+    """pax comment 와 압축되지 않는 큰 파일. codeload 처럼 헤더가 스트림 맨 앞에 온다."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": sha}) as archive:
+        info = tarfile.TarInfo("demo-main/big.bin")
+        info.size = size
+        archive.addfile(info, io.BytesIO(os.urandom(size)))
+    return buffer.getvalue()
+
+
+def test_fetch_commit_sha_reads_header_and_stops_without_downloading_the_rest():
+    tarball = _large_tarball(SHA)
+    served: list[int] = []
+
+    def chunks():
+        for start in range(0, len(tarball), 4096):
+            served.append(start)
+            yield tarball[start : start + 4096]
+
+    client = _client(lambda request: httpx2.Response(200, content=chunks()), max_bytes=len(tarball))
+
+    assert client.fetch_commit_sha("JONGHYUNVAN", "demo", "main") == SHA
+    assert len(served) * 4096 < len(tarball) / 10
+
+
+def test_fetch_commit_sha_raises_service_unavailable_on_error_status():
+    with pytest.raises(ServiceUnavailableError):
+        _client(lambda request: httpx2.Response(404)).fetch_commit_sha("JONGHYUNVAN", "demo", "main")
+
+
+def test_fetch_commit_sha_raises_service_unavailable_on_non_tarball():
+    with pytest.raises(ServiceUnavailableError):
+        _client(lambda request: httpx2.Response(200, content=b"not gzip")).fetch_commit_sha(
+            "JONGHYUNVAN", "demo", "main"
+        )
+
+
+def test_extract_tarball_keeps_only_wanted_files():
+    with extract_tarball(make_tarball("ts_app", SHA), lambda path: path.endswith("package.json")) as root:
+        assert root.name == "ts_app-main"
+        assert [each.relative_to(root).as_posix() for each in root.rglob("*") if each.is_file()] == ["package.json"]

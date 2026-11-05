@@ -88,6 +88,7 @@
       "login": { "path": "/api/posts/swagger/auth", "password_setting": "post_be_swagger_password" }
     },
     "service": "nestjs",
+    "route_framework": "nest",
     "client_env": { "POST_API_URL": "/api/v1", "POST_BE_URL": "" },
     "call_sites": ["src/**/*.client.ts"]
   },
@@ -106,6 +107,7 @@
     "diagnostics": { "orphans": false, "hubs": false },
     "openapi": { "base_setting": "user_service_url", "path": "/v3/api-docs" },
     "service": "spring",
+    "route_framework": "spring",
     "client_env": { "AUTH_API_URL": "/api/v1", "USER_SERVICE_URL": "" }
   }
 }

@@ -2,10 +2,18 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.dependencies import get_code_graph_service, get_service_graph_service, verify_internal_key
-from app.schemas.code_graph import CodeGraphAnalysis, CodeGraphPublic, CodeGraphSummary, FlowPublic, ServiceGraphPublic
+from app.schemas.code_graph import (
+    AnalysisStatusPublic,
+    CodeGraphAnalysis,
+    CodeGraphPublic,
+    CodeGraphSummary,
+    FlowPublic,
+    ImpactPublic,
+    ServiceGraphPublic,
+)
 from app.services.code_graph import CodeGraphService
 from app.services.service_graph import ServiceGraphService
 
@@ -52,15 +60,36 @@ def analyze_repo(
     response: Response,
     code_graph_service: Annotated[CodeGraphService, Depends(get_code_graph_service)],
 ) -> CodeGraphAnalysis:
-    """저장소의 GitHub tarball 을 받아 commit 을 확인한다. `X-Internal-Key` 필요.
+    """저장소의 최신 commit 을 확인하고 필요하면 분석을 시작한다. `X-Internal-Key` 필요.
 
-    같은 commit 의 결과가 있으면 200 `stored`, 없으면 202 `queued` 이고 분석이 끝나면 조회에 나온다.
-    분석 실패는 응답에 드러나지 않고 이전 결과가 남는다. 설정에 없는 저장소는 404, GitHub 실패는 503 이다.
+    같은 commit·같은 분석기·같은 설정의 결과가 있으면 200 `stored`, 이미 돌고 있으면 202 `running`, 시작했으면 202 `queued` 다.
+    결과는 `GET {repo}/analysis/` 로 본다. 실패하면 이전 결과가 남는다. 설정에 없는 저장소는 404, GitHub 실패는 503 이다.
     """
     result = code_graph_service.analyze_repo(repo)
-    if result.status == "queued":
+    if result.status != "stored":
         response.status_code = 202
     return result
+
+
+@router.get("/{repo}/analysis/", summary="분석 진행 상태")
+def get_analysis_status(
+    repo: str,
+    code_graph_service: Annotated[CodeGraphService, Depends(get_code_graph_service)],
+) -> AnalysisStatusPublic:
+    """이 프로세스에서의 마지막 분석 상태(idle·running·done·failed). 재시작하면 idle 이다. 설정에 없는 저장소는 404."""
+    return code_graph_service.get_analysis_status(repo)
+
+
+@router.get("/{repo}/impact/", summary="파일 영향 반경")
+def get_impact(
+    repo: str,
+    code_graph_service: Annotated[CodeGraphService, Depends(get_code_graph_service)],
+    file: Annotated[str, Query(description="저장소 루트 기준 파일 경로")],
+    hops: Annotated[int, Query(ge=1, le=5)] = 1,
+    runtime_only: Annotated[bool, Query(description="타입으로만 쓰는 import 를 따라가지 않는다")] = False,
+) -> ImpactPublic:
+    """이 파일을 쓰는 쪽(upstream)과 이 파일이 쓰는 쪽(downstream)을 N-hop 까지. 저장소·분석 결과·파일이 없으면 404."""
+    return code_graph_service.get_impact(repo, file, hops, runtime_only=runtime_only)
 
 
 @router.get("/{repo}/", summary="코드 그래프")

@@ -10,7 +10,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel
 
-from app.models.code_graph import CodeGraph, CodeGraphRepo
+from app.models.code_graph import CodeGraph, CodeGraphRepo, OutboundCall
 
 BROWSER = "browser"  # 흐름의 시작. 서비스가 아니다
 OpenApiStatus = Literal["ok", "unavailable", "none"]
@@ -81,7 +81,7 @@ FLOWS: dict[str, Flow] = {
 
 class ServiceNode(BaseModel):
     """endpoint: 서비스의 HTTP 엔드포인트, code: 엔드포인트가 아닌 호출 지점(클라이언트 클래스 등),
-    external: CODE_GRAPH_REPOS 의 client_env 에 없는 환경변수가 가리키는 서비스."""
+    external: CODE_GRAPH_REPOS 의 client_env 에 없는 환경변수가 가리키는 서비스와 코드에 박힌 외부 호스트."""
 
     id: str
     kind: Literal["endpoint", "code", "external"]
@@ -118,7 +118,8 @@ class FlowHop(BaseModel):
     request_schema: str | None
     response_schema: str | None
     call_sites: list[str]  # `저장소:파일#심볼`. 비어 있으면 코드에서 이 호출을 찾지 못했다
-    verified: bool
+    status: EdgeStatus
+    verified: bool  # 호출 코드를 찾았고 대상 엔드포인트도 있다. FLOWS 표는 손으로 쓴 것이라 이 값으로 코드와 대조한다
 
 
 class FlowTrace(BaseModel):
@@ -192,9 +193,7 @@ class ServiceGraph(BaseModel):
                             symbol=call.caller_symbol,
                         ),
                     )
-                target_id, path, status = _resolve_target(
-                    call.env_var, call.http_method, call.raw_path, env_targets, endpoints
-                )
+                target_id, path, status = _resolve_target(call, env_targets, endpoints)
                 if status == "external":
                     nodes.setdefault(target_id, ServiceNode(id=target_id, kind="external"))
                 elif target_id not in nodes:
@@ -247,18 +246,23 @@ class ServiceGraph(BaseModel):
                 ),
                 None,
             )
+            status: EdgeStatus = "missing"
             if step.caller == BROWSER:
                 call_sites = [f"{self.repos.get(step.callee)}:{node.file}" for node in [endpoint] if node and node.file]
+                status = "matched" if call_sites else "missing"
             else:
+                incoming = [
+                    edge
+                    for edge in self.edges
+                    if endpoint is not None
+                    and edge.target == endpoint.id
+                    and node_by_id[edge.source].service == step.caller
+                ]
                 call_sites = sorted(
-                    {
-                        f"{edge.caller_repo}:{edge.caller_file}#{edge.caller_symbol}"
-                        for edge in self.edges
-                        if endpoint is not None
-                        and edge.target == endpoint.id
-                        and node_by_id[edge.source].service == step.caller
-                    }
+                    {f"{edge.caller_repo}:{edge.caller_file}#{edge.caller_symbol}" for edge in incoming}
                 )
+                if incoming:
+                    status = incoming[0].status
             hops.append(
                 FlowHop(
                     caller=step.caller,
@@ -268,13 +272,14 @@ class ServiceGraph(BaseModel):
                     request_schema=endpoint.request_schema if endpoint is not None else None,
                     response_schema=endpoint.response_schema if endpoint is not None else None,
                     call_sites=call_sites,
-                    verified=bool(call_sites),
+                    status=status,
+                    verified=bool(call_sites) and status == "matched",
                 )
             )
         return FlowTrace(flow=flow_id, title=flow.title, hops=hops, mermaid=self._sequence_diagram(hops))
 
     def _sequence_diagram(self, hops: list[FlowHop]) -> str:
-        """mermaid sequenceDiagram. 코드에서 호출을 찾지 못한 hop 은 점선(-->>)이다."""
+        """mermaid sequenceDiagram. 코드와 대조되지 않은 hop 은 점선(-->>)이다."""
         participants = list(dict.fromkeys(name for hop in hops for name in (hop.caller, hop.callee)))
         lines = ["sequenceDiagram"]
         for name in participants:
@@ -311,7 +316,7 @@ def _add_endpoint(
 
 
 def _endpoints(source: ServiceSource) -> dict[tuple[str, str], _Endpoint] | None:
-    """(메서드, 비교 키) → 엔드포인트. OpenAPI 문서가 있으면 그것, 없으면 Next.js inbound 엔드포인트, 둘 다 없으면 None."""
+    """(메서드, 비교 키) → 엔드포인트. OpenAPI 문서가 있으면 그것(스키마까지), 없으면 소스에서 읽은 라우트, 둘 다 없으면 None."""
     if source.openapi is not None:
         endpoints: dict[tuple[str, str], _Endpoint] = {}
         for path, operations in source.openapi.get("paths", {}).items():
@@ -332,13 +337,14 @@ def _endpoints(source: ServiceSource) -> dict[tuple[str, str], _Endpoint] | None
 
 
 def _resolve_target(
-    env_var: str,
-    http_method: str,
-    raw_path: str,
+    call: OutboundCall,
     env_targets: dict[str, tuple[str, str]],
     endpoints: dict[str, dict[tuple[str, str], _Endpoint] | None],
 ) -> tuple[str, str, EdgeStatus]:
     """(대상 노드 id, 표시 경로, 상태). 환경변수의 경로 접두를 붙여 대상 서비스 엔드포인트와 맞춘다."""
+    env_var, http_method, raw_path = call.env_var, call.http_method, call.raw_path
+    if call.external_host is not None:
+        return f"host:{call.external_host}", normalize_path(raw_path), "external"
     if env_var not in env_targets:
         return f"env:{env_var}", normalize_path(raw_path), "external"
     service, prefix = env_targets[env_var]

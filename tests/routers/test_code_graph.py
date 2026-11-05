@@ -156,3 +156,23 @@ def test_get_flow_404_for_unknown_flow(client):
     response = client.get("/api/v1/code-graph/flows/unknown/")
 
     assert response.status_code == 404
+
+
+def test_get_analysis_status_returns_idle_then_404_for_unknown(client):
+    _use_service(FakeCodeGraphRepository())
+
+    assert client.get("/api/v1/code-graph/ts_app/analysis/").json()["state"] == "idle"
+    assert client.get("/api/v1/code-graph/unknown/analysis/").status_code == 404
+
+
+def test_get_impact_returns_both_directions_and_validates_hops(client):
+    _use_service(_seeded())
+
+    response = client.get("/api/v1/code-graph/ts_app/impact/", params={"file": "src/lib/api.ts", "hops": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "src/app/about/page.tsx" in body["upstream"]
+    assert body["hops"] == 2
+    assert client.get("/api/v1/code-graph/ts_app/impact/", params={"file": "src/nope.ts"}).status_code == 404
+    assert client.get("/api/v1/code-graph/ts_app/impact/", params={"file": "x", "hops": 9}).status_code == 400

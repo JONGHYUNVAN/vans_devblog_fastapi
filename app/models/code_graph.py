@@ -1,7 +1,8 @@
 """코드 그래프 엔티티(code_graphs 컬렉션)와 저장소 설정, I/O 없는 진단 계산·context 마크다운 (code_graph_design/README.md)."""
 
+import posixpath
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal, Self
 
@@ -14,6 +15,15 @@ ROOT_LAYER = (
 HUB_MIN_IN_DEGREE = 5
 HUB_LIMIT = 15
 _KEY_SYMBOL_COUNT = 5
+
+# static 은 모듈을 읽을 때 실행, dynamic 은 `import()` 로 지연 실행, type 은 타입으로만 쓰여 실행 때 사라진다 (G-27)
+EdgeKind = Literal["static", "dynamic", "type"]
+_KIND_RANK: dict[str, int] = {"type": 0, "dynamic": 1, "static": 2}
+
+
+def stronger_kind(first: EdgeKind, second: EdgeKind) -> EdgeKind:
+    """같은 파일 쌍에 import 가 여럿이면 실행에 가장 가까운 쪽이 그 엣지의 종류다."""
+    return first if _KIND_RANK[first] >= _KIND_RANK[second] else second
 
 
 class LayerRule(BaseModel):
@@ -74,6 +84,8 @@ class CodeGraphRepo(BaseModel):
     client_env: dict[str, str] = {}
     call_sites: list[str] = []
     route_root: str | None = None
+    # OpenAPI 를 못 받아도 엔드포인트를 알도록 소스에서 라우트를 읽는다(G-29). Next.js 는 route_root 로 정한다
+    route_framework: Literal["nest", "spring"] | None = None
 
     def is_call_site(self, path: str) -> bool:
         return any(glob_regex(pattern).fullmatch(path) for pattern in self.call_sites)
@@ -108,6 +120,7 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     status: Literal["valid", "violation"]
+    kind: EdgeKind = "static"
 
 
 class LayerViolation(BaseModel):
@@ -115,6 +128,17 @@ class LayerViolation(BaseModel):
     target: str
     from_layer: str
     to_layer: str
+    type_only: bool = False  # 타입으로만 쓰는 import. 구조 규칙 위반이지만 실행 시 의존은 아니다
+
+
+class ImpactReport(BaseModel):
+    """파일 하나의 영향 반경. upstream 은 이 파일을 쓰는 쪽(바꾸면 깨지는 곳), downstream 은 이 파일이 쓰는 쪽이다."""
+
+    file: str
+    hops: int
+    upstream: list[str]
+    downstream: list[str]
+    edges: list[GraphEdge]
 
 
 class HubFile(BaseModel):
@@ -126,19 +150,26 @@ class HubFile(BaseModel):
 
 class CodeGraphDiagnostics(BaseModel):
     layer_violations: list[LayerViolation] = []
-    cycles: list[list[str]] = []  # SCC 마다 대표 경로 하나 [a, b, ..., a]
+    cycles: list[list[str]] = []  # 실행 시 순환(type 엣지 제외). SCC 마다 대표 경로 하나 [a, b, ..., a]
+    cycle_groups: list[list[str]] = []  # cycles 와 같은 순서. SCC 의 파일 전부
+    type_only_cycle_groups: list[list[str]] = []  # 타입 import 까지 넣어야 생기는 순환 묶음. 실행에는 없다
     orphan_files: list[str] = []
     hub_files: list[HubFile] = []
+    unassigned_files: list[str] = []  # 소스 루트 하위 폴더인데 어느 레이어에도 안 걸린 파일. 규칙 검사에서 빠져 있다
 
 
 class OutboundCall(BaseModel):
-    """서비스 간 호출 지점. raw_path 는 기준 URL 뒤의 원문(`${...}`·`{...}`·쿼리 포함)이고 비교는 normalize_path 로 한다."""
+    """서비스 간 호출 지점. raw_path 는 기준 URL 뒤의 원문(`${...}`·`{...}`·쿼리 포함)이고 비교는 normalize_path 로 한다.
+
+    주소가 코드에 박힌 호출은 env_var 가 비고 external_host 가 호스트다(G-28).
+    """
 
     caller_file: str
     caller_symbol: str  # 감싼 함수. 메서드는 `클래스.메서드`, 모듈 수준이면 빈 문자열
     env_var: str
     http_method: str
     raw_path: str
+    external_host: str | None = None
 
 
 class InboundRoute(BaseModel):
@@ -150,13 +181,15 @@ class InboundRoute(BaseModel):
 
 
 class CodeGraph(BaseModel):
-    """code_graphs 컬렉션 문서. 문서 하나 = (repo, commit_sha) 이고 같은 commit 은 다시 분석하지 않는다 (G-09).
+    """code_graphs 컬렉션 문서. 문서 하나 = (repo, commit_sha) 이고 같은 commit·같은 분석기·같은 설정은 다시 분석하지 않는다.
 
     allowed_edges 는 분석 때의 선언 예외다. context 마크다운이 위반 목록과 같은 시점의 설정을 보이도록 같이 저장한다.
+    fingerprint 는 분석기 버전과 저장소 설정의 해시다. 다르면 같은 commit 이어도 다시 분석한다(G-26).
     """
 
     repo: str
     commit_sha: str
+    fingerprint: str = ""
     analyzed_at: datetime
     tech_stack: list[str]
     layers: list[GraphLayer]
@@ -177,16 +210,18 @@ class CodeGraph(BaseModel):
         tech_stack: list[str],
         repo_spec: CodeGraphRepo,
         files: list[SourceFile],
-        imports: set[tuple[str, str]],
+        imports: Mapping[tuple[str, str], EdgeKind],
+        fingerprint: str = "",
         outbound_calls: Sequence[OutboundCall] = (),
         inbound_routes: Sequence[InboundRoute] = (),
     ) -> Self:
-        """파싱 결과로 그래프와 진단을 만든다. imports 의 양 끝은 files 에 있는 경로여야 한다."""
+        """파싱 결과로 그래프와 진단을 만든다. imports 는 (source, target) → 종류이고 양 끝은 files 에 있는 경로여야 한다."""
         file_by_path = {each.path: each for each in files}
         layer_by_path = {path: _layer_of(path, repo_spec.layers) for path in file_by_path}
         graph = nx.DiGraph()
         graph.add_nodes_from(sorted(file_by_path))
         graph.add_edges_from(sorted(imports))
+        runtime_graph = nx.DiGraph(edge for edge in sorted(imports) if imports[edge] != "type")
 
         may_import = {layer.id: set(layer.may_import) for layer in repo_spec.layers}
         allowed = {(edge.source, edge.target) for edge in repo_spec.allowed_edges}
@@ -195,9 +230,17 @@ class CodeGraph(BaseModel):
             from_layer, to_layer = layer_by_path[source], layer_by_path[target]
             if _is_violation(from_layer, to_layer, may_import, is_allowed=(source, target) in allowed):
                 violations.append(
-                    LayerViolation(source=source, target=target, from_layer=from_layer, to_layer=to_layer)
+                    LayerViolation(
+                        source=source,
+                        target=target,
+                        from_layer=from_layer,
+                        to_layer=to_layer,
+                        type_only=imports[(source, target)] == "type",
+                    )
                 )
         violating = {(each.source, each.target) for each in violations}
+        cycles, cycle_groups = _find_cycles(runtime_graph)
+        source_roots = {source_root.rstrip("/") for source_root in repo_spec.source_roots}
 
         orphans: list[str] = []
         if repo_spec.diagnostics.orphans:
@@ -228,6 +271,7 @@ class CodeGraph(BaseModel):
         return cls(
             repo=repo,
             commit_sha=commit_sha,
+            fingerprint=fingerprint,
             analyzed_at=analyzed_at,
             tech_stack=tech_stack,
             layers=[
@@ -254,14 +298,41 @@ class CodeGraph(BaseModel):
                     source=source,
                     target=target,
                     status="violation" if (source, target) in violating else "valid",
+                    kind=imports[(source, target)],
                 )
                 for source, target in sorted(imports)
             ],
             diagnostics=CodeGraphDiagnostics(
-                layer_violations=violations, cycles=_find_cycles(graph), orphan_files=orphans, hub_files=hubs
+                layer_violations=violations,
+                cycles=cycles,
+                cycle_groups=cycle_groups,
+                type_only_cycle_groups=_type_only_groups(graph, cycle_groups),
+                orphan_files=orphans,
+                hub_files=hubs,
+                unassigned_files=[
+                    path
+                    for path in graph
+                    if layer_by_path[path] == ROOT_LAYER and posixpath.dirname(path) not in source_roots
+                ],
             ),
             outbound_calls=list(outbound_calls),
             inbound_routes=list(inbound_routes),
+        )
+
+    def impact(self, file: str, hops: int, *, runtime_only: bool = False) -> ImpactReport | None:
+        """file 의 N-hop 영향 반경. 없는 파일은 None. runtime_only 면 타입으로만 쓰는 import 를 따라가지 않는다."""
+        if all(node.id != file for node in self.nodes):
+            return None
+        edges = [edge for edge in self.edges if not (runtime_only and edge.kind == "type")]
+        upstream, walked_up = _walk_edges(edges, file, hops, upstream=True)
+        downstream, walked_down = _walk_edges(edges, file, hops, upstream=False)
+        walked = {(edge.source, edge.target): edge for edge in (*walked_up, *walked_down)}
+        return ImpactReport(
+            file=file,
+            hops=hops,
+            upstream=sorted(upstream),
+            downstream=sorted(downstream),
+            edges=[walked[key] for key in sorted(walked)],
         )
 
     def render_context(self) -> str:
@@ -276,9 +347,7 @@ class CodeGraph(BaseModel):
             f"| Symbols: {sum(len(node.symbols) for node in self.nodes)}",
             f"- Tech Stack: {', '.join(self.tech_stack)}",
         ]
-        if any(node.id.endswith(".kt") for node in self.nodes):
-            # Kotlin 은 같은 패키지 안의 참조에 import 가 없어 엣지로 보이지 않는다 (README 파싱 규칙)
-            lines.append("- Note: Kotlin same-package references have no import and are not edges.")
+        type_only_violations = sum(each.type_only for each in diagnostics.layer_violations)
         lines += [
             "",
             "## 1. Layers & Allowed Imports",
@@ -287,17 +356,36 @@ class CodeGraph(BaseModel):
             *(f"| {layer.id} | {layer.file_count} | {', '.join(layer.may_import) or '-'} |" for layer in self.layers),
             "",
             "## 2. Layer Violations (Do Not Add More)",
-            _heading("Violations", len(diagnostics.layer_violations)),
+            _heading(f"Violations, type-only {type_only_violations}", len(diagnostics.layer_violations))
+            if type_only_violations
+            else _heading("Violations", len(diagnostics.layer_violations)),
             *(
                 f"  - `{each.source}` ({each.from_layer}) -> `{each.target}` ({each.to_layer})"
+                + (" [type-only]" if each.type_only else "")
                 for each in diagnostics.layer_violations
             ),
             _heading("Declared Exceptions", len(self.allowed_edges)),
             *(f"  - `{edge.source}` -> `{edge.target}`" for edge in self.allowed_edges),
             "",
             "## 3. Cycles & Orphans",
-            _inline("Cycles", [" -> ".join(cycle) for cycle in diagnostics.cycles]),
+            _inline(
+                "Runtime Cycles",
+                [
+                    f"{' -> '.join(cycle)} ({len(group)} files)"
+                    for cycle, group in zip(diagnostics.cycles, diagnostics.cycle_groups, strict=False)
+                ],
+            ),
+            *(
+                [_inline("Type-only Cycle Groups", [", ".join(group) for group in diagnostics.type_only_cycle_groups])]
+                if diagnostics.type_only_cycle_groups
+                else []
+            ),
             _inline("Orphans", diagnostics.orphan_files),
+            *(
+                [_inline("Unassigned to Any Layer (not rule-checked)", diagnostics.unassigned_files)]
+                if diagnostics.unassigned_files
+                else []
+            ),
             "",
             "## 4. Hub Files (Top In-Degree)",
             "| File | Layer | In | Out | Key Symbols |",
@@ -326,18 +414,53 @@ def _is_violation(from_layer: str, to_layer: str, may_import: dict[str, set[str]
     )
 
 
-def _find_cycles(graph: nx.DiGraph) -> list[list[str]]:
-    # simple_cycles 는 밀집 그래프에서 지수적이라 크기 2 이상 SCC 마다 대표 경로 하나만 적는다 (G-07).
-    # subgraph 뷰는 노드·이웃을 set 순서로 돌 수 있어(해시 시드마다 다르다) 정렬한 엣지로 그래프를 새로 만들고
-    # 가장 작은 경로에서 시작한다. 그래야 같은 commit 의 대표 경로가 실행마다 같다.
-    cycles = []
+def _find_cycles(graph: nx.DiGraph) -> tuple[list[list[str]], list[list[str]]]:
+    """(대표 경로들, 같은 순서의 SCC 파일 목록들).
+
+    simple_cycles 는 밀집 그래프에서 지수적이라 크기 2 이상 SCC 마다 대표 경로 하나만 적는다 (G-07). 대표 경로만 보이면
+    묶음의 크기가 가려지므로 파일 목록을 같이 준다. subgraph 뷰는 노드·이웃을 set 순서로 돌 수 있어(해시 시드마다
+    다르다) 정렬한 엣지로 그래프를 새로 만들고 가장 작은 경로에서 시작한다. 그래야 같은 commit 의 결과가 실행마다 같다.
+    """
+    found = []
     for component in nx.strongly_connected_components(graph):
         if len(component) < 2:
             continue
         component_graph = nx.DiGraph(sorted(graph.subgraph(component).edges))
         cycle_edges = nx.find_cycle(component_graph, source=min(component))
-        cycles.append([cycle_edges[0][0], *(target for _, target in cycle_edges)])
-    return sorted(cycles)
+        found.append(([cycle_edges[0][0], *(target for _, target in cycle_edges)], sorted(component)))
+    found.sort()
+    return [cycle for cycle, _ in found], [group for _, group in found]
+
+
+def _type_only_groups(graph: nx.DiGraph, runtime_groups: list[list[str]]) -> list[list[str]]:
+    """타입 import 까지 넣었을 때의 SCC 중 실행 시 순환으로 설명되지 않는 묶음."""
+    known = [set(group) for group in runtime_groups]
+    groups = [
+        sorted(component)
+        for component in nx.strongly_connected_components(graph)
+        if len(component) >= 2 and component not in known
+    ]
+    return sorted(groups)
+
+
+def _walk_edges(edges: list[GraphEdge], start: str, hops: int, *, upstream: bool) -> tuple[set[str], list[GraphEdge]]:
+    reached = {start}
+    frontier = {start}
+    walked: list[GraphEdge] = []
+    for _ in range(hops):
+        following = set()
+        for edge in edges:
+            origin, destination = (edge.target, edge.source) if upstream else (edge.source, edge.target)
+            if origin in frontier:
+                walked.append(edge)
+                if destination not in reached:
+                    reached.add(destination)
+                    following.add(destination)
+        if not following:
+            break
+        frontier = following
+    reached.discard(start)
+    return reached, walked
 
 
 def glob_regex(pattern: str) -> re.Pattern[str]:
