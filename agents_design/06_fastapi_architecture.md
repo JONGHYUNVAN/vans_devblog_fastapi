@@ -266,7 +266,7 @@ class Settings(BaseSettings):
     topic_title_overlap: float = 0.5
     topic_avoid_lookback_days: int = 180
     draft_min_chars: int = 4000
-    draft_max_chars: int = 12000
+    draft_max_chars: int = 20000
     review_temperature: float = 0.2       # REVIEW, ARBITRATE. 작성은 ModelBinding.temperature
     review_timeout_s: int = 300
     draft_timeout_s: int = 600           # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT

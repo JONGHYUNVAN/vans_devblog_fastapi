@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     topic_avoid_lookback_days: int = 180
     publish_requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다
     draft_min_chars: int = 4000  # 본문 길이 범위 (설계 07 문서 Q-08)
-    draft_max_chars: int = 12000
+    draft_max_chars: int = 20000
     review_temperature: float = 0.2  # REVIEW, ARBITRATE. 작성 호출은 ModelBinding.temperature
     review_timeout_s: int = 300
     draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT

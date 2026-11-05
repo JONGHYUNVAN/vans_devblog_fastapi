@@ -161,7 +161,7 @@ stateDiagram-v2
 | `TOPIC_TITLE_OVERLAP` | 0.5 | 제목 토큰 집합 Jaccard. 이 값 이상이면 중복 |
 | `TOPIC_AVOID_LOOKBACK_DAYS` | 180 | 주제 제안 입력의 회피 목록에 넣을 레지스트리 발행 주제의 기간. 중복 판별은 기간과 무관하게 `RESERVED`·`PUBLISHED` 전부와 한다 |
 | `DRAFT_MIN_CHARS` | 4000 | 본문 길이 하한. 앵커·코드 포함 |
-| `DRAFT_MAX_CHARS` | 12000 | 본문 길이 상한 |
+| `DRAFT_MAX_CHARS` | 20000 | 본문 길이 상한 |
 | `REVIEW_TIMEOUT_S` | 300 | 리뷰·중재 LLM 호출 제한. 초과하면 그 호출의 실패로 재시도 |
 | `DRAFT_TIMEOUT_S` | 600 | 주제 제안·초안 작성·수정 LLM 호출 제한. 타임아웃이 있어야 모든 에이전트 단계가 끝난다 |
 | `PUBLISH_TIMEOUT_S` | 30 | 로그인·발행 HTTP 호출 제한. 글 생성 호출의 응답 전 타임아웃은 결과 불명이고, 로그인 단계의 실패는 무엇이든 결과 확정이다 (04 문서 8절) |
