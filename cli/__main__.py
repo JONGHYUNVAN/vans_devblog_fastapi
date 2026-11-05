@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.dependencies import (
     build_agent_call_service,
+    build_code_graph_repo_config_service,
     build_code_graph_service,
     build_draft_decision_service,
     build_pipeline_runner,
@@ -448,6 +449,20 @@ def run() -> None:
 def _run_now(function: Callable[..., Any], *args: Any) -> None:
     """CLI 에는 응답이 없으므로 백그라운드로 넘길 분석을 그 자리에서 돌린다."""
     function(*args)
+
+
+@code_graph.command("seed-repos")
+def seed_code_graph_repos(file: Path) -> None:
+    """분석 대상 저장소 설정(JSON 객체, 예시는 code_graph_design/repos.example.json)을 Mongo 에 넣는다. 파일에 없는 저장소는 지운다."""
+    settings = get_settings()
+    try:
+        repos = json.loads(file.read_text(encoding="utf-8"))
+        with open_clients(settings) as (_, mongo_client):
+            build_code_graph_repo_config_service(mongo_client, settings).seed(repos)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"저장소 설정 {len(repos)}건을 넣었다: {', '.join(sorted(repos))}")
 
 
 @code_graph.command("analyze")

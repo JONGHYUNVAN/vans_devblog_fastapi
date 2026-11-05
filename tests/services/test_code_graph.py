@@ -12,10 +12,10 @@ from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError, ServiceUnavailableError
 from app.models.code_graph import CodeGraphRepo
-from app.services.code_graph import KEEP_PER_REPO, AnalysisTracker, CodeGraphService
+from app.services.code_graph import KEEP_PER_REPO, AnalysisTracker, CodeGraphRepoConfigService, CodeGraphService
 from tests.conftest import load_golden
 from tests.factories import make_tarball
-from tests.fakes import FakeCodeGraphRepository, FakeGitHubClient
+from tests.fakes import FakeCodeGraphRepoConfigRepository, FakeCodeGraphRepository, FakeGitHubClient
 
 REPOS = load_golden("code_graph/repos")
 SHA = "a" * 40
@@ -368,3 +368,22 @@ def test_get_impact_walks_both_directions():
 def test_get_impact_raises_not_found_for_unknown_file():
     with pytest.raises(NotFoundError):
         _service(_analyzed()).get_impact("ts_app", "src/nope.ts", 1)
+
+
+def test_seed_repos_stores_valid_configs():
+    repository = FakeCodeGraphRepoConfigRepository()
+
+    CodeGraphRepoConfigService(repository).seed(REPOS)
+
+    assert CodeGraphRepoConfigService(repository).load() == dict(sorted(REPOS.items()))
+
+
+@pytest.mark.parametrize("repos", [[{"owner": "x"}], {"ok": REPOS["ts_app"], "broken": {"owner": "x"}}])
+def test_seed_repos_writes_nothing_when_any_config_is_invalid(repos):
+    repository = FakeCodeGraphRepoConfigRepository({"existing": REPOS["ts_app"]})
+
+    with pytest.raises(ValueError):
+        CodeGraphRepoConfigService(repository).seed(repos)
+
+    assert repository.replace_calls == 0
+    assert list(repository.repos) == ["existing"]

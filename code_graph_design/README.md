@@ -35,7 +35,7 @@
 | G-01 | 이름은 `code_graph`. `analysis`·`analyzer` 는 쓰지 않는다 | `models/analyzers.py` 가 ES Nori 분석기다 |
 | G-02 | 검색 경로와 같은 동기 쪽에 둔다: 라우터 `def`, 분석은 `BackgroundTasks`, 저장은 동기 `MongoClient` | CPU 작업(파싱·networkx)이 이벤트 루프를 막으면 안 된다(CONVENTIONS 3절). 러너·비동기 Mongo 는 필요 없다 |
 | G-03 | 분석 트리거는 `POST .../analyze/` + `X-Internal-Key`(`INTERNAL_API_KEY`, `verify_internal_key`). 조회는 공개, `core/cache` TTL | 동기화 실행(`POST sync/`)과 같은 운영자 동작이다 |
-| G-04 | 저장소 목록·규칙은 `Settings.code_graph_repos`(JSON, `AGENT_SLOT_BINDINGS` 와 같은 방식). 비어 있으면 기능이 꺼진다. 네 저장소 전체 예시는 [repos.example.json](repos.example.json) 이고 `.env.example` 은 그 파일을 가리킨다 | 임의 URL 을 받지 않는다. 100줄짜리 JSON 을 env 한 줄로 두면 읽을 수 없다 |
+| G-04 | 저장소 목록·규칙은 Mongo `code_graph_repos` 다(G-35). 비어 있으면 기능이 꺼진다. 네 저장소 전체 예시는 [repos.example.json](repos.example.json) 이고 `code-graph seed-repos` 로 넣는다 | 임의 URL 을 받지 않는다 |
 | G-05 | 레이어와 레이어별 허용 import 쌍, 파일 단위 예외는 추론하지 않고 저장소마다 선언한다 | 유일하게 남는 손 문서다. 순서 하나로는 이 앱의 표(services → schemas 허용, models ↔ schemas 금지)를 못 적는다. 틀리면 도구가 위반으로 보여 준다 |
 | G-06 | orphan·hub 진단은 저장소별 토글. vans_story·이 앱만 켠다 | Spring·NestJS 는 DI 라 import 그래프가 의존을 반영하지 않는다 |
 | G-07 | 순환은 `strongly_connected_components` 크기 2 이상 | `simple_cycles` 는 밀집 그래프에서 지수적이다 |
@@ -55,7 +55,7 @@
 | G-21 | 흐름은 `models/service_graph.FLOWS` 고정 표(아래 4절)이고 hop 은 (호출자 서비스, 대상 서비스, 메서드, 경로) 다. hop 의 `verified` 는 호출자 서비스 코드에서 그 엔드포인트로 가는 호출 지점을 찾았다는 뜻이다. 엔드포인트 → 그 안에서 부르는 클라이언트(NestJS 컨트롤러 → `SearchServiceClient`)는 잇지 않는다 | DI 라 import 그래프로는 어느 엔드포인트가 어느 클라이언트를 부르는지 모른다(G-06 과 같은 이유) |
 | G-22 | 엣지 출발은 호출 지점이 Next.js route 핸들러(`GET`·`POST` 함수)면 그 inbound 엔드포인트, 아니면 코드 노드(`서비스:파일#심볼`)다. 엣지 상태는 matched(대상 OpenAPI·route 에 있다)·missing(없다)·unknown(대상 문서를 못 받았다)·external(`client_env` 에 없는 환경변수) 넷이고, (출발, 대상, 파일, 심볼)이 같은 호출은 엣지 하나다 | missing 이 죽은 호출·접두 오류를 드러낸다. `/posts` 와 `/posts?${query}` 가 두 줄로 보이지 않게 |
 | G-23 | TS 의 `import('x')` 도 import 로 잇는다. 값을 모르는 템플릿 리터럴(`` import(`./${x}`) ``)은 잇지 않는다 | 빠뜨리면 지연 로딩 파일이 orphan 으로 나온다. vans_story 의 orphan 19건 중 14건이 살아 있는 파일(게임 전부)이었고, 고친 뒤 5건·엣지 516·순환 2다. 지워도 된다는 신호라 거짓 양성이 가장 위험하다 |
-| G-24 | 분석기 실패가 앱 기동을 막지 않는다. 문법 패키지는 분석 함수 안에서 import 하고, `CODE_GRAPH_REPOS` 가 깨지면 기능만 끄고 오류 로그를 남긴다. 문법은 Docker 빌드 때 `prefetch` 로 이미지에 넣는다(`TREE_SITTER_LANGUAGE_PACK_CACHE_DIR`) | 재현했다: 둘 다 고치기 전에는 검색·KIS·에이전트까지 기동에 실패했다. 문법이 이미지에 없으면 배포마다 첫 분석이 GitHub 에 의존하고 실패가 조용히 묻힌다 |
+| G-24 | 분석기 실패가 앱 기동을 막지 않는다. 문법 패키지는 분석 함수 안에서 import 한다. 문법은 Docker 빌드 때 `prefetch` 로 이미지에 넣는다(`TREE_SITTER_LANGUAGE_PACK_CACHE_DIR`) | 재현했다: 둘 다 고치기 전에는 검색·KIS·에이전트까지 기동에 실패했다. 문법이 이미지에 없으면 배포마다 첫 분석이 GitHub 에 의존하고 실패가 조용히 묻힌다 |
 | G-25 | `POST analyze` 는 tarball 앞부분만 받아 SHA 를 확인한다(pax 헤더가 스트림 맨 앞이다). 전체 다운로드와 분석은 백그라운드에서 프로세스당 한 번에 하나만 돌고, 같은 저장소가 돌고 있으면 `running` 을 돌려준다. 분석에 쓰는 파일만 푼다. G-11 을 대체한다 | 전에는 호출마다 tarball 전체(vans_story 30MB)를 메모리에 올린 뒤 판단해서, 반복 호출이 단일 워커의 메모리를 눌러 검색·KIS 까지 위험했다 |
 | G-26 | `CodeGraph.fingerprint` = 분석기 버전(`ANALYZER_VERSION`)과 저장소 설정의 해시. 다르면 같은 commit 도 다시 분석한다. 추출·진단 규칙을 바꾸면 버전을 올린다. G-09 의 멱등 조건을 좁힌다 | 전에는 파서를 고쳐도 commit 이 바뀌기 전까지 틀린 결과가 남았다(G-23 의 버그가 그랬다) |
 | G-27 | 엣지에 `kind` 를 둔다: `static`·`dynamic`(`import()`)·`type`(실행 때 사라짐). TS 는 `import type`, 전부 `type` 인 지정자, 타입 위치에서만 쓴 이름을 type 으로 본다. 데코레이터가 있는 파일은 `type` 키워드만 믿는다. Python 은 `if TYPE_CHECKING:`. 순환은 type 을 뺀 그래프로 세고(`cycles`·`cycle_groups`), 타입까지 넣어야 생기는 묶음은 `type_only_cycle_groups` 로 나눈다. 위반은 `type_only` 를 단다 | vans_story 위반 21건 중 14건이 타입 전용이고, 순환으로 보이던 14개 파일 묶음이 실행에는 없다. 구분 없이 보이면 고칠 곳을 잘못 고른다. NestJS 는 `emitDecoratorMetadata` 가 생성자 타입 import 를 실행 때 남겨 이름 쓰임으로 판단할 수 없다 |
@@ -66,8 +66,9 @@
 | G-32 | 영향 반경을 분석기가 준다: `GET {repo}/impact/?file=&hops=&runtime_only=`, CLI `code-graph impact`. 뷰어 없이도 쓴다 | 고치기 전에 수정 범위를 보는 것이 이 도구의 핵심 쓰임이다. 프론트 계산에 묶이면 뷰어 전에는 못 쓴다 |
 | G-33 | 분석 실패가 드러난다: `GET {repo}/analysis/` 가 idle·running·done·failed 와 예외 종류를 준다(프로세스 안 상태). 소스 파일이 0개면 빈 그래프를 저장하지 않고 실패다. 하위 폴더인데 어느 레이어에도 안 걸린 파일은 `unassigned_files` 로 보인다 | `queued` 만 돌려주고 실패하면 로그뿐이었다. 설정이 낡으면 "위반 0" 으로 보이고, 새 폴더는 조용히 규칙 검사에서 빠졌다 |
 | G-34 | 뷰어는 읽기 전용이다. 재분석은 CLI 나 `X-Internal-Key` 직접 호출로 하고, BFF 는 `INTERNAL_API_KEY` 를 갖지 않는다 | vans_story_be 에 `@EnableMethodSecurity` 가 없어 Spring `GET /users` 로 관리자를 확인할 수 없어 보인다(코드로만 확인). 내부 키는 색인 삭제 API 도 연다 |
+| G-35 | 저장소 설정을 환경변수 `CODE_GRAPH_REPOS` 에서 Mongo `code_graph_repos`(같은 DB, 문서 하나 = 저장소 하나, `_id` = 저장소 키)로 옮겼다. 요청마다 읽고, `code-graph seed-repos` 가 전부 검증한 뒤 통째로 바꾼다 | 2026-11-05 사용자 결정. 비밀값도 환경별 값도 아니고, 프로젝트가 바뀌면 함께 자주 바뀐다 | 환경변수 JSON 한 줄, 저장소 안 JSON 파일(바꿀 때마다 배포) |
 
-## 저장소 설정 (`CODE_GRAPH_REPOS`)
+## 저장소 설정 (Mongo `code_graph_repos`)
 
 전문은 [repos.example.json](repos.example.json). 저장소 키 → `{owner, name, ref, source_roots, layers[{id, path, may_import[]}], allowed_edges[{source, target}], entry_points(glob), diagnostics{orphans, hubs}, service, openapi, client_env{환경변수: 경로 접두}, call_sites(glob), route_root, route_framework}`. `service` 가 비면 저장소 키를 서비스 이름으로 쓴다.
 
@@ -81,7 +82,7 @@
 - `client_env`(그 서비스를 가리키는 환경변수 → 값에 붙은 경로 접두. 다른 저장소의 호출을 이 서비스로 잇는다): 이 앱 `SEARCH_API_URL`·`DJANGO_API_URL`(BFF)·`SEARCH_SERVICE_URL`(NestJS) 모두 `""`, NestJS `POST_API_URL: "/api/v1"`(BFF)·`POST_BE_URL: ""`(이 앱), Spring `AUTH_API_URL: "/api/v1"`(BFF)·`USER_SERVICE_URL: ""`(NestJS·이 앱).
 - `call_sites`(G-19): 이 앱 `app/clients/publisher/*.py`, vans_story `src/app/**/route.ts`·`src/app/sitemap.ts`·`src/lib/**/*.ts`(`route_root: "src/app"`), NestJS `src/**/*.client.ts`, Spring 없음(밖으로 부르지 않는다).
 - `client_env` 에 없는 환경변수(AI_API_URL, IMAGE_API_URL)는 서비스 그래프에서 환경변수 이름을 가진 외부 노드로 그린다.
-- 검증은 `services/code_graph.py` 가 `models/code_graph.py` 의 `CodeGraphRepo` 로 저장소 하나씩 한다. `openapi`·`client_env` 는 서비스 그래프 조회 때, 나머지는 분석 때 읽는다. 설정을 바꾸면 fingerprint 가 달라져 다음 분석 요청이 같은 commit 도 다시 분석한다(G-26). `CODE_GRAPH_REPOS` 가 비었거나 깨졌으면 기능이 꺼지고, 깨졌으면 오류 로그가 남는다(G-24).
+- 검증은 `services/code_graph.py` 가 `models/code_graph.py` 의 `CodeGraphRepo` 로 저장소 하나씩 한다. `openapi`·`client_env` 는 서비스 그래프 조회 때, 나머지는 분석 때 읽는다. 설정을 바꾸면 fingerprint 가 달라져 다음 분석 요청이 같은 commit 도 다시 분석한다(G-26). 컬렉션이 비어 있으면 기능이 꺼진다. `code-graph seed-repos 파일` 은 전부 검증한 뒤 넣고 파일에 없는 저장소는 지운다. 요청마다 읽으므로 재시작은 필요 없지만, 이미 캐시된 서비스 그래프는 TTL(10분)까지 남는다.
 - `route_framework`(G-29): NestJS `"nest"`, Spring `"spring"`. Next.js 는 `route_root` 로 정한다.
 
 ## 코드 배치 (기존 계층, 새 폴더 없음)
@@ -92,13 +93,14 @@
 | `clients/openapi.py` | NestJS·Spring 의 OpenAPI 문서 받기. 세션 로그인(G-20) |
 | `models/code_graph.py` | `CodeGraph`(repo, commit_sha, fingerprint(G-26), analyzed_at, tech_stack, layers, allowed_edges(G-17), nodes, edges, diagnostics, outbound_calls, inbound_routes)와 노드·엣지·진단 값 객체, 저장소 설정 `CodeGraphRepo`. I/O 없는 계산(레이어 위반 판정, 순환, orphan, hub, 영향 반경, context 마크다운) |
 | `repositories/code_graph.py` | `code_graphs` 컬렉션 upsert·최신 조회·보관 정리 |
+| `repositories/code_graph_repo_config.py` | `code_graph_repos` 컬렉션 읽기·통째로 교체 (G-35) |
 | `services/code_graph.py` | 분석 유스케이스(G-25), `AnalysisTracker`(상태·동시 실행 제한, lifespan 이 만든다), 파싱(언어별 정의·import·엣지 종류 추출, 2-pass 경로 해석) → 진단 → 엔티티 |
 | `services/code_graph_calls.py` | tree-sitter 트리에서 호출 지점(`outbound_calls`)·inbound 엔드포인트(Next.js·NestJS·Spring) 뽑기. `services/code_graph.py` 의 Pass 1 이 부른다 |
 | `models/service_graph.py` | `ServiceGraph.build`(호출 지점 + OpenAPI → 노드·엣지), 흐름 표 `FLOWS`, `trace`(hop·mermaid), `normalize_path`. I/O 없음 |
 | `services/service_graph.py` | 최신 `CodeGraph` 들과 OpenAPI(캐시)를 모아 `ServiceGraph` 를 만들고 응답 스키마로 바꾼다 |
 | `schemas/code_graph.py` | 응답 스키마 |
 | `routers/code_graph.py` | 아래 API |
-| `cli/__main__.py` | `code-graph analyze <repo>`, `code-graph context <repo>`, `code-graph impact <repo> <file> [--hops] [--runtime-only]`, `code-graph flow <flow> [--mermaid]` |
+| `cli/__main__.py` | `code-graph seed-repos <파일>`, `code-graph analyze <repo>`, `code-graph context <repo>`, `code-graph impact <repo> <file> [--hops] [--runtime-only]`, `code-graph flow <flow> [--mermaid]` |
 | `code_graph_design/audit/` | 분석기를 쓰지 않는 독립 기준과 비교하는 재측정 도구. 앱 코드가 아니다 |
 | `tests/` | 같은 구조. 파서 테스트는 `tests/golden/code_graph/` 에 작은 소스 트리(python_app·ts_app·kotlin_app, 엣지 종류는 ts_kinds·py_kinds·ts_dynamic)와 설정(`repos.json`)을 두고 기대 그래프(`{트리}.json`)와 비교. 이 트리는 ruff 대상에서 뺀다. 실제 tarball 로 A 완료 기준을 보는 `tests/e2e/test_code_graph.py` |
 
@@ -183,7 +185,7 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 - 다운로드: 타임아웃·크기 상한은 `Settings`(`CODE_GRAPH_DOWNLOAD_TIMEOUT_S`=30, `CODE_GRAPH_MAX_TARBALL_MB`=64). 상한을 넘으면 그 분석이 실패한다(상태 `failed`).
 - 압축 해제: 매니페스트와 소스 루트 아래 언어 파일만 `tarfile.extractall(path, members=..., filter="data")`. 임시 디렉터리는 끝나면 지운다.
 - 백그라운드 분석 중 예외: `logger.warning` 과 `failed` 상태를 남기고 기존 최신 문서는 건드리지 않는다(G-09, G-33). 네이티브 파서의 panic 도 `failed` 로 남긴다. CLI `code-graph analyze` 는 분석을 그 자리에서 돌리고 실패하면 종료 코드 1 이다.
-- 인덱스는 lifespan 이 만든다. `CODE_GRAPH_REPOS` 가 비어 있으면 건너뛰고, Mongo 가 내려가 있으면 경고만 남긴다.
+- 인덱스는 lifespan 이 만든다. Mongo 가 내려가 있으면 경고만 남긴다.
 
 ## API (`/api/v1/code-graph/`, trailing slash)
 
@@ -218,7 +220,7 @@ Pass 1 이 파일·심볼·패키지 인덱스를 만들고 Pass 2 가 import �
 - **결정성:** 해시 시드를 바꿔도 결과가 같다.
 - **서비스 그래프:** OpenAPI 없이 호출 46건이 matched 26, external 20 이고 missing·unknown 은 없다. 흐름 4개의 hop 10개가 모두 verified 다. 라우트 어노테이션은 NestJS 15개, Spring 15개 모두 추출한다(줄 머리 기준).
 - **분석 중 이벤트 루프:** vans_story 한 번 분석할 때 지연 p50 35ms, p99 176ms, 최대 445ms 다. 같은 조건의 유휴 최대가 327ms 라 멈춤은 아니다. 다른 세션이 돌던 Windows 측정이라 운영 수치가 아니다. 메모리 최고치는 121MB 다.
-- **장애 격리:** 문법 패키지를 못 읽어도, `CODE_GRAPH_REPOS` 가 깨져도 앱이 뜬다(테스트). 빈 캐시 + 네트워크 차단이면 분석만 `failed` 다. `prefetch` 뒤에는 네트워크를 막아도 파서 4개가 뜬다. 캐시는 32.7MB 다.
+- **장애 격리:** 문법 패키지를 못 읽어도 앱이 뜬다(테스트). 빈 캐시 + 네트워크 차단이면 분석만 `failed` 다. `prefetch` 뒤에는 네트워크를 막아도 파서 4개가 뜬다. 캐시는 32.7MB 다.
 
 **아직 믿으면 안 되는 것**
 

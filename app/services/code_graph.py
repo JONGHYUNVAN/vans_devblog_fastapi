@@ -28,6 +28,7 @@ from app.models.code_graph import (
     stronger_kind,
 )
 from app.repositories.code_graph import CodeGraphRepository
+from app.repositories.code_graph_repo_config import CodeGraphRepoConfigRepository
 from app.schemas.code_graph import (
     AnalysisStatusPublic,
     CodeGraphAnalysis,
@@ -140,8 +141,26 @@ class AnalysisTracker:
         )
 
 
+class CodeGraphRepoConfigService:
+    """분석 대상 저장소 설정(Mongo code_graph_repos) 읽기와 넣기 (G-35). 비어 있으면 기능이 꺼진다."""
+
+    def __init__(self, repository: CodeGraphRepoConfigRepository) -> None:
+        self._repository = repository
+
+    def load(self) -> dict[str, dict[str, Any]]:
+        return self._repository.list_all()
+
+    def seed(self, repos: Any) -> None:
+        """저장소 키 → 설정 객체를 통째로 넣는다. 없는 저장소는 지워진다. 깨진 설정이 DB 에 들어가지 않게 전부 먼저 검사한다."""
+        if not isinstance(repos, dict):
+            raise ValueError("code graph repos must be a JSON object keyed by repo")
+        for config in repos.values():
+            CodeGraphRepo.model_validate(config)
+        self._repository.replace_all(repos)
+
+
 class CodeGraphService:
-    """저장소 코드 그래프의 분석·저장·조회. 저장소 목록은 CODE_GRAPH_REPOS 원문을 받아 여기서 검증한다.
+    """저장소 코드 그래프의 분석·저장·조회. 저장소 목록은 Mongo 원문을 받아 여기서 검증한다.
 
     분석은 응답을 늦추지 않도록 run_in_background 로 넘긴다 (dependencies.py 가 BackgroundTasks.add_task 를,
     CLI 는 바로 실행하는 함수를 준다).
@@ -193,7 +212,7 @@ class CodeGraphService:
         return ImpactPublic.model_validate(report.model_dump())
 
     def list_code_graphs(self) -> list[CodeGraphSummary]:
-        """설정된 저장소 중 분석 결과가 있는 것마다 최신 commit 과 진단 건수. 설정 순서다."""
+        """설정된 저장소 중 분석 결과가 있는 것마다 최신 commit 과 진단 건수. 저장소 키 순서다."""
         summaries = []
         for repo in self._repos:
             code_graph = self._repository.get_latest(repo)

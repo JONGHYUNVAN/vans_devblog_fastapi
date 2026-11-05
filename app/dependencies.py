@@ -34,6 +34,7 @@ from app.core.exceptions import AuthenticationError
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.code_graph import CodeGraphRepository
+from app.repositories.code_graph_repo_config import CodeGraphRepoConfigRepository
 from app.repositories.model_route import ModelRouteRepository
 from app.repositories.popular_search import PopularSearchRepository
 from app.repositories.post import PostRepository
@@ -41,7 +42,7 @@ from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_index import PostIndexRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
-from app.services.code_graph import AnalysisTracker, CodeGraphService, RunInBackground
+from app.services.code_graph import AnalysisTracker, CodeGraphRepoConfigService, CodeGraphService, RunInBackground
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService, DraftPublisher
 from app.services.health import HealthService
@@ -209,10 +210,15 @@ def build_code_graph_service(
             timeout_s=settings.code_graph_download_timeout_s,
             max_bytes=settings.code_graph_max_tarball_mb * 1024 * 1024,
         ),
-        repos=settings.code_graph_repos,
+        repos=build_code_graph_repo_config_service(mongo_client, settings).load(),
         run_in_background=run_in_background,
         tracker=tracker,
     )
+
+
+def build_code_graph_repo_config_service(mongo_client: MongoClient, settings: Settings) -> CodeGraphRepoConfigService:
+    """저장소 설정은 요청마다 읽어 재시작 없이 반영한다 (G-35). CLI `code-graph seed-repos` 도 이것을 쓴다."""
+    return CodeGraphRepoConfigService(CodeGraphRepoConfigRepository(mongo_client[settings.mongodb_db_name]))
 
 
 def get_service_graph_service(
@@ -230,7 +236,7 @@ def build_service_graph_service(
     return ServiceGraphService(
         repository=CodeGraphRepository(mongo_client[settings.mongodb_db_name]),
         openapi_client=OpenApiClient(timeout_s=settings.code_graph_openapi_timeout_s),
-        repos=settings.code_graph_repos,
+        repos=build_code_graph_repo_config_service(mongo_client, settings).load(),
         self_openapi=self_openapi,
         setting_value=partial(_setting_value, settings),
     )
