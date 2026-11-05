@@ -42,9 +42,13 @@ class PostCreatePayload(BaseModel):
     main_category_id: str = Field(alias="mainCategoryId")
     sub_category_id: str = Field(alias="subCategoryId")
     language: str
+    level: int | None = None  # 평가 수준. Post BE 는 DTO 에 없는 필드를 거부하므로 없으면 키를 빼고 보낸다
 
     def to_dto(self) -> dict[str, Any]:
-        return self.model_dump(by_alias=True)
+        dto = self.model_dump(by_alias=True)
+        if dto["level"] is None:
+            del dto["level"]
+        return dto
 
 
 class PublishResult(BaseModel):

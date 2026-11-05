@@ -8,7 +8,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.config import Settings, get_settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.dependencies import (
     get_draft_decision_service,
@@ -43,15 +42,13 @@ ViewServiceDep = Annotated[PipelineViewService, Depends(get_pipeline_view_servic
 
 
 @router.post("/rounds/", summary="라운드 생성·시작", status_code=201)
-async def create_round(
-    body: RoundCreate, round_service: RoundServiceDep, settings: Annotated[Settings, Depends(get_settings)]
-) -> RoundPublic:
+async def create_round(body: RoundCreate, round_service: RoundServiceDep) -> RoundPublic:
     """Post BE 활성 카테고리를 읽어 스냅샷을 만들고 라운드를 TOPIC_SELECTION 으로 만든다. 다른 라운드가 주제 선정 중이면 409."""
     try:
         publishing_round = await round_service.start_round(
-            theme_keyword=body.theme_keyword, slot_bindings=body.bindings or settings.agent_slot_bindings
+            theme_keyword=body.theme_keyword, slot_bindings=body.bindings, evidence=body.evidence
         )
-    except ValueError as exc:  # 바인딩·페르소나·렌즈 매트릭스, 발행 설정 없음
+    except ValueError as exc:  # 라우트·페르소나·지원하지 않는 조합, 발행 설정 없음
         raise InvalidRequestError(str(exc)) from exc
     return build_round_public(publishing_round)
 

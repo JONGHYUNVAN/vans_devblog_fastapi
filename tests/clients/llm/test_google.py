@@ -84,3 +84,66 @@ async def test_empty_candidates_return_empty_text():
     response = await client.complete(MESSAGES, SCHEMA, PARAMS, timeout=30)
 
     assert (response.text, response.usage.prompt_tokens) == ("", 0)
+
+
+async def test_unset_temperature_and_effort_are_not_sent_and_effort_maps_to_thinking_level():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(
+            200, json={"candidates": [{"content": {"parts": [{"text": "{}"}]}, "finishReason": "STOP"}]}
+        )
+
+    client = _client(handler)
+    await client.complete(MESSAGES, SCHEMA, LLMParams(model_id="gemini-test", max_output_tokens=800), timeout=30)
+    await client.complete(MESSAGES, SCHEMA, LLMParams(model_id="gemini-test", effort="high", max_output_tokens=800), 30)
+
+    plain, with_effort = (json.loads(request.content)["generationConfig"] for request in requests)
+    assert "temperature" not in plain and "thinkingConfig" not in plain
+    assert with_effort["thinkingConfig"] == {"thinkingLevel": "HIGH"}
+
+
+async def test_max_tokens_finish_reason_is_truncated_even_with_an_empty_body():
+    payload = {
+        "candidates": [{"content": {"parts": []}, "finishReason": "MAX_TOKENS"}],
+        "usageMetadata": {"thoughtsTokenCount": 800},
+    }
+
+    response = await _client(lambda request: httpx2.Response(200, json=payload)).complete(MESSAGES, SCHEMA, PARAMS, 30)
+
+    assert (response.text, response.truncated, response.stop_reason) == ("", True, "MAX_TOKENS")
+    assert response.usage.completion_tokens == 800
+
+
+async def test_web_search_sends_the_tool_without_a_schema_and_reads_grounding_chunks():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        chunks = [
+            {"web": {"uri": "https://grounding.test/redirect/1", "title": "docs.example.com"}},
+            {"retrievedContext": {}},
+        ]
+        return httpx2.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "확인했다"}]},
+                        "finishReason": "STOP",
+                        "groundingMetadata": {"groundingChunks": chunks},
+                    }
+                ]
+            },
+        )
+
+    params = LLMParams(model_id="gemini-test", max_output_tokens=800, web_search=True)
+    response = await _client(handler).complete(MESSAGES, None, params, timeout=30)
+
+    body = json.loads(requests[0].content)
+    assert body["tools"] == [{"google_search": {}}]
+    assert "responseJsonSchema" not in body["generationConfig"]
+    assert [(citation.url, citation.title) for citation in response.citations] == [
+        ("https://grounding.test/redirect/1", "docs.example.com")
+    ]

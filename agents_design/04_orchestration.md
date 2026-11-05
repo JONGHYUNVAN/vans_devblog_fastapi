@@ -112,7 +112,8 @@ DraftPipelineService.drive(draft_id):
 
 ## 4. Phase 3: FULL 리뷰
 
-- `IN_REVIEW`에서 `reviewer_assignments`의 두 슬롯 중 아직 리뷰가 없는 슬롯에 `REVIEW(scope=FULL)`를 병렬 호출한다.
+- `IN_REVIEW`에서 `reviewer_assignments`의 렌즈 중 아직 리뷰가 없는 렌즈에 FULL 리뷰를 병렬 호출한다. 모델은 라운드 스냅샷의 `REVIEW:{lens}` 후보에서 고른다(07 문서 D-51·D-52).
+- `FACT_STRUCTURE` 렌즈는 웹 검색 호출과 변환 호출, 두 호출이다(아래 "사실 확인").
 - **블라인드**: 리뷰어 입력에 `author_slot`, 모델명, 페르소나명을 넣지 않는다. 본문·주제·렌즈 지시만 넣는다. 주제는 `rationale`(왜 이 성향의 작성자가 쓰는지, 사실상 페르소나 서술)을 뺀 `TopicForReviewer`로, SPOT_CHECK·중재의 지적은 `reviewer_slot`·`source_review_id`를 뺀 `ReviewItemForReviewer`로 넘긴다. `item_id`는 SPOT_CHECK가 그대로 돌려줘야 해 유지한다(슬롯 글자는 모델에게 불투명하다). 블라인드는 리뷰 단계 한정이며 요약 노트에는 저자가 드러난다.
 - 리뷰 출력은 `ReviewOutput` 스키마(05 문서). 스키마 위반은 같은 호출 재시도. 재시도를 소진한 리뷰어를 빼고 진행하지 않는다. 리뷰 한 건으로 발행을 결정하지 않는다(07 문서 D-06). 다른 리뷰 호출이 끝나기를 기다려 성공한 리뷰는 저장하고 글을 `FAILED`로 둔다. 재개하면 빠진 리뷰만 호출한다.
 - `item_id`, `source_review_id`, `reviewer_slot`, `is_new_in_version` 은 오케스트레이터가 부모 리뷰 문맥으로 붙인다. LLM 출력에는 없다. FULL 항목의 `is_new_in_version` 은 False.
@@ -128,7 +129,7 @@ DraftPipelineService.drive(draft_id):
 ```
 blocking = [item for review in reviews_of(this_version) for item in review.items
             if item.severity in (CRITICAL, MAJOR)]
-if not blocking:  → READY_TO_PUBLISH
+if not blocking:  → POST_REVIEW
 else:             → REVISING (cause=REVIEW)
 ```
 
@@ -155,7 +156,7 @@ if v 가 SPOT_CHECK 버전:
 
 ### 작성자의 수정
 
-직전 리뷰 완료 버전 `v`의 `open_blocking_items(v)`마다 `ACCEPTED` 또는 `REJECTED_WITH_REASON`이 있어야 한다(`UPHOLD_REVIEWER` 판정을 받은 항목은 `ACCEPTED`만 허용). 같은 리뷰의 `MINOR`·`NITPICK`은 생략하거나 `ACCEPTED` 또는 `DEFERRED`로 덧붙인다. 생략은 게이트 실패가 아니고, `DEFERRED`는 이 비차단 항목에만 쓴다. 리뷰어 둘의 상충 요구는 작성자가 여기서 정리한다. 사람이 `ESCALATED → REVISE`로 지시한 버전(`origin_cause == HUMAN`)은 에이전트 리뷰가 아니라 `human_instruction`을 따르므로 `ItemResolution`을 요구하지 않고, 게이트 통과 시 바로 `READY_TO_PUBLISH`로 간다.
+직전 리뷰 완료 버전 `v`의 `open_blocking_items(v)`마다 `ACCEPTED`, `REJECTED_WITH_REASON`, `OUT_OF_SCOPE` 중 하나가 있어야 한다. `OUT_OF_SCOPE`는 차단 항목에만 쓰고 사유가 필수다. 범위 밖 지적은 본문을 넓히지 않고 범위 선언(`tradeoff`, 없으면 `conclusion`)에 남긴다. 작성자는 차단 지적마다 먼저 범위 안인지 판단한다(`UPHOLD_REVIEWER` 판정을 받은 항목은 `ACCEPTED`만 허용). 같은 리뷰의 `MINOR`·`NITPICK`은 생략하거나 `ACCEPTED` 또는 `DEFERRED`로 덧붙인다. 생략은 게이트 실패가 아니고, `DEFERRED`는 이 비차단 항목에만 쓴다. 리뷰어 둘의 상충 요구는 작성자가 여기서 정리한다. 사람이 `ESCALATED → REVISE`로 지시한 버전(`origin_cause == HUMAN`)은 에이전트 리뷰가 아니라 `human_instruction`을 따르므로 `ItemResolution`을 요구하지 않고, 게이트 통과 시 바로 `READY_TO_PUBLISH`로 간다.
 
 ### SPOT_CHECK 완료
 
@@ -173,11 +174,11 @@ if v 가 SPOT_CHECK 버전:
 - 입력에 없던 ID 금지
 - `resolved=False`이면 `note`가 비어 있지 않아야 한다
 
-교착 = 미해소 가운데 이번 버전의 `resolution` 이 `REJECTED_WITH_REASON` 이고 심각도가 CRITICAL 이며 아직 중재되지 않은 항목. 신규 CRITICAL 은 이번 버전에 `resolution` 이 없으므로 교착이 아니다. `ACCEPTED` 인데 `resolved=False` 인 항목도 교착이 아니다.
+교착 = 미해소 가운데 아직 중재되지 않았고, 이번 버전의 `resolution` 이 `OUT_OF_SCOPE`(MAJOR 포함)이거나 CRITICAL 의 `REJECTED_WITH_REASON` 인 항목. 근거를 들어 기각한 MAJOR 는 교착이 아니다(07 문서 D-48). 신규 CRITICAL 은 이번 버전에 `resolution` 이 없으므로 교착이 아니다. `ACCEPTED` 인데 `resolved=False` 인 항목도 교착이 아니다.
 
 ```
 if not unresolved:
-    → READY_TO_PUBLISH
+    → POST_REVIEW
 elif deadlocked:
     → IN_ARBITRATION
 elif iteration < MAX_ITERATIONS:
@@ -188,8 +189,9 @@ else:
 
 ### 중재
 
-- 중재자는 저자도 그 항목의 리뷰어도 아닌 슬롯이다. 렌즈는 **그 `ReviewItem.lens`**(리뷰어가 해당 항목에 태그한 주/보조 렌즈)를 그대로 쓴다.
-- 입력은 해당 섹션의 전후 본문, 지적(`ReviewItemForReviewer`, 슬롯 필드 없음), 기각 사유, `resolved=False` 사유다. 블라인드를 유지한다.
+- 중재 모델은 `ARBITRATE` 라우트에서 작성 벤더와 그 항목의 리뷰 벤더를 피해 고른다. 렌즈는 **그 `ReviewItem.lens`**(리뷰어가 해당 항목에 태그한 주/보조 렌즈)를 그대로 쓴다.
+- 입력은 해당 섹션의 전후 본문, 지적(`ReviewItemForReviewer`, 슬롯 필드 없음), 처리 방식(`dispute_kind`), 기각 사유, `resolved=False` 사유, 글의 범위(`core_mechanism`, `out_of_scope`, 범위 선언 섹션)다. 블라인드를 유지한다.
+- 사실 확인에서 나온 지적의 분쟁이면 중재자가 먼저 검색해 근거를 모은 뒤(`arbitrate_search`) 판정한다.
 - 교착 항목마다 `ARBITRATE`를 병렬 호출한다. `add_arbitration` 은 저장만 한다. 교착 항목이 모두 모이면 `apply_evaluation` 이 전이한다. 일부가 재시도를 소진하면 리뷰와 같이 성공분을 저장하고 `FAILED`다.
 - `UPHOLD_AUTHOR` 항목은 종결되어 `open_blocking_items` 에서 빠진다.
 - `UPHOLD_REVIEWER` 항목은 `open_blocking_items` 에 남고 다음 수정에서 기각할 수 없다(`must_accept=True`).
@@ -198,12 +200,43 @@ else:
 ```
 remaining = open_blocking_items(this_version)   # UPHOLD_AUTHOR 가 빠진 뒤의 집합
 if not remaining:
-    → READY_TO_PUBLISH
+    → POST_REVIEW
 elif iteration < MAX_ITERATIONS:
     → REVISING (cause=REVIEW)
 else:
     → ESCALATED
 ```
+
+### 사실 확인 (FACT_STRUCTURE 렌즈)
+
+1. **검색 호출(`FACT_CHECK`)**: 웹 검색을 켜고 글로 받는다. 외부 문서로 참·거짓을 가릴 수 있는 주장(API, 설정 옵션, 버전, DB 문법, 프로토콜·수치)만 뽑는다. 설계 판단·의견은 뽑지 않는다. 입력에 본문 링크의 응답 코드(`link_status`)가 있다. 링크 확인은 네트워크 결과라 게이트에 넣지 않는다.
+2. **변환 호출(`FACT_TRANSFORM`)**: 가벼운 모델이 글을 계약 JSON 으로 옮긴다. 구조화 출력과 검색을 한 호출에 묶는 것은 벤더마다 달라(Claude 는 인용과 구조화 출력이 충돌한다) 모든 벤더가 두 호출을 쓴다.
+3. **코드 검사**: `source_url` 이 검색 호출의 출처에 없으면 지운다(Gemini 출처 uri 는 리다이렉트 주소라 도메인인 title 로도 맞춘다). URL 없는 `SUPPORTED`·`REFUTED` 는 `UNVERIFIABLE` 이다. 주장이 있는데 출처가 하나도 없으면 검색이 돌지 않은 것이라 호출 실패다.
+4. **심각도는 코드가 정한다**: `REFUTED` CRITICAL, `UNVERIFIABLE` MINOR(오탐률을 재기 전까지 막지 않는다), `SUPPORTED` 는 지적이 아니다. 검색 도구 자체의 실패는 호출 실패다.
+
+SPOT_CHECK 에서 사실 확인 렌즈는 미결 항목이 없어도 수정으로 바뀐 섹션의 주장을 다시 확인한다. 바뀐 섹션도 미결 항목도 없으면 호출하지 않는다. 이전 버전에서 확인한 주장(`known_claims`)은 다시 뽑지 않고, 같은 글이 돌아와도 코드가 버린다. 중재가 끝낸 지적이 새 CRITICAL 로 되살아나지 않게 하려는 것이다.
+
+### 발행 전 단계 (`POST_REVIEW`)
+
+평가가 차단 없음이면 `READY_TO_PUBLISH` 전에 이 단계를 거친다. 다듬기 → 전체 읽기 → 수준 평가 순서이고, 읽기와 평가가 최종 본문을 보도록 다듬기가 먼저다. `post_review_stage` 와 결과를 호출 뒤 한 번에 저장해 재시작·재개 때 끝낸 호출을 되풀이하지 않는다.
+
+진입은 `evaluate` 경로뿐이다. 사람 재수정과 `PUBLISH_AS_IS` 는 사람이 본문을 정했으므로 거치지 않는다(D-17, D-22). 그래서 그 글에는 수준 평가가 없고 `level` 도 비어 있다.
+
+| 단계 | 모델 | 내용 | 실패 |
+|---|---|---|---|
+| 다듬기 | 정규식, `POLISH_FORMAT`(벤더 제약 없음), `POLISH_TONE`(작성 벤더 제외) | 문단 패치만 받는다. 안전장치를 어긴 패치만 버린다. 패치가 없으면 새 버전도 없다 | 건너뛴다. 글을 멈추지 않는다 |
+| 전체 읽기 | `FINAL_READ`(작성 벤더 제외) | 본문과 코드의 어긋남, 약속한 메커니즘의 전달을 본다. 외부 사실은 보지 않는다. 지적마다 앵커와 본문 인용이 필수다. 차단 종류면 코드가 `ESCALATED(FINAL_READ_FLAGGED)` 로 보낸다 | `FAILED` |
+| 수준 평가 | `ASSESS_LEVEL`(작성 벤더 제외) | 목표 수준을 모른 채 기준표와 본문 인용으로 판정한다. 라벨만 남기고 막지 않는다 | `FAILED` |
+
+다듬기 안전장치:
+
+| 작업 | 적용 조건 |
+|---|---|
+| 정규식: "~하십시오", "~라고 볼 수 있다", "~인 상황이다" | LLM 을 쓰지 않는다. 인라인 코드 밖에서만 고친다. 긴 문단은 고치지 않고 알린다 |
+| 줄바꿈·문단 나누기 | 줄바꿈과 그에 붙은 공백 하나만 다르고, 굵게·링크·인라인 코드가 그대로일 때 |
+| 무생물 주어·숨 찬 문장 | 문단을 문단으로만 바꾸고, 서식과 인라인 코드·URL·앵커·숫자·영문 용어의 순서, 부정 표현(않·못·없·아니·안·말)의 개수가 그대로이며, 길이 변화가 크지 않을 때 |
+
+패치마다 본문 게이트(`ValidationGate.check_markdown`)를 돌리고, 합친 결과가 떨어지면 전부 버리고 리뷰를 통과한 버전을 발행본으로 둔다. 다듬은 버전은 다시 리뷰하지 않고, 부정 표현 개수로도 뜻을 보장할 수 없으므로 diff 를 격리 요약(`polish_diff`)에 보인다. 승인 토글을 끄면 이 안전장치와 관찰(`UNVERIFIABLE`, 다듬기 diff, 전체 읽기 관찰)을 아무도 보지 않으니 끄기 전에 쓰임을 정한다.
 
 ## 6. Phase 5: 수렴과 상한
 

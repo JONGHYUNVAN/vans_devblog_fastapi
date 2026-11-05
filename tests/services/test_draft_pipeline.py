@@ -12,6 +12,7 @@ from app.models.enums import (
     EscalationReason,
     FailureCode,
     PostStatus,
+    ReviewLens,
     ReviewScope,
     RevisionCause,
 )
@@ -44,7 +45,7 @@ async def test_fast_track_reaches_ready_to_publish_and_waits_for_approval():  # 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert harness.llm.kinds == ["WRITE_DRAFT", "REVIEW_FULL", "REVIEW_FULL"]
     assert (draft.iteration, draft.last_reviewed_version, draft.approved_by) == (0, 1, None)
-    assert {review.reviewer_slot for review in draft.reviews} == {B, C}
+    assert {review.lens for review in draft.reviews} == set(ReviewLens)
     assert draft.current_version.call_id == (await harness.calls.list_by_draft(draft.draft_id))[0].call_id
     assert harness.publisher.payloads == []
 
@@ -67,8 +68,10 @@ async def test_one_revision_then_approval_publishes():  # ②
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert (draft.iteration, len(draft.versions), draft.last_reviewed_version) == (1, 2, 2)
     assert harness.llm.kinds == ["WRITE_DRAFT", "REVIEW_FULL", "REVIEW_FULL", "REVISE_DRAFT", "SPOT_CHECK"]
-    [spot] = [review for review in draft.reviews if review.scope == ReviewScope.SPOT_CHECK]
-    assert spot.reviewer_slot == B  # C 는 미결 항목이 없어 SPOT_CHECK 를 받지 않는다
+    spots = {review.lens: review for review in draft.reviews if review.scope == ReviewScope.SPOT_CHECK}
+    # 비판 렌즈는 미결 항목이 없어 SPOT_CHECK 를 받지 않는다. 사실 확인 렌즈는 항상 받지만 바뀐 섹션이 없으면 호출하지 않는다
+    assert set(spots) == {ReviewLens.LOGIC_READABILITY, ReviewLens.FACT_STRUCTURE}
+    assert spots[ReviewLens.FACT_STRUCTURE].call_id == ""
     assert draft.versions[1].origin_cause == RevisionCause.REVIEW
 
     draft.record_approval("사람", requires_approval=True)
@@ -103,11 +106,12 @@ async def test_two_deadlocks_arbitrate_each_item_and_uphold_author_publishes(): 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert harness.llm.kinds.count("ARBITRATE") == 2
     arbitrations = {arbitration.item_id: arbitration for arbitration in draft.arbitrations}
-    items = {item.reviewer_slot: item for review in draft.reviews_of(1) for item in review.items}
-    assert set(arbitrations) == {items[B].item_id, items[C].item_id}
-    assert arbitrations[items[B].item_id].arbiter_slot == C and arbitrations[items[C].item_id].arbiter_slot == B
+    blocking = [item for review in draft.reviews_of(1) for item in review.items if item.severity.is_blocking]
+    assert set(arbitrations) == {item.item_id for item in blocking}
     receipts = [call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "ARBITRATE"]
     assert {call.item_id for call in receipts} == set(arbitrations)
+    # 작성 벤더(fake-a)도, 그 지적을 낸 리뷰 벤더(fake-b)도 아닌 벤더가 판정한다
+    assert {call.model_binding.provider for call in receipts} == {"fake-c"}
     assert all(arbitration.outcome == ArbitrationOutcome.UPHOLD_AUTHOR for arbitration in draft.arbitrations)
     assert draft.open_blocking_items(2) == []
 
@@ -245,8 +249,9 @@ async def test_interrupted_step_resumes_from_last_saved_state_with_the_same_call
     assert draft.status == PostStatus.READY_TO_PUBLISH
     # 끊긴 호출(응답 전 취소)은 영수증도 응답도 없다. 다시 돌리면 그 호출만 다시 한다
     assert harness.llm.kinds == ["WRITE_DRAFT", "REVIEW_FULL", "REVIEW_FULL", "REVISE_DRAFT", "SPOT_CHECK"]
-    assert len(harness.llm.calls) == 7
-    assert len(await harness.calls.list_by_draft(draft_id)) == 5
+    finished_stages = 6  # 사실 확인 2(검색·변환), 다듬기 2, 전체 읽기, 수준 평가
+    assert len(harness.llm.calls) == 7 + finished_stages
+    assert len(await harness.calls.list_by_draft(draft_id)) == 5 + finished_stages
     writes = [call for call in harness.llm.calls if "글 한 편을 한국어로 쓴다" in call.messages[0].content]
     revises = [call for call in harness.llm.calls if "수정본을 낸다" in call.messages[0].content]
     assert len(writes) == 2 and writes[0].messages[1].content == writes[1].messages[1].content
@@ -267,7 +272,7 @@ async def test_one_review_exhausting_retries_keeps_the_other_and_resume_calls_on
     assert draft.status == PostStatus.FAILED
     assert draft.failure is not None
     assert (draft.failure.code, draft.failure.from_status) == (FailureCode.LLM_RETRIES_EXHAUSTED, PostStatus.IN_REVIEW)
-    assert [review.reviewer_slot for review in draft.reviews] == [B]
+    assert [review.lens for review in draft.reviews] == [ReviewLens.LOGIC_READABILITY, ReviewLens.FACT_STRUCTURE]
 
     draft.retry_from_failed()
     await harness.drafts.save(draft)
@@ -275,7 +280,8 @@ async def test_one_review_exhausting_retries_keeps_the_other_and_resume_calls_on
 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert harness.llm.kinds.count("REVIEW_FULL") == 4
-    assert [review.reviewer_slot for review in draft.reviews] == [B, C]
+    assert harness.llm.all_kinds.count("FACT_CHECK") == 1  # 끝낸 사실 확인은 되풀이하지 않는다
+    assert [review.lens for review in draft.reviews] == list(ReviewLens)
 
 
 async def test_unexpected_exception_in_one_review_keeps_the_other_and_fails_with_internal_error():
@@ -294,7 +300,7 @@ async def test_unexpected_exception_in_one_review_keeps_the_other_and_fails_with
     assert draft.failure is not None
     assert (draft.failure.code, draft.failure.from_status) == (FailureCode.INTERNAL_ERROR, PostStatus.IN_REVIEW)
     assert "KeyError: 'no-such-provider'" in draft.failure.message
-    assert [review.reviewer_slot for review in draft.reviews] == [B]
+    assert [review.lens for review in draft.reviews] == [ReviewLens.LOGIC_READABILITY, ReviewLens.FACT_STRUCTURE]
 
     draft.retry_from_failed()
     await harness.drafts.save(draft)
@@ -302,7 +308,7 @@ async def test_unexpected_exception_in_one_review_keeps_the_other_and_fails_with
 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert harness.llm.kinds.count("REVIEW_FULL") == 3
-    assert [review.reviewer_slot for review in draft.reviews] == [B, C]
+    assert [review.lens for review in draft.reviews] == list(ReviewLens)
 
 
 async def test_budget_exceeded_marks_failed_without_calling():

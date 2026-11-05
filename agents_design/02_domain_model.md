@@ -24,8 +24,9 @@ class PostStatus(StrEnum):
     VALIDATING = "VALIDATING"           # 결정론적 게이트 (LLM 호출 없음)
     IN_REVIEW = "IN_REVIEW"             # FULL 리뷰 진행
     IN_SPOT_CHECK = "IN_SPOT_CHECK"     # SPOT_CHECK 리뷰 진행
-    IN_ARBITRATION = "IN_ARBITRATION"   # 제3 슬롯 중재 진행
+    IN_ARBITRATION = "IN_ARBITRATION"   # 작성·리뷰 벤더가 아닌 모델의 중재 진행
     REVISING = "REVISING"               # 작성자 호출 전 대기. revision_cause 가 리뷰·게이트·사람 중 무엇인지를 말한다
+    POST_REVIEW = "POST_REVIEW"         # 리뷰 통과 뒤 발행 전 단계. post_review_stage 가 어디까지 했는지 말한다
     READY_TO_PUBLISH = "READY_TO_PUBLISH"
     PUBLISHED = "PUBLISHED"             # 종결
     ESCALATED = "ESCALATED"             # 사람 판단 대기
@@ -55,6 +56,7 @@ class ResolutionStatus(StrEnum):
     ACCEPTED = "ACCEPTED"
     REJECTED_WITH_REASON = "REJECTED_WITH_REASON"
     DEFERRED = "DEFERRED"   # MINOR·NITPICK 에만 허용. "이번 버전에서 다루지 않음"
+    OUT_OF_SCOPE = "OUT_OF_SCOPE"  # 차단 항목에만 허용. 글의 범위 밖이라 본문을 넓히지 않고 범위 선언에 남긴다. 사유 필수
 
 
 class ArbitrationOutcome(StrEnum):
@@ -126,6 +128,8 @@ class CallKind(StrEnum):
 ```
 PublishingRound (Aggregate Root, 라운드 수준)
  ├─ round_id, round_seq, status, theme_keyword?, slot_bindings{slot → ModelBinding}
+ ├─ routing?: RoutingSnapshot               호출별 모델 후보, 슬롯 페르소나, 수준 기준표. 생성 때 스냅샷. 응답에 내보내지 않는다. 라우팅 전 라운드는 없다
+ ├─ evidence?                               실제 프로젝트 근거(git 이력, code-graph context, 측정 기록)
  ├─ categories: CategoryOption[]            라운드 생성 때 Post BE 에서 읽은 카테고리 스냅샷. 주제 제안 입력
  ├─ draft_ids                               길이 0 (주제 선정 중) 또는 3 (확정 후)
  ├─ topic_attempts: TopicAttempt[]          주제 제안·재제안 이력 (배리어 단계 전용)
@@ -142,7 +146,7 @@ PostDraft (Aggregate Root, 글 수준)        ◄── 리뷰 결과를 써도 
  ├─ token_limit                             글 소프트 예산. 확정 때 DRAFT_TOKEN_LIMIT, 재개 때 사람이 올릴 수 있다
  ├─ approved_by?, approved_at?              발행 승인. 그 버전에 대한 것이라 새 버전이 제출되면 지운다
  ├─ topic: TopicProposal
- ├─ reviewer_assignments: ReviewAssignment[2]
+ ├─ reviewer_assignments: ReviewAssignment[3]  렌즈마다 하나. 옛 글은 슬롯 리뷰어 둘(slot, secondary_lens)이고 같은 코드로 돈다
  ├─ versions: DraftVersion[]                게이트 실패본도 남는다. 개수 상한은 두지 않고 전이가 막는다
  │    ├─ version_number, title, summary, content_markdown, section_ids[]
  │    ├─ origin_cause?                      이 버전을 만든 시작 원인(REVIEW | HUMAN | None=초안). 게이트 재시도를 거쳐도 유지
@@ -152,24 +156,30 @@ PostDraft (Aggregate Root, 글 수준)        ◄── 리뷰 결과를 써도 
  │    ├─ author_note
  │    └─ call_id                            이 버전을 만든 AgentCall
  ├─ reviews: PeerReview[]
- │    ├─ review_id, target_version, reviewer_slot, lens, secondary_lens?, scope
+ │    ├─ review_id, target_version, lens, scope, model_id?, reviewer_slot?, secondary_lens?   리뷰어는 lens 로 가린다. 뒤의 둘은 옛 글만
  │    ├─ reported_verdict?                  FULL 만. SPOT_CHECK 는 없음
  │    ├─ derived_verdict                    오케스트레이터 계산
  │    ├─ items: ReviewItem[]                SPOT_CHECK 에서는 신규 CRITICAL 만
  │    ├─ item_checks: ItemCheck[]           SPOT_CHECK 전용. FULL 은 빈 목록
  │    ├─ checklist, overall_feedback, call_id
+ │    └─ claims: FactClaim[]                사실 확인 렌즈의 주장과 판정
  ├─ arbitrations: Arbitration[]
+ ├─ post_review_stage?                      POST_REVIEW 에서 다음에 할 일. POLISH → FINAL_READ → ASSESS_LEVEL → DONE
+ ├─ polish?: PolishRecord                   적용·버린 패치 수와 사유, 건너뛴 호출, 긴 문단, 적용된 모델
+ ├─ final_read?: FinalRead                  findings(kind, section_id, quote, comment), overall
+ ├─ level_assessment?: LevelAssessment      level, evidence(criterion, quote), reasoning, criteria_version
+ ├─ user_level?                             사용자가 매긴 수준. 평가자와의 일치도 측정에 쓴다
  ├─ last_reviewed_version?                  평가(리뷰·중재)를 마친 마지막 버전. FULL·SPOT_CHECK 를 가르고 open_blocking_items 의 기준 (D-21)
  ├─ rejected_by?, abort_reason?             REJECTED 가 된 사람 결정 또는 라운드 중단 사유
  ├─ publication_intent?: PublicationIntent
  └─ publication?: Publication
 
 AgentCall (독립 컬렉션, LLM 호출 1회의 영수증. insert 만 한다)
- ├─ call_id, round_id, draft_id?, kind, slot, model_binding(snapshot), prompt_template_version
+ ├─ call_id, round_id, draft_id?, kind, slot?, lens?, model_binding(CallModel 스냅샷), prompt_template_version
  ├─ target_version?, topic_attempt?, item_id?   어느 단계의 호출인지
  ├─ attempt_number                          같은 단계 호출 안의 몇 번째 시도. 1부터
  ├─ messages                                이 시도에 실제로 보낸 메시지
- ├─ output_raw?, output_parsed_ok, error?
+ ├─ output_raw?, output_parsed_ok, error?, stop_reason, citations[]
  ├─ usage: TokenUsage, latency_ms
  └─ started_at, finished_at
 
@@ -186,8 +196,27 @@ class ModelBinding(BaseModel):
     provider: str              # "anthropic" | "google" | "xai" | ...  (도메인은 문자열로만 안다)
     model_id: str              # "claude-…", "gemini-…", "grok-…"
     persona_id: str            # PersonaProfile 식별자. 슬롯당 하나
-    temperature: float = 0.7   # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT. 리뷰·중재는 Settings.review_temperature
+    temperature: float = 0.7   # 응답 계약 때문에 남겨 두고 읽지 않는다
     max_output_tokens: int
+
+
+class CallModel(BaseModel):
+    """호출 하나의 모델. 라우트 후보이자 영수증 스냅샷이다. 옛 영수증의 persona_id 는 읽을 때 버린다."""
+
+    provider: str
+    model_id: str
+    effort: str | None = None        # None 이면 보내지 않아 벤더 기본값이다
+    temperature: float | None = None # 지원표에 없는 조합은 라운드 생성에서 거절한다
+    max_output_tokens: int
+
+
+class RoutingSnapshot(BaseModel):
+    """agent_routes 를 라운드 생성 때 뜬 것. 키 없는 벤더 후보는 빠진다. 선택은 models/routing.py 의 순수 함수다."""
+
+    routes: dict[str, list[CallModel]]  # PROPOSE_TOPIC:{persona}, WRITE_DRAFT:{persona}, REVISE_DRAFT:{persona}, REVIEW:{lens},
+                                        # ARBITRATE, FINAL_READ, ASSESS_LEVEL, POLISH_FORMAT, POLISH_TONE, FACT_TRANSFORM
+    slot_personas: dict[AgentSlot, str]
+    level_criteria: LevelCriteria
 ```
 
 `PersonaProfile`은 코드/설정으로 관리한다(05 문서). 도메인은 `persona_id`만 저장한다. 세 슬롯의 `primary_lens`는 서로 달라야 한다. 라운드 시작이 검사한다.
@@ -201,6 +230,10 @@ class TopicProposal(BaseModel):
     keywords: list[str] = Field(min_length=3, max_length=3)   # 발행 때 Post BE tags
     outline: list[str] = Field(min_length=3)   # 목차 초안
     rationale: str                      # 왜 이 주제를 이 페르소나가 쓰는지
+    core_mechanism: str = ""            # 끝까지 설명할 핵심 메커니즘 하나. 옛 문서를 읽으려고 기본값을 둔다. 빈 값은 파서가 막는다
+    out_of_scope: list[str] = []        # 다루지 않을 것
+    target_level: PostLevel | None = None  # 작성자의 목표 수준. 평가자에게 주지 않는다. 없으면 옛 규칙(tradeoff 필수)
+    prerequisites: str = ""             # 독자에게 전제하는 지식
     main_category_id: str               # 라운드 categories 의 한 쌍. 파서가 목록에 있는지 검사한다 (05 문서)
     sub_category_id: str
 
@@ -257,13 +290,14 @@ class ReviewItem(BaseModel):
 
     item_id: str                        # 오케스트레이터가 "{review_id}:{n}" 으로 부여. LLM 출력에는 없다
     source_review_id: str
-    reviewer_slot: AgentSlot
+    reviewer_slot: AgentSlot | None = None  # 옛 글만. 리뷰어는 source_review_id 의 리뷰 렌즈로 찾는다
     section_id: str                     # 본문 앵커 id. intro, body-1, code-1, tradeoff, conclusion
     lens: ReviewLens                    # 이 지적을 낸 관점 (리뷰어의 primary 또는 secondary 중 하나)
     severity: IssueSeverity
     comment: str
     suggested_fix: str | None
     is_new_in_version: bool = False     # SPOT_CHECK 신규 CRITICAL 만 True. 오케스트레이터가 설정
+    from_fact_check: bool = False       # 사실 확인 주장에서 코드가 만든 지적. 분쟁이면 중재자도 검색한다
 ```
 
 `resolution_status`는 여기 두지 않는다. 결정은 다음 `DraftVersion`의 `ItemResolution`에 있다.
@@ -274,7 +308,7 @@ class ReviewItem(BaseModel):
 class ItemResolution(BaseModel):
     item_id: str
     status: ResolutionStatus
-    reason: str | None                  # REJECTED_WITH_REASON 이면 필수
+    reason: str | None                  # REJECTED_WITH_REASON·OUT_OF_SCOPE 이면 필수
     section_id_after: str | None        # 수정으로 섹션이 바뀌었으면 새 앵커
 ```
 
@@ -310,7 +344,8 @@ class Arbitration(BaseModel):
     arbitration_id: str
     target_version: int
     item_id: str                        # 교착된 ReviewItem
-    arbiter_slot: AgentSlot             # author 도 reviewer 도 아닌 제3 슬롯
+    arbiter_slot: AgentSlot | None = None  # 옛 글만
+    model_id: str | None = None         # 작성·리뷰 벤더가 아닌 ARBITRATE 후보
     outcome: ArbitrationOutcome
     reasoning: str
     call_id: str
@@ -366,20 +401,20 @@ class Publication(BaseModel):
 
 | 불변식 | 설명 |
 |---|---|
-| `author_slot` 은 `reviewer_assignments` 의 슬롯이 아니다 | 자기 글을 리뷰하지 않는다 |
-| `len(reviewer_assignments) == 2` | 리뷰어는 항상 둘 |
-| 글 하나의 두 배정이 가진 주 렌즈·보조 렌즈의 합이 세 렌즈 전부다 | 글마다 검사한다. 라운드 합집합으로 대신하지 않는다 (03 문서 계산) |
-| 세 슬롯의 `primary_lens` 는 서로 다르다 | 라운드 시작 시. 같으면 매트릭스를 만들 수 없다 |
+| `author_slot` 은 `reviewer_assignments` 의 슬롯이 아니다 | 옛 글에만 슬롯이 있다. 지금은 라우트가 작성 벤더를 피한다 |
+| 배정의 주 렌즈는 서로 다르고, 주 렌즈·보조 렌즈의 합이 세 렌즈 전부다 | 리뷰어를 주 렌즈로 가리는 근거다 |
+| 세 슬롯의 페르소나는 서로 다르다 | 라운드 시작 시 |
 | `versions[-1].version_number == len(versions)` | 버전 번호는 1부터 연속. 게이트 실패본도 번호를 받는다 |
 | 리뷰를 마친 버전(`passed_validation` 이고 리뷰 완료)은 `1 + iteration` 개 이하, 사람 재수정 버전은 그 위에 별도 | 개수 상한으로 게이트 재시도를 자르지 않는다 |
 | `origin_cause == REVIEW` 인 버전의 차단 항목 해소는 직전 `open_blocking_items` 와 ID가 정확히 같고, `UPHOLD_REVIEWER` 는 `ACCEPTED` 다. 추가 해소는 그 리뷰의 `MINOR`·`NITPICK` 에 대한 `ACCEPTED` 또는 `DEFERRED` 뿐이다 | 첫 초안(`origin_cause=None`)과 사람 재수정(`origin_cause=HUMAN`), 그리고 그들의 게이트 재작성은 제외 |
-| `REJECTED_WITH_REASON` 은 `reason` 필수 | 근거 없는 기각 금지 |
+| `REJECTED_WITH_REASON`·`OUT_OF_SCOPE` 는 `reason` 필수 | 근거 없는 기각 금지 |
+| `OUT_OF_SCOPE` 는 차단 항목에만 | 게이트가 비차단 항목의 사용을 거절한다 |
 | `DEFERRED` 는 MINOR·NITPICK 에만 | 차단 등급을 미룰 수 없다 |
-| 버전 하나에 같은 `reviewer_slot` 의 같은 `scope` 리뷰는 하나 | 중복 리뷰 방지(멱등) |
+| 버전 하나에 같은 `lens` 의 같은 `scope` 리뷰는 하나 | 중복 리뷰 방지(멱등) |
 | `ReviewItem.lens` 는 해당 리뷰어의 `primary_lens` 또는 `secondary_lens` 중 하나다 | 중재·SPOT_CHECK 에 정확한 렌즈를 전달하기 위함 |
-| `ReviewItem.source_review_id`와 `reviewer_slot`은 실제 부모 리뷰와 일치한다 | 문자열 `item_id`를 파싱하지 않고 원본과 소유자를 찾는다 |
-| `SPOT_CHECK` 리뷰어는 직전 리뷰 완료 버전에서 미결 차단 항목(`open_blocking_items` 중 본인 몫)을 가진 슬롯이다 | 게이트만 실패한 버전은 직전이 아니다 |
-| `Arbitration.arbiter_slot` 은 author·해당 item 의 reviewer 와 다르다 | 세 슬롯 중 남는 하나 |
+| `ReviewItem.source_review_id`는 실제 부모 리뷰다 | 문자열 `item_id`를 파싱하지 않고 원본과 소유자(`reviewer_of`)를 찾는다 |
+| `SPOT_CHECK` 리뷰어는 직전 리뷰 완료 버전에서 미결 차단 항목(`open_blocking_items` 중 본인 몫)을 가진 렌즈이고, 사실 확인 렌즈는 항목이 없어도 받는다 | 게이트만 실패한 버전은 직전이 아니다. 수정으로 들어온 새 주장을 확인하는 곳이 여기뿐이다 |
+| 중재 모델은 작성 벤더도 그 항목의 리뷰 벤더도 아니다 | 라우트 선택이 보장한다(`select_arbiter`) |
 | `content_markdown` 은 모든 필수 섹션 앵커를 포함한다 | VALIDATING 게이트가 검사(04 문서) |
 | `REVISING` 이면 `revision_cause` 가 있다. `DRAFTING` 에서는 수정본을 쓸 때 있다 | DRAFTING 의 호출 종류(`WRITE_DRAFT`·`REVISE_DRAFT`)와 새 버전의 `origin_cause` 를 정한다 |
 
@@ -391,12 +426,19 @@ class Publication(BaseModel):
 |---|---|---|---|
 | `start_drafting(max_iterations)` | `TOPIC_LOCKED`, `REVISING` | `DRAFTING` (14행의 방어 경우 `ESCALATED`) | `revision_cause` 에 따라 iteration 증가 여부가 갈린다 (03 문서 13a~14행). `revision_cause` 는 지우지 않는다 |
 | `submit_version(title, summary, content_markdown, section_ids, resolutions, author_note, call_id)` | `DRAFTING` | `VALIDATING` | 버전 추가. `passed_validation=False`. 새 버전의 `origin_cause` 는 `revision_cause` 로 정한다(`GATE` 면 직전 버전 값, `REVIEW`·`HUMAN` 이면 그 값, 없으면 `None`). `revision_cause`, `approved_by`·`approved_at` 을 지운다 |
+| `finish_polish(record)` | `POST_REVIEW`(`POLISH`) | 변화 없음(`FINAL_READ`) | 패치 없이 다듬기를 끝낸다. 새 버전을 만들지 않는다 |
+| `attach_polished_version(content_markdown, section_ids, record, call_id)` | `POST_REVIEW`(`POLISH`) | 변화 없음(`FINAL_READ`) | 게이트를 통과한 다듬은 본문을 `origin_cause=POLISH`, `passed_validation=True` 인 새 버전으로 붙인다. 승인을 지운다 |
+| `record_final_read(final_read)` | `POST_REVIEW`(`FINAL_READ`) | 변화 없음(`ASSESS_LEVEL`) / `ESCALATED` | 차단 종류가 있으면 `FINAL_READ_FLAGGED` |
+| `record_level_assessment(assessment)` | `POST_REVIEW`(`ASSESS_LEVEL`) | `READY_TO_PUBLISH` | 수준을 라벨로 남긴다. 막지 않는다 |
 | `pass_validation()` | `VALIDATING` | `READY_TO_PUBLISH` / `IN_REVIEW` / `IN_SPOT_CHECK` | `validation_retries=0`. `origin_cause == HUMAN` 이면 바로 `READY_TO_PUBLISH`. 그 외에는 리뷰 완료 이전 버전(`last_reviewed_version`)이 없으면 `IN_REVIEW`, 있으면 `IN_SPOT_CHECK`. `IN_SPOT_CHECK` 인데 미결 항목을 가진 리뷰어가 없으면 `ValueError`(정상 흐름에서는 생기지 않는 방어) |
 | `fail_validation(errors, max_validation_retries)` | `VALIDATING` | `REVISING` (`cause=GATE`) 또는 `FAILED` | 실패 횟수를 1 올린 값이 상한 미만이면 전자, 같으면 `FailureRecord(GATE_RETRIES_EXHAUSTED)`. `iteration` 과 `origin_cause` 는 유지 |
 | `add_review(review)` | `IN_REVIEW`, `IN_SPOT_CHECK` | 변화 없음 | `derived_verdict` 를 저장. 중복이면 무시 |
 | `open_blocking_items(version)` | – | – | 해당 버전의 미결 차단 항목 집합 (04 문서 5절). 현재 이력으로 다시 계산하므로 나중 버전의 `UPHOLD_AUTHOR` 중재가 이전 버전의 집합도 줄인다. 흐름은 `last_reviewed_version` 의 집합만 쓴다 |
-| `required_reviewers()` | – | – | FULL 은 배정된 두 슬롯. SPOT_CHECK 는 직전 리뷰 완료 버전의 `open_blocking_items` 에 본인 항목이 남아 있는 슬롯 |
-| `pending_reviewers()` | – | – | `required_reviewers()` 중 아직 응답하지 않은 슬롯. 서비스는 이 슬롯만 호출한다 |
+| `required_reviewers()` | – | – | 렌즈 목록. FULL 은 배정된 렌즈 전부. SPOT_CHECK 는 직전 리뷰 완료 버전의 `open_blocking_items` 에 본인 항목이 남은 렌즈와 사실 확인 렌즈 |
+| `pending_reviewers()` | – | – | `required_reviewers()` 중 아직 응답하지 않은 렌즈. 서비스는 이 렌즈만 호출한다 |
+| `reviewer_of(item)` | – | – | 지적을 낸 리뷰어의 주 렌즈. 옛 글의 지적은 보조 렌즈일 수 있어 `item.lens` 로 가리지 않는다 |
+| `checks_facts(lens)` | – | – | 웹 검색으로 사실을 확인하는 리뷰어인지. 옛 글의 슬롯 리뷰어는 아니다 |
+| `authored_publishable_version` | – | – | 다듬기 전 발행본. 요약 노트의 버전 수와 fast-track 이 쓴다 |
 | `is_review_complete()` | – | – | `pending_reviewers()` 가 비었다 |
 | `apply_evaluation(outcome)` | 리뷰 완료 또는 중재 완료 | outcome 이 정한 상태 | `REVISING` 이면 `cause=REVIEW`. `IN_ARBITRATION` 이 아니면 `last_reviewed_version` 을 현재 버전으로 둔다 |
 | `add_arbitration(arb)` | `IN_ARBITRATION` | 변화 없음 | 항목 하나만 도착해도 전이하지 않는다 |
@@ -425,6 +467,7 @@ class Publication(BaseModel):
 | `agent_rounds` | `PublishingRound` | `(status, created_at)`. `status` 부분 unique(`status == "TOPIC_SELECTION"` 인 문서만): 주제 선정 라운드는 하나 |
 | `agent_drafts` | `PostDraft` (versions·reviews 내장) | `round_id`, `status`, `(status, updated_at)` |
 | `agent_calls` | `AgentCall` | `draft_id`, `(round_id, kind)` |
+| `agent_routes` | 호출별 후보, `SLOTS`, `LEVEL_CRITERIA` 문서 | `_id` 만 쓴다 |
 | `agent_topics` | `TopicRegistryEntry` | `(status, keywords)`, `round_id`, `published_at` |
 
 - `PostDraft`에 버전·리뷰를 내장하는 이유: 글 한 편의 전체 이력을 한 번에 읽고, 한 문서 쓰기는 원자적이다. 게이트 실패본이 더해져도 버전은 한 자릿수다.

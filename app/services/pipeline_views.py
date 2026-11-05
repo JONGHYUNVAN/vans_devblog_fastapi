@@ -10,8 +10,8 @@ import difflib
 from app.core.config import Settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.models.agent_call import AgentCall
-from app.models.enums import ResolutionStatus, RoundStatus
-from app.models.post_draft import PostDraft, ReviewItem
+from app.models.enums import ClaimStatus, ResolutionStatus, RevisionCause, RoundStatus
+from app.models.post_draft import DraftVersion, PostDraft, ReviewItem
 from app.models.publishing_round import PublishingRound
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.post_draft import PostDraftRepository
@@ -176,23 +176,32 @@ def build_draft_history(draft: PostDraft) -> DraftHistory:
     return DraftHistory.model_validate(draft)
 
 
+def _unified_diff(before: DraftVersion, after: DraftVersion) -> str:
+    return "".join(
+        difflib.unified_diff(
+            before.content_markdown.splitlines(keepends=True),
+            after.content_markdown.splitlines(keepends=True),
+            fromfile=f"v{before.version_number}",
+            tofile=f"v{after.version_number}",
+        )
+    )
+
+
 def build_escalation_summary(draft: PostDraft) -> EscalationSummary:
-    """최종 본문과 직전 버전과의 diff, 미해소 차단 항목, 기각 항목. ESCALATED 가 아니어도 만든다."""
+    """최종 본문과 직전 버전과의 diff, 미해소 차단 항목, 기각 항목, 발행 전 단계의 관찰. ESCALATED 가 아니어도 만든다.
+
+    diff 는 작성자가 쓴 버전끼리 비교한다. 다듬기가 바꾼 것은 polish_diff 로 따로 보인다.
+    """
     version = draft.publishable_version or (draft.current_version if draft.versions else None)
+    authored = draft.authored_publishable_version or version
     previous = next(
-        (each for each in reversed(draft.versions) if version and each.version_number < version.version_number),
+        (each for each in reversed(draft.versions) if authored and each.version_number < authored.version_number),
         None,
     )
-    diff = ""
-    if version is not None and previous is not None:
-        diff = "".join(
-            difflib.unified_diff(
-                previous.content_markdown.splitlines(keepends=True),
-                version.content_markdown.splitlines(keepends=True),
-                fromfile=f"v{previous.version_number}",
-                tofile=f"v{version.version_number}",
-            )
-        )
+    diff = _unified_diff(previous, authored) if authored is not None and previous is not None else ""
+    polish_diff = ""
+    if version is not None and authored is not None and version.origin_cause == RevisionCause.POLISH:
+        polish_diff = _unified_diff(authored, version)
     open_items = draft.open_blocking_items(draft.last_reviewed_version) if draft.last_reviewed_version else []
     resolutions = {
         resolution.item_id: resolution for each in draft.versions for resolution in each.resolutions
@@ -205,6 +214,7 @@ def build_escalation_summary(draft: PostDraft) -> EscalationSummary:
         return ItemSummary(
             item_id=item.item_id,
             reviewer_slot=item.reviewer_slot,
+            lens=item.lens,
             section_id=item.section_id,
             severity=item.severity,
             comment=item.comment,
@@ -218,7 +228,8 @@ def build_escalation_summary(draft: PostDraft) -> EscalationSummary:
         item
         for review in draft.reviews
         for item in review.items
-        if item.item_id in resolutions and resolutions[item.item_id].status == ResolutionStatus.REJECTED_WITH_REASON
+        if item.item_id in resolutions
+        and resolutions[item.item_id].status in (ResolutionStatus.REJECTED_WITH_REASON, ResolutionStatus.OUT_OF_SCOPE)
     ]
     return EscalationSummary(
         draft_id=draft.draft_id,
@@ -234,6 +245,13 @@ def build_escalation_summary(draft: PostDraft) -> EscalationSummary:
         diff=diff,
         open_blocking_items=[summarize(item) for item in open_items],
         rejected_items=[summarize(item) for item in rejected],
+        final_read=draft.final_read,
+        unverifiable_claims=[
+            claim for review in draft.reviews for claim in review.claims if claim.status == ClaimStatus.UNVERIFIABLE
+        ],
+        polish=draft.polish,
+        polish_diff=polish_diff,
+        level_assessment=draft.level_assessment,
     )
 
 

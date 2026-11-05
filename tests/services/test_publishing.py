@@ -16,12 +16,16 @@ from app.models.tiptap import markdown_to_tiptap
 from app.services.pipeline_views import build_draft_public
 from app.services.publishing import build_payload, build_peer_review_note
 from tests.factories import (
+    add_reviews,
     arbitrate_output,
     draft_output,
+    make_draft,
+    make_round,
     resolution,
     review_output,
     revision_output,
     spot_check_output,
+    write_next_version,
 )
 from tests.fakes import FakePostBE, PipelineHarness
 
@@ -216,11 +220,11 @@ async def test_note_counts_items_and_escapes_rejected_comments():
     harness = PipelineHarness(
         {
             "WRITE_DRAFT": [draft_output()],
-            "REVIEW_FULL": [review_output("CRITICAL", "MINOR"), review_output("CRITICAL")],  # B, C 순
+            "REVIEW_FULL": [review_output("CRITICAL", "MINOR"), review_output("CRITICAL")],  # 논리, 비판 렌즈 순
             "REVISE_DRAFT": lambda call_input: revision_output(
                 [
                     resolution(item["item_id"], "REJECTED_WITH_REASON", reason="<b>근거</b>\n여러 줄 *강조* [링크](x)")
-                    if ":C:" in item["item_id"]  # C 의 CRITICAL 만 기각 → 교착 → 중재
+                    if ":CRITICAL_PRACTICAL:" in item["item_id"]  # 비판 렌즈의 CRITICAL 만 기각 → 교착 → 중재
                     else resolution(item["item_id"])
                     for review in call_input["reviews"]
                     for item in review["items"]
@@ -245,10 +249,13 @@ async def test_note_counts_items_and_escapes_rejected_comments():
     assert "- 기록만 남긴 사항: MINOR 1, NITPICK 0" in note
     assert "- 작성자가 수용한 사항: 2건 / 근거를 들어 유지한 사항: 1건" in note
     assert "- 의견이 갈려 제3자 판정을 받은 사항: 1건" in note
-    assert "- 모델: fake-1 작성, fake-1·fake-1 리뷰" in note
-    assert "> **실용주의 트러블슈터의 지적**: \\<script\\>alert\\(1\\)\\</script\\> 두 번째 줄 \\# 제목처럼\\" in note
+    assert (
+        "- 모델: fake-a-1 작성, fake-b-1(논리·가독성)·fake-c-1(사실·구조)·fake-b-1(비판·실무) 리뷰, fake-c-1 중재"
+        in note
+    )
+    assert "> **비판·실무 리뷰의 지적**: \\<script\\>alert\\(1\\)\\</script\\> 두 번째 줄 \\# 제목처럼\\" in note
     assert "> **작성자의 입장**: \\<b\\>근거\\</b\\> 여러 줄 \\*강조\\* \\[링크\\]\\(x\\)\\" in note
-    assert "> **판정 (시스템 엔지니어)**: 작성자 입장을 인정 — 판단 근거" in note
+    assert "> **판정**: 작성자 입장을 인정 — 판단 근거" in note
     payload = build_payload(draft, note)
     quote = payload.content["content"][-1]
     assert quote["type"] == "blockquote"
@@ -278,3 +285,102 @@ def test_note_escapes_caret_so_regex_text_is_not_taken_for_a_footnote():
     document = markdown_to_tiptap(f"> **지적**: {text}")
     [paragraph] = document["content"][0]["content"]
     assert paragraph["content"][-1]["text"] == ": 정규식 [^a-z]+ 를 쓰라"
+
+
+# ---------- 수준 라벨과 모델 표기 ----------
+
+
+async def test_level_is_sent_only_when_the_setting_is_on():
+    harness = PipelineHarness(_fast_track(), publisher=FakePostBE(["post-1"]))
+    await _approved(harness)
+    await harness.drive(A)
+    assert "level" not in harness.publisher.payloads[0].to_dto()
+
+    enabled = PipelineHarness(_fast_track(), publisher=FakePostBE(["post-1"]), publish_post_level=True)
+    await _approved(enabled)
+    await enabled.drive(A)
+    assert enabled.publisher.payloads[0].to_dto()["level"] == 200
+
+
+async def test_human_path_post_has_no_level_to_send():
+    harness = PipelineHarness(_fast_track(), publisher=FakePostBE(["post-1"]), publish_post_level=True)
+    await _approved(harness)
+    draft = await harness.draft(A)
+    draft.level_assessment = None
+    await harness.drafts.save(draft)
+
+    await harness.drive(A)
+
+    assert "level" not in harness.publisher.payloads[0].to_dto()
+
+
+async def test_note_lists_only_models_that_changed_the_body():
+    harness = PipelineHarness(_fast_track())
+    await harness.seed_round()
+    draft = await harness.drive(A)
+    publishing_round = await harness.round_service.get(draft.round_id)
+
+    note = build_peer_review_note(draft, publishing_round)
+
+    assert "- 모델: fake-a-1 작성, fake-b-1(논리·가독성)·fake-c-1(사실·구조)·fake-b-1(비판·실무) 리뷰\n" in note
+    assert "이 글은 **구조적 아키텍트**가 작성하고 논리·가독성, 사실·구조, 비판·실무 관점의 교차 리뷰를 거쳐" in note
+
+
+async def test_note_for_a_reviser_on_another_model_says_so():
+    harness = PipelineHarness(
+        {
+            "WRITE_DRAFT": [draft_output()],
+            "REVIEW_FULL": [review_output("CRITICAL"), review_output()],
+            "REVISE_DRAFT": lambda call_input: revision_output(
+                [resolution(item["item_id"]) for review in call_input["reviews"] for item in review["items"]]
+            ),
+            "SPOT_CHECK": spot_check_output(resolved=True),
+        }
+    )
+    await harness.seed_round()
+    publishing_round = await harness.round_service.get("round-1")
+    routes = publishing_round.routing.routes
+    routes["REVISE_DRAFT:architect"] = [
+        routes["REVISE_DRAFT:architect"][0].model_copy(update={"model_id": "fake-a-cheap"})
+    ]
+    await harness.rounds.save(publishing_round)
+
+    draft = await harness.drive(A)
+    note = build_peer_review_note(draft, await harness.round_service.get("round-1"))
+
+    assert "fake-a-cheap 수정" in note
+
+
+async def test_note_of_an_old_draft_reads_models_from_slot_bindings():
+    publishing_round = make_round()
+    draft = make_draft(A)
+    write_next_version(draft)
+    add_reviews(draft)
+
+    note = build_peer_review_note(draft, publishing_round)
+
+    assert "- 모델: fake-1 작성, fake-1(사실·구조)·fake-1(비판·실무) 리뷰" in note
+
+
+async def test_out_of_scope_item_is_shown_as_retained_in_the_note():
+    harness = PipelineHarness(
+        {
+            "WRITE_DRAFT": [draft_output()],
+            "REVIEW_FULL": [review_output("MAJOR"), review_output()],
+            "REVISE_DRAFT": lambda call_input: revision_output(
+                [
+                    resolution(item["item_id"], "OUT_OF_SCOPE", reason="배포 전환은 범위 밖이다")
+                    for review in call_input["reviews"]
+                    for item in review["items"]
+                ]
+            ),
+            "SPOT_CHECK": spot_check_output(resolved=True),
+        }
+    )
+    await harness.seed_round()
+    draft = await harness.drive(A)
+
+    note = build_peer_review_note(draft, await harness.round_service.get(draft.round_id))
+
+    assert "근거를 들어 유지한 사항: 1건" in note
+    assert "배포 전환은 범위 밖이다" in note

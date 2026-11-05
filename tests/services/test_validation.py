@@ -1,5 +1,7 @@
 """ValidationGate 테스트. 설계 04 문서 3절 표의 검사마다 실패 1건과 통과 1건."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.models.enums import AgentSlot, ArbitrationOutcome, IssueSeverity, ResolutionStatus, RevisionCause
@@ -13,6 +15,7 @@ from tests.factories import (
     add_reviews,
     make_arbitration,
     make_draft,
+    make_topic,
     reject,
     write_next_version,
 )
@@ -211,3 +214,72 @@ def test_external_link_format_only_warns(caplog):
 
     assert GATE.validate(draft) == []
     assert "not http(s)" in caplog.text
+
+
+# ---------- 수준별 구조 ----------
+
+
+def test_level_100_post_does_not_need_a_tradeoff_section_but_others_do():
+    without_tradeoff = body().replace("<!-- sec:tradeoff -->\n트레이드오프\n\n", "")
+    entry = make_draft(topic=make_topic(target_level=100))
+    submit(entry, without_tradeoff)
+    assert GATE.validate(entry) == []
+
+    for level in (200, 300, None):
+        other = make_draft(topic=make_topic(target_level=level))
+        submit(other, without_tradeoff)
+        assert GATE.validate(other) == ["필수 앵커가 없다: tradeoff"]
+
+
+# ---------- TypeScript 문법 (tree-sitter) ----------
+
+
+def _fake_parser(monkeypatch, has_error: bool) -> list[str]:
+    grammars: list[str] = []
+
+    class Parser:
+        def parse(self, source: bytes):
+            return SimpleNamespace(root_node=SimpleNamespace(has_error=has_error))
+
+    def get_parser(grammar: str) -> Parser:
+        grammars.append(grammar)
+        return Parser()
+
+    monkeypatch.setattr("tree_sitter_language_pack.get_parser", get_parser)
+    return grammars
+
+
+@pytest.mark.parametrize(("language", "grammar"), [("typescript", "typescript"), ("ts", "typescript"), ("tsx", "tsx")])
+def test_typescript_tree_with_error_fails_the_gate(monkeypatch, language, grammar):
+    grammars = _fake_parser(monkeypatch, has_error=True)
+
+    errors = GATE.validate(validating(body(language=language, code="const x = ;")))
+
+    assert grammars == [grammar]
+    assert len(errors) == 1 and "snippet" in errors[0]
+
+
+def test_real_typescript_grammar_accepts_valid_code_and_flags_broken_code():
+    # 가짜가 아니라 실제 문법으로 has_error 가 기대대로인지 본다. 코드 그래프 테스트와 같은 문법을 쓴다
+    assert GATE.validate(validating(body(language="typescript", code="export const x: number = 1;"))) == []
+    assert GATE.validate(validating(body(language="tsx", code="export const A = () => <div>a</div>;"))) == []
+
+    errors = GATE.validate(validating(body(language="typescript", code="export const x: number = ;\nclass {")))
+
+    assert len(errors) == 1 and "snippet" in errors[0]
+
+
+def test_typescript_snippet_is_not_parsed(monkeypatch):
+    grammars = _fake_parser(monkeypatch, has_error=True)
+
+    assert GATE.validate(validating(body(language="typescript-snippet", code="foo(): void {}"))) == []
+    assert grammars == []
+
+
+def test_missing_grammar_skips_the_check_instead_of_failing_the_gate(monkeypatch):
+    def unavailable(grammar: str):
+        raise OSError("cannot download grammar")
+
+    monkeypatch.setattr("tree_sitter_language_pack.get_parser", unavailable)
+
+    assert GATE.validate(validating(body(language="typescript", code="const x = ;"))) == []

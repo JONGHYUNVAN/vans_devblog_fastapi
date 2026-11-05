@@ -12,8 +12,23 @@ _STRIP_PATTERN = re.compile(
 )
 _FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 CODE_ANCHOR_PATTERN = re.compile(r"^code-\d+$")
+_LINK_PATTERN = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
 REQUIRED_SECTIONS = ["intro", "body-1", "tradeoff", "conclusion"]
+
+
+def required_sections_for(level: int | None) -> list[str]:
+    """글 수준별 필수 섹션. 입문(100)은 트레이드오프를 강요하지 않는다. 수준이 없는 옛 글은 원래 규칙 그대로다."""
+    return [section for section in REQUIRED_SECTIONS if not (level == 100 and section == "tradeoff")]
+
+
+def changed_sections(before: str, after: str) -> list[str]:
+    """수정으로 내용이 바뀌었거나 새로 생긴 섹션 id. 사실 확인이 새 주장을 찾을 범위다."""
+    return [
+        section_id
+        for section_id in find_anchors(after)
+        if section_text(before, section_id) != section_text(after, section_id)
+    ]
 
 
 def normalize_section_id(section_id: str) -> str:
@@ -51,6 +66,11 @@ def section_text(markdown: str, section_id: str) -> str | None:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
         return markdown[match.end() : end].strip("\n")
     return None
+
+
+def markdown_links(markdown: str) -> list[str]:
+    """코드 블록 밖의 `[텍스트](url)` 대상. 나오는 순서대로, 중복 없이."""
+    return list(dict.fromkeys(_LINK_PATTERN.findall(mask_code_fences(markdown))))
 
 
 def mask_code_fences(markdown: str) -> str:

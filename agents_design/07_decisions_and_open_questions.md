@@ -50,6 +50,18 @@
 | D-44 | 에이전트 내부 API(`/api/v1/agents/`)의 `X-Internal-Key`는 검색 내부 키(`INTERNAL_API_KEY`)와 별개인 `AGENTS_INTERNAL_API_KEY`다 | Q-16 해소(2026-11-02). 검색 키는 NestJS Post BE와 공유하는데, 같은 키면 Post BE 설정이 새면 라운드 생성·발행 승인까지 열린다. 에이전트 API는 사람(CLI·curl)만 부른다 | `INTERNAL_API_KEY` 공유 |
 | D-45 | 발행 계정은 벤더마다 하나다(`{ANTHROPIC,GOOGLE,XAI}_PUBLISHER_EMAIL`·`_PASSWORD`). 글을 쓴 슬롯(`author_slot`)의 바인딩 `provider` 계정으로 로그인해 그 계정이 게시글 작성자가 된다. 계정이 없으면 발행 의도를 저장하기 전에 `FAILED(INTERNAL_ERROR)`로 멈춘다 | 계정 하나면 블로그에서 어느 AI가 쓴 글인지 알 수 없다(2026-11-04, 사용자 결정). 슬롯이 아니라 벤더에 묶어 바인딩이 바뀌어도 이름이 벤더를 따라간다 | 공용 계정 하나(`PUBLISHER_EMAIL`), 공용 계정을 대체값으로 두기(작성자가 다시 흐려진다) |
 | D-46 | 리뷰 항목 `section_id`·수정 `section_id_after` 는 받을 때 `sec:` 접두사를 뗀다(`normalize_section_id`). 없는 앵커는 그대로 계약 위반이다 | 프롬프트의 `<!-- sec:id -->` 표기 때문에 Gemini 는 `sec:body-3` 처럼 답한다. 같은 메시지로 재시도해도 고치지 못해 있는 앵커를 가리킨 리뷰로 글이 FAILED 됐다(2026-11-05) | 프롬프트만 고치기(벤더 편차가 남는다) |
+| D-48 | 차단 항목의 범위 밖 판단 `OUT_OF_SCOPE`. 사유 필수, 비차단 항목에는 거절한다. 리뷰어가 받아들이지 않으면 MAJOR 도 중재 1회를 받는다. `UPHOLD_AUTHOR` 는 종결, `UPHOLD_REVIEWER` 는 다음 버전 수용 필수. 근거를 든 MAJOR 기각(`REJECTED_WITH_REASON`)은 여전히 중재하지 않는다 | Q-14 일부 해소(2026-11-05). 프롬프트만으로 방어권을 주면 리뷰어가 받아들이지 않은 MAJOR 가 상한까지 돈 뒤 `ESCALATED` 다. 실제 발행 글에서 작성자는 지적 3건을 모두 수용했고 범위가 넓어졌다 | 프롬프트만 고치기, 모든 MAJOR 중재 |
+| D-49 | 발행 전 단계 `POST_REVIEW`(다듬기 → 전체 읽기 → 수준 평가). `evaluate` 경로로만 들어가고, `post_review_stage` 와 결과를 호출과 한 번에 저장한다. D-09 는 그대로다. 전체 읽기는 수정 루프를 만들지 않는다 | FULL 은 한 번뿐이라 수정이 만든 모순을 아무도 보지 않았다(발행 글: 본문은 유실 불가, 코드는 그냥 return). 세 호출이 같은 자리에 있어 상태 하나로 묶고, 포인터로 재개 때 호출을 되풀이하지 않는다. 사람이 정한 본문은 거치지 않는다(D-17, D-22) | 호출마다 상태 추가, `READY_TO_PUBLISH` 안에서 실행 |
+| D-50 | 전체 읽기의 차단 결함은 `ESCALATED(FINAL_READ_FLAGGED)` 다. 격리 여부는 모델의 판정이 아니라 지적 종류(`BODY_CODE_CONTRADICTION`, `CORE_MECHANISM_MISSING`)로 코드가 정한다. 지적마다 앵커와 본문 인용이 필수다 | `READY_TO_PUBLISH` 의 사람 결정은 승인뿐이라 결과를 보여 주기만 하면 승인이나 라운드 포기만 남는다. `ESCALATED` 에는 REVISE·PUBLISH_AS_IS·REJECT 가 이미 있다 | `READY_TO_PUBLISH` 에 결정 추가 |
+| D-51 | 호출별 모델은 Mongo `agent_routes`(같은 DB, D-43)의 후보 배열이다. 라운드 생성 때 스냅샷을 뜨고 키 없는 벤더 후보를 뺀다. 라우트가 빠졌거나 지원하지 않는 조합이면 라운드를 만들지 않는다. `AGENT_SLOT_BINDINGS`·`REVIEW_TEMPERATURE` 를 없앴다. 후보는 failover 가 아니다. 응답의 `slot_bindings` 는 슬롯의 페르소나·작성 모델로 남는다. 요청의 `bindings` A/B 는 작성 모델만 바꾼다. 라우팅 전 라운드는 슬롯 바인딩으로 같은 스냅샷을 만들어 끝까지 돈다 | 2026-11-05 사용자 제안. 호출마다 읽으면 진행 중인 글의 모델이 바뀐다. 대체값을 두면 빠진 설정이 숨는다 | 설정 파일, 호출마다 조회, 후보로 장애 대비 |
+| D-52 | 벤더 충돌 회피. 수정은 작성 벤더 안에서, 리뷰·전체 읽기·평가·문체 다듬기는 작성 벤더 밖에서, 중재는 작성·리뷰 벤더 밖에서 고른다. SPOT_CHECK 라우트는 없고 FULL 모델을 다시 쓴다. 선택은 스냅샷과 글만 읽는 순수 함수다. 같은 회사의 다른 모델은 독립 검증으로 치지 않는다 | Q-15 해소(2026-11-05): 중재자가 그 글을 이미 FULL 리뷰한 리뷰어일 수 있는 점은 벤더 회피로 줄인다. 렌즈 셋을 벤더 둘이 맡으면 리뷰 벤더는 겹칠 수 있다 | 모델 단위 회피 |
+| D-53 | `temperature`·`effort` 는 후보에 있고 None 이면 보내지 않는다. 벤더·모델 지원표에 없는 조합은 라운드 생성에서 거절한다. 잘린 응답은 계약 위반과 구분해 같은 한도로 재시도하지 않는다. 벤더 상한까지 올려 부르고 더 못 올리면 `FAILED(OUTPUT_TRUNCATED)` 다. xAI 는 Responses API 로 옮겼다 | 전에는 쓰기 0.7, 리뷰 0.2 를 보냈지만 Claude 는 400 이라 보내지 않았고 Argon 은 무시했다. 영수증과 실제 요청이 달랐다. 생각 토큰이 한도를 공유하면 같은 한도의 재시도는 또 잘린다 | 클라이언트가 조용히 버리기 |
+| D-54 | 글 수준 100~400. 작성자는 `target_level`·`prerequisites` 를 내고, 작성 벤더가 아닌 모델이 목표를 모른 채 본문 인용으로 평가해 라벨로 남긴다. 처음에는 막지 않는다. 입문(100)은 `tradeoff` 를 요구하지 않는다. 400 은 근거(`evidence`)가 있어야 하고 트러블슈터는 근거 없이 200 까지다. `CreatePostDto.level` 은 `PUBLISH_POST_LEVEL` 을 켰을 때만 보낸다 | 지어낸 경험담은 검색으로 잡기 어려워 입력 단계에서 막는다. 300 까지는 표준 시나리오로 쓸 수 있다. Post BE 는 DTO 에 없는 필드를 400 으로 거부한다(`forbidNonWhitelisted`) | 300 이상에 근거 필수, 항목 수로 채점, 자기 평가 |
+| D-55 | 글마다 렌즈 하나에 모델 하나(`build_lens_assignments`). 리뷰어는 주 렌즈로 가린다. `reviewer_slot`·`secondary_lens`·`arbiter_slot` 은 옛 글에만 있다. `ModelBinding.persona_id` 는 나누지 않는다. 호출·영수증은 이미 `CallModel` 이고 `slot_bindings` 는 응답 계약이다 | 작성자 렌즈가 다른 리뷰어의 보조 렌즈로 붙어 FACT 페르소나의 글은 FACT 전담 리뷰를 받지 못했다. 옛 글도 두 리뷰어의 주 렌즈가 달라 같은 코드로 돈다 | 렌즈 구성 변경(측정 뒤 결정) |
+| D-56 | 사실 확인은 FACT 렌즈의 검색 호출 + 변환 호출이다. 주장은 외부 문서로 가릴 수 있는 것만 뽑는다. 심각도는 코드가 정한다(`REFUTED` CRITICAL, `UNVERIFIABLE` MINOR, URL 이 출처에 없으면 `UNVERIFIABLE`). 수정으로 바뀐 섹션은 SPOT_CHECK 에서 다시 확인한다(D-09 의 예외). 사실 지적의 분쟁은 중재자도 검색한다. 링크 응답은 확인 입력으로만 쓴다 | 리뷰어가 기억으로만 판정했다. 설계 판단까지 뽑으면 글의 논리가 지워진다. `UNVERIFIABLE` 을 처음부터 막으면 참인 주장이 삭제되거나 격리된다. 벤더 단일 호출로 조합을 확인할 수 없어 모든 벤더가 같은 두 호출을 쓴다 | 벤더별 한 호출, `UNVERIFIABLE` 차단 |
+| D-57 | `typescript`·`ts`·`tsx` 코드 블록은 tree-sitter 로 문법을 검사한다(`has_error`). `*-snippet` 은 검사하지 않는다. 문법을 받지 못하면 그 검사만 건너뛴다 | Q-06 일부 해소. 코드 그래프가 이미 쓰는 의존성이라 subprocess 가 없다. 게이트를 네트워크에 묶지 않는다. 타입·논리 오류는 잡지 못하고 전체 읽기가 본문과의 어긋남을 본다 | tsc subprocess |
+| D-58 | 다듬기는 문단 패치만 받고 안전장치를 통과한 것만 적용한다. 실패는 건너뛰고 수정 루프로 돌아가지 않는다. 다듬은 버전(`origin_cause=POLISH`)은 다시 리뷰하지 않으며 버전 수·fast-track 에 넣지 않는다 | 문체는 리뷰 렌즈가 될 수 없다(D-47). LLM 은 문법만 고치라 해도 뜻을 바꾼다는 연구가 있어 전체 재작성을 받지 않는다. 다듬기는 압축된 서사를 풀 수 없다 | 전체 재작성, 리뷰 렌즈 |
+| D-59 | 프롬프트 v3. 범위(핵심 메커니즘, 다루지 않을 것), 문단 규칙(문단 하나에 개념 하나, 덧붙이지 말고 다시 쓰기), 범위 판단 먼저, 전달 확인, 수준, 근거 | 실제 발행 글은 제목이 약속한 모듈 구성이 없고 여러 주제를 한 문단에 담았다. 효과는 실제 호출로 재야 한다(`agents compare-prompts`) | v2 수정(버전 디렉터리는 배포 후 고치지 않는다) |
 | D-47 | 프롬프트 v2. 작성·수정 프롬프트에 한국어 문장 규칙(한 문장 한 개념, 분량은 설명에, 개발자·상황 주어, 명령형·완충 어미 금지)을 넣는다 | 발행 글에서 번역투와 과밀한 문장이 보였다. 리뷰는 어조·문장 리듬을 지적하지 않고(톤 보존 규칙) 표현은 MINOR 라 발행을 막지 못하므로 작성 단계에서 정한다. 수정 호출은 작성 프롬프트를 보지 않으므로 두 템플릿에 모두 둔다 | 리뷰에서 문체를 지적하게 하기(톤 보존 규칙과 충돌한다), v1 문구를 직접 고치기(버전 디렉터리는 배포 후 고치지 않는다) |
 
 ## 2. 미결 사항
@@ -59,16 +71,18 @@
 | Q-03 | 실제 슬롯 ↔ 모델 바인딩과 모델 ID | 설정값. 도메인 영향 없음 | A=architect, B=systems_engineer, C=troubleshooter 페르소나. 모델은 설정 |
 | Q-04 | 단일 인스턴스 전제를 유지할지 | 다중 인스턴스면 글 단위 실행 소유권(lease)과 트랜잭션(replica set)이 다시 필요하다 | 단일 (CONVENTIONS 3절과 동일). 실행 모델 전체가 이 전제에 기댄다(D-25) |
 | Q-05 | 주제 중복 판별에 임베딩을 쓸지 | 임베딩 API 의존 추가 | 1차는 키워드·제목 토큰 유사도만. 임베딩은 2단계 |
-| Q-06 | 코드 블록 문법 검사에 외부 컴파일러(TS, Go 등 subprocess)까지 붙일지 | Docker 이미지 크기, 게이트 신뢰도 | 1차는 subprocess 없이 경량 검사(펜스 짝, 빈 블록 금지, `python` 은 `ast.parse`, `json` 은 `json.loads`)만 수행 |
+| Q-06 | 코드 블록 문법 검사에 외부 컴파일러(Go 등 subprocess)까지 붙일지 | Docker 이미지 크기, 게이트 신뢰도 | subprocess 없이 경량 검사(펜스 짝, 빈 블록 금지, `python` 은 `ast.parse`, `json` 은 `json.loads`, TS 는 tree-sitter, D-57)만 수행 |
 | Q-07 | 글 토큰 예산 수치(`DRAFT_TOKEN_LIMIT`) | 소프트 상한 민감도. 추정치가 문자 수 기준이라 영어 위주 입력에서는 크게 잡힌다 | 첫 라운드 몇 번 돌려 글당 실사용을 본 뒤 결정. 초기엔 넉넉히 |
 | Q-08 | 글 길이 범위(`DRAFT_MIN_CHARS`, `DRAFT_MAX_CHARS`) | 게이트, 프롬프트 | 4,000 ~ 20,000자 |
 | Q-09 | 요약 노트의 모델명 문구를 운영 후에 뺄지 | 독자 신뢰 | 템플릿에 모델명을 넣는다 (05 문서). 빼는 것은 나중에 |
 | Q-10 | `ESCALATED` 해소 UI: CLI 로 충분한가, 간단한 관리자 페이지가 필요한가 | 범위 | 1차는 CLI + `GET .../escalation/` JSON |
 | Q-11 | 라운드 실행 트리거: 수동(CLI/API)만인지, 주기 스케줄(cron)도 두는지 | 러너 설계 | 1차 수동 |
 | Q-13 | 발행본 본문을 이 서비스가 들고 자기 표절 검사를 할지 | 게이트, 저장 | 1차 게이트에서 제외. 레지스트리에는 제목·키워드만 있다 |
-| Q-14 | MAJOR 분쟁도 중재할지 | 교착은 CRITICAL 한정이라, 작성자가 근거를 들어 기각한 MAJOR를 리뷰어가 받아들이지 않으면 반복 상한까지 돈 뒤 `ESCALATED`다. 덜 심각한 MAJOR가 더 무거운 경로(사람)를 탄다 | 현행(CRITICAL만 중재) |
+| Q-14 | 근거를 들어 기각한 MAJOR 도 중재할지 | 범위 밖 판단(`OUT_OF_SCOPE`)은 MAJOR 도 중재한다(D-48). 남은 경우는 작성자가 지적이 틀렸다고 기각한 MAJOR 를 리뷰어가 받아들이지 않을 때로, 반복 상한까지 돈 뒤 `ESCALATED`다 | 범위 밖 판단만 중재 |
 | Q-16 | 에이전트 내부 API 키를 검색 내부 API 키(`INTERNAL_API_KEY`, NestJS Post BE와 공유)와 나눌지 | 같은 키면 Post BE가 라운드 생성·결정 API도 부를 수 있다 | 해소(2026-11-02, D-44): 별도 `AGENTS_INTERNAL_API_KEY` |
-| Q-15 | 중재자 독립성 | 슬롯이 셋이라 제3 슬롯 중재자는 그 글을 이미 FULL 리뷰한 다른 리뷰어다 | 현행. 독립이 필요하면 중재 전용 바인딩을 설정으로 둔다 |
+| Q-15 | 중재자 독립성 | 해소(2026-11-05, D-52): 작성·리뷰 벤더 밖의 `ARBITRATE` 라우트 후보다 | – |
+| Q-18 | 수준 라벨을 블로그에 보일지 | `vans_story_be_post` DTO 와 `vans_story` 표시 수정이 필요하다. 배포 순서는 Post BE → 프런트 → 이 서비스 | `PUBLISH_POST_LEVEL=false`. 저장만 하고 보내지 않는다 |
+| Q-19 | `UNVERIFIABLE` 을 MAJOR 로 올릴지, 낮은 수준 글을 막을지, 렌즈 구성을 바꿀지 | 오탐률·일치도·재현율 측정이 필요하다 | 막지 않는다. 렌즈 셋 유지 |
 
 ## 3. 구현 로드맵
 
@@ -85,6 +99,8 @@
 | 6 | `PublishingService` + `clients/publisher/` 발행(봇 계정 로그인, 실패 분류) + 요약 노트 + 승인 토글 + `PUBLISH_UNCERTAIN` 해소 + `DraftDecisionService` + 라우터·golden + 결정 CLI | 벤더별 관리자 계정(D-45)을 만들고, 승인 후 Post BE 에 발행해 블로그에서 사람이 쓴 글과 같게 보인다. 코드·단위 테스트 완료(2026-11-02). 벤더별 계정을 만들어 `.env`에 넣고(`USER_SERVICE_URL`·`{ANTHROPIC,GOOGLE,XAI}_PUBLISHER_EMAIL`·`{ANTHROPIC,GOOGLE,XAI}_PUBLISHER_PASSWORD`·`AGENTS_INTERNAL_API_KEY`) `pytest -m e2e tests/e2e/test_post_be.py` → 라운드 1회 → `agents approve` → 블로그 확인은 사용자가 한다 |
 | 7 | 운영: 토큰 측정 → Q-07 확정, 프롬프트 튜닝(`reported_verdict`·`derived_verdict` 불일치 지표), `replay` 명령 | 라운드 3회 이상 운영 후 승인 토글 해제 검토. 도구는 완료(2026-11-02): `services/metrics.py` + `agents metrics` + `GET /api/v1/agents/metrics/`(4절 지표 전부), `AgentCallService.replay` + `agents replay`. Q-07 확정·프롬프트 튜닝·토글 해제는 실제 라운드를 돌린 뒤 사용자가 한다 |
 
+| 8 | 품질 개선(`.claude/reviews/model_routing_and_expertise_review.md` 0~4단계): 범위·서사 규칙, 호출별 라우트, 수준 라벨, 사실 확인·렌즈 구조, 다듬기 | 코드·단위 테스트 완료(2026-11-05, 가짜 LLM). 실제 모델로는 돌리지 않았다. 키를 넣고 `pytest -m e2e tests/e2e/test_llm_vendors.py` → `agents seed-routes` → 라운드 → `agents metrics`·`compare-prompts`·`fact-check` 로 사용자가 확인한다. 밀도 감소와 "글처럼 읽힌다"는 판단, 재현율·오탐, 수준 일치도가 완료 기준이다 |
+
 ## 4. 측정 지표 (운영 후 튜닝 입력)
 
 | 지표 | 의미 |
@@ -93,7 +109,12 @@
 | 평균 iteration | 수렴 속도 |
 | `ESCALATED`·`FAILED` 비율과 사유 분포 | 상한 튜닝 |
 | 중재 발생률과 `UPHOLD_AUTHOR` 비율 | 리뷰어가 과하게 CRITICAL 을 남발하는지 |
-| `reported_verdict ≠ derived_verdict` 비율 (슬롯별, `PeerReview`에서 계산) | 리뷰어 페르소나가 severity 기준을 잘 따르는지 |
+| `reported_verdict ≠ derived_verdict` 비율 (렌즈별, `PeerReview`에서 계산) | 리뷰어 페르소나가 severity 기준을 잘 따르는지 |
 | 게이트 실패율 (항목별) | 게이트를 거친 버전(통과 또는 `validation_errors` 있음) 중 떨어진 비율과 사유별 건수. 아직 `VALIDATING` 인 버전은 세지 않는다. 작성 프롬프트의 구조 지시 품질 |
 | 글당 토큰·비용 | 예산 상한 결정 |
-| `REJECTED_WITH_REASON` 비율 | 작성자 방어권이 작동하는지 (0% 면 무조건 수용, 너무 높으면 고집) |
+| 유지 비율(`REJECTED_WITH_REASON`·`OUT_OF_SCOPE`)과 `OUT_OF_SCOPE` 비율 | 작성자 방어권이 작동하는지 (0% 면 무조건 수용, 너무 높으면 고집) |
+| 버전별 밀도·길이 증가율 | 문단당 문장·인라인 코드, 인라인 코드 4개 이상 문단. 프롬프트 효과와 "수정이 덧붙이기였는지"를 본다 |
+| 주장 판정별 건수 | `UNVERIFIABLE` 을 MAJOR 로 올릴지 정하는 오탐률의 입력 |
+| 다듬기 적용·버림 사유 | 안전장치 통과율 |
+| 수준 일치도 | 평가자와 사용자 라벨(`agents label`). 처음에는 100·200 과 300 이상의 구분만 본다 |
+| 모델·렌즈별 토큰, 잘린 호출 수 | effort·출력 한도 결정 |

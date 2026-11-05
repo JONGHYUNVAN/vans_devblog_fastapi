@@ -7,9 +7,11 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
+from pydantic import TypeAdapter
+
 from app.core.config import Settings
 from app.core.exceptions import ConcurrentUpdateError, InvalidRequestError, NotFoundError
-from app.models.enums import EscalationDecisionKind, PostStatus, TopicRegistryStatus
+from app.models.enums import EscalationDecisionKind, PostLevel, PostStatus, TopicRegistryStatus
 from app.models.post_draft import PostDraft, Publication
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.post_draft import PostDraftRepository
@@ -80,6 +82,17 @@ class DraftDecisionService:
 
         async def mutate(draft: PostDraft) -> None:
             draft.discard(decided_by)
+
+        return await self._apply(draft_id, mutate)
+
+    async def label_level(self, draft_id: str, level: int) -> PostDraft:
+        """사용자가 매긴 수준. 평가자와의 일치도를 재는 데 쓰고 흐름은 바꾸지 않는다.
+
+        저장 때는 검증되지 않아, 틀린 값이 들어가면 글을 읽을 때마다 실패해 러너 스캔이 멈춘다. 그래서 여기서 막는다.
+        """
+
+        async def mutate(draft: PostDraft) -> None:
+            draft.user_level = TypeAdapter(PostLevel).validate_python(level)
 
         return await self._apply(draft_id, mutate)
 

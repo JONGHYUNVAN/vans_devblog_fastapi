@@ -14,12 +14,14 @@ from app.models.enums import (
     ArbitrationOutcome,
     CallKind,
     IssueSeverity,
+    PostReviewStage,
+    PostStatus,
     ResolutionStatus,
     ReviewLens,
     ReviewScope,
     ReviewVerdict,
 )
-from app.models.model_binding import ModelBinding
+from app.models.model_binding import CallModel, ModelBinding
 from app.models.post_draft import (
     Arbitration,
     DraftVersion,
@@ -27,11 +29,12 @@ from app.models.post_draft import (
     ItemResolution,
     PeerReview,
     PostDraft,
+    ReviewAssignment,
     ReviewItem,
     VerificationChecklist,
-    build_review_assignments,
 )
 from app.models.publishing_round import PublishingRound
+from app.models.routing import RoutingSnapshot
 from app.models.topic import CategoryOption, TopicProposal, TopicRegistryEntry
 from app.services.evaluation import derive_verdict
 
@@ -54,13 +57,36 @@ def make_topic(**overrides) -> TopicProposal:
         "keywords": ["mongodb", "concurrency", "locking"],
         "outline": ["문제", "해결", "트레이드오프"],
         "rationale": "운영에서 겪은 경쟁 조건",
+        "core_mechanism": "revision 조건부 갱신으로 동시 저장을 막는다",
+        "out_of_scope": ["다중 리전 복제"],
+        "target_level": 300,
+        "prerequisites": "MongoDB 기본 사용 경험",
         "main_category_id": "main-1",
         "sub_category_id": "sub-1",
     }
     return TopicProposal(**(fields | overrides))
 
 
+def build_review_assignments(
+    author: AgentSlot, primary_lenses: Mapping[AgentSlot, ReviewLens]
+) -> list[ReviewAssignment]:
+    """라우팅 전의 배정 모양: 작성자를 뺀 두 슬롯이 렌즈 셋을 나눠 맡는다. 저장된 옛 글을 흉내 낼 때 쓴다."""
+    reviewers = [slot for slot in AgentSlot if slot != author]
+    candidates = [slot for slot in reviewers if primary_lenses[slot] != ReviewLens.CRITICAL_PRACTICAL]
+    if len(candidates) > 1:
+        candidates = [slot for slot in candidates if primary_lenses[slot] == ReviewLens.FACT_STRUCTURE]
+    return [
+        ReviewAssignment(
+            slot=slot,
+            primary_lens=primary_lenses[slot],
+            secondary_lens=primary_lenses[author] if slot == candidates[0] else None,
+        )
+        for slot in reviewers
+    ]
+
+
 def make_draft(author: AgentSlot = AgentSlot.A, **overrides) -> PostDraft:
+    """기본은 옛 모양(두 슬롯 리뷰어)이다. 옛 글을 계속 읽을 수 있어야 하고, 지금 글과 같은 코드로 돈다."""
     fields = {
         "draft_id": f"round-1:{author}",
         "round_id": "round-1",
@@ -110,11 +136,11 @@ def make_review(
     severities: Iterable[IssueSeverity] = (),
     checks: Mapping[str, bool] | None = None,
 ) -> PeerReview:
-    """현재 버전·범위의 리뷰. severities 마다 지적 하나, checks 는 item_id → resolved."""
+    """현재 버전·범위의 리뷰. severities 마다 지적 하나, checks 는 item_id → resolved. slot 은 옛 글의 리뷰어 슬롯이다."""
     version_number = draft.current_version.version_number
     scope = draft.current_review_scope
     review_id = f"{draft.draft_id}:v{version_number}:{slot}:{scope}"
-    assignment = draft.assignment_of(slot)
+    assignment = draft.assignment_of(LENSES[slot])
     items = [
         ReviewItem(
             item_id=f"{review_id}:{n}",
@@ -157,9 +183,17 @@ def add_reviews(
     """필수 리뷰어 전원의 리뷰를 넣는다. SPOT_CHECK 는 resolved 에 없는 이전 항목을 해소된 것으로 본다."""
     severities = severities or {}
     resolved = resolved or {}
-    for slot in draft.required_reviewers():
-        checks = {item.item_id: resolved.get(item.item_id, True) for item in draft.previous_items_of(slot)}
+    slot_of = {lens: slot for slot, lens in LENSES.items()}
+    for lens in draft.required_reviewers():
+        slot = slot_of[lens]
+        checks = {item.item_id: resolved.get(item.item_id, True) for item in draft.previous_items_of(lens)}
         draft.add_review(make_review(draft, slot, severities.get(slot, ()), checks))
+
+
+def finish_post_review(draft: PostDraft) -> None:
+    """POST_REVIEW 를 호출 없이 끝내 READY_TO_PUBLISH 로 보낸다. 발행 단계만 보는 테스트가 쓴다."""
+    draft.status = PostStatus.READY_TO_PUBLISH
+    draft.post_review_stage = PostReviewStage.DONE
 
 
 def make_arbitration(draft: PostDraft, item: ReviewItem, outcome: ArbitrationOutcome) -> Arbitration:
@@ -194,6 +228,46 @@ def make_binding(**overrides) -> ModelBinding:
     return ModelBinding(**(fields | overrides))
 
 
+# 시나리오 테스트의 가짜 벤더. 작성 벤더를 피하는 선택이 돌도록 셋을 둔다. 모두 같은 ScriptedLLMClient 로 간다
+FAKE_VENDORS = {AgentSlot.A: "fake-a", AgentSlot.B: "fake-b", AgentSlot.C: "fake-c"}
+
+
+def fake_model(vendor: str = "fake-a") -> dict[str, Any]:
+    return {"provider": vendor, "model_id": f"{vendor}-1", "max_output_tokens": 1000}
+
+
+def route_documents() -> list[dict[str, Any]]:
+    """agent_routes 문서 전체. 슬롯마다 자기 벤더로 쓰고, 리뷰·중재는 세 벤더를 후보로 둔다."""
+    everyone = [fake_model(vendor) for vendor in FAKE_VENDORS.values()]
+    documents: list[dict[str, Any]] = [{"_id": "SLOTS", **{slot.value: PERSONA_IDS[slot] for slot in AgentSlot}}]
+    for slot, persona_id in PERSONA_IDS.items():
+        own = [fake_model(FAKE_VENDORS[slot])]
+        documents += [
+            {"_id": f"PROPOSE_TOPIC:{persona_id}", "candidates": own},
+            {"_id": f"WRITE_DRAFT:{persona_id}", "candidates": own},
+            {"_id": f"REVISE_DRAFT:{persona_id}", "candidates": own},
+        ]
+    documents += [{"_id": f"REVIEW:{lens}", "candidates": everyone} for lens in ReviewLens]
+    documents += [
+        {"_id": route_id, "candidates": everyone}
+        for route_id in ("ARBITRATE", "FINAL_READ", "ASSESS_LEVEL", "POLISH_TONE", "POLISH_FORMAT", "FACT_TRANSFORM")
+    ]
+    return documents
+
+
+def make_routing() -> RoutingSnapshot:
+    routes = {
+        document["_id"]: [CallModel.model_validate(each) for each in document["candidates"]]
+        for document in route_documents()
+        if document["_id"] != "SLOTS"
+    }
+    return RoutingSnapshot(routes=routes, slot_personas=PERSONA_IDS)
+
+
+def make_call_model(**overrides) -> CallModel:
+    return CallModel(**({"provider": "fake", "model_id": "fake-1", "max_output_tokens": 1000} | overrides))
+
+
 def make_category() -> CategoryOption:
     return CategoryOption(
         main_category_id="main-1", main_label="Backend", sub_category_id="sub-1", sub_label="Database"
@@ -226,7 +300,7 @@ def make_call(
         draft_id=draft_id,
         kind=kind,
         slot=AgentSlot.A,
-        model_binding=make_binding(),
+        model_binding=CallModel(provider="fake", model_id="fake-1", max_output_tokens=1000),
         prompt_template_version="v1",
         attempt_number=1,
         messages=[ChatMessage(role="user", content="써라")],
@@ -260,6 +334,70 @@ VALID_BODY = (
     "<!-- sec:tradeoff -->\n트레이드오프\n\n<!-- sec:conclusion -->\n결론\n"
 )
 CHECKLIST = {"checked_claims": ["버전 표기 확인"], "checked_code_blocks": [], "unverifiable": []}
+FACT_CITATION = "https://docs.example.com/mongodb"
+
+
+def fact_search_text() -> str:
+    return "사실 확인 결과: 주장은 문서와 일치한다."
+
+
+def fact_transform_output(
+    *claims: dict[str, Any], items: Iterable[dict[str, Any]] = ()
+) -> Callable[[dict[str, Any]], str]:
+    """변환 호출. 입력의 scope 로 FULL·SPOT_CHECK 계약을 고른다. SPOT_CHECK 의 이전 항목은 해소된 것으로 본다."""
+
+    def build(call_input: dict[str, Any]) -> str:
+        if call_input["scope"] == "SPOT_CHECK":
+            checks = [{"item_id": item_id, "resolved": True, "note": ""} for item_id in call_input["expected_item_ids"]]
+            payload = {
+                "item_checks": checks,
+                "new_critical_items": list(items),
+                "checklist": CHECKLIST,
+                "claims": list(claims),
+            }
+        else:
+            payload = {
+                "verdict": "APPROVE",
+                "items": list(items),
+                "checklist": CHECKLIST,
+                "overall_feedback": "총평",
+                "claims": list(claims),
+            }
+        return json.dumps(payload, ensure_ascii=False)
+
+    return build
+
+
+def fact_claim(
+    status: str = "SUPPORTED", source_url: str | None = FACT_CITATION, section_id: str = "body-1"
+) -> dict[str, Any]:
+    return {
+        "section_id": section_id,
+        "claim_type": "API",
+        "claim": "findOneAndUpdate 는 원자적이다",
+        "status": status,
+        "source_url": source_url,
+        "note": "근거",
+    }
+
+
+def final_read_output(*findings: dict[str, Any]) -> str:
+    return json.dumps({"findings": list(findings), "overall": "총평"}, ensure_ascii=False)
+
+
+def final_read_finding(kind: str = "OBSERVATION", quote: str = "본론", section_id: str = "body-1") -> dict[str, Any]:
+    return {"kind": kind, "section_id": section_id, "quote": quote, "comment": "관찰"}
+
+
+def assess_level_output(level: int = 200, quote: str = "본론") -> str:
+    return json.dumps(
+        {"level": level, "evidence": [{"criterion": "방법과 이유", "quote": quote}], "reasoning": "근거"},
+        ensure_ascii=False,
+    )
+
+
+def polish_output(*patches: tuple[int, str]) -> str:
+    return json.dumps({"patches": [{"index": index, "text": text} for index, text in patches]}, ensure_ascii=False)
 
 
 def draft_output(content: str = VALID_BODY, title: str = "제목") -> str:
@@ -335,7 +473,7 @@ def arbitrate_output(outcome: str) -> str:
 
 
 def proposal(title: str, keywords: list[str]) -> dict[str, Any]:
-    return make_topic(title=title, keywords=keywords).model_dump()
+    return make_topic(title=title, keywords=keywords, target_level=200).model_dump()
 
 
 def proposals_output(*topics: tuple[str, list[str]]) -> str:

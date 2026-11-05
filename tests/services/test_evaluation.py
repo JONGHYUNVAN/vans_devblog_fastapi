@@ -79,7 +79,7 @@ def test_evaluate_fast_tracks_full_review_without_blocking_items():
     draft = _in_review()
     add_reviews(draft, {C: [MINOR]})
 
-    assert evaluate(draft, MAX_ITERATIONS).next_status == PostStatus.READY_TO_PUBLISH
+    assert evaluate(draft, MAX_ITERATIONS).next_status == PostStatus.POST_REVIEW
 
 
 def test_evaluate_full_review_with_one_blocking_item_revises():
@@ -102,7 +102,7 @@ def test_evaluate_spot_check_resolved_is_ready():
     draft, _ = _in_spot_check(rejected=False)
     add_reviews(draft)
 
-    assert evaluate(draft, MAX_ITERATIONS).next_status == PostStatus.READY_TO_PUBLISH
+    assert evaluate(draft, MAX_ITERATIONS).next_status == PostStatus.POST_REVIEW
 
 
 def test_evaluate_spot_check_unresolved_revises_then_escalates_at_max():
@@ -125,7 +125,7 @@ def test_evaluate_spot_check_deadlock_goes_to_arbitration():
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
-        (ArbitrationOutcome.UPHOLD_AUTHOR, PostStatus.READY_TO_PUBLISH),
+        (ArbitrationOutcome.UPHOLD_AUTHOR, PostStatus.POST_REVIEW),
         (ArbitrationOutcome.UPHOLD_REVIEWER, PostStatus.REVISING),
     ],
 )

@@ -41,8 +41,8 @@ def evaluate(draft: PostDraft, max_iterations: int) -> EvaluationOutcome:
 
     unresolved = draft.open_blocking_items(draft.current_version.version_number)
     if not unresolved:
-        # FULL 에서 MINOR·NITPICK 만 남으면 수정 없이 발행한다. 요약 노트에 기록으로만 남는다.
-        return EvaluationOutcome(next_status=PostStatus.READY_TO_PUBLISH)
+        # FULL 에서 MINOR·NITPICK 만 남으면 수정 없이 발행 전 단계로 간다. 요약 노트에 기록으로만 남는다.
+        return EvaluationOutcome(next_status=PostStatus.POST_REVIEW)
     if draft.status == PostStatus.IN_REVIEW:
         # FULL 은 iteration 0 에서만 일어난다. 상한 검사는 REVISING 을 나갈 때 한다(설계 03 문서 14행).
         return EvaluationOutcome(next_status=PostStatus.REVISING)

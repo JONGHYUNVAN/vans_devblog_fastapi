@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import TopicRegistryStatus
+from app.models.enums import PostLevel, TopicRegistryStatus
 
 
 class TopicProposal(BaseModel):
@@ -13,6 +13,13 @@ class TopicProposal(BaseModel):
     keywords: list[str] = Field(min_length=3, max_length=3)  # 발행 때 Post BE tags
     outline: list[str] = Field(min_length=3)  # 목차 초안
     rationale: str  # 왜 이 주제를 이 페르소나가 쓰는지
+    # 저장 문서와 LLM 출력이 같은 모델이라 기본값을 둔다(옛 문서를 읽어야 한다). 빈 값은 topic_proposal_check 가 막는다
+    core_mechanism: str = ""  # 이 글이 끝까지 설명할 핵심 메커니즘 하나
+    out_of_scope: list[str] = Field(default_factory=list)  # 이 글이 다루지 않을 것
+    target_level: PostLevel | None = (
+        None  # 작성자가 목표로 하는 수준. 평가자에게는 주지 않는다. 없으면 옛 규칙(tradeoff 필수)
+    )
+    prerequisites: str = ""  # 독자에게 전제하는 지식
     main_category_id: str  # 라운드 categories 의 한 쌍. 파서가 목록에 있는지 검사한다
     sub_category_id: str
 

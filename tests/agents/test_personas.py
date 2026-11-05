@@ -2,13 +2,12 @@
 
 import pytest
 
-from app.agents.personas import LENS_GUIDES, PERSONAS, get_persona
+from app.agents.personas import PERSONAS, get_persona
 from app.models.enums import ReviewLens
 
 
 def test_three_personas_cover_the_three_lenses():
     assert {persona.primary_lens for persona in PERSONAS.values()} == set(ReviewLens)
-    assert set(LENS_GUIDES) == set(ReviewLens)
 
 
 def test_get_persona_returns_profile_and_rejects_unknown_id():

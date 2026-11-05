@@ -5,7 +5,6 @@
 판정 규칙은 services/evaluation.py 의 순수 함수이고, apply_evaluation 은 그 결과(EvaluationOutcome)로 전이만 한다.
 """
 
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Self
 
@@ -15,10 +14,15 @@ from app.core.exceptions import InvalidTransitionError
 from app.models.enums import (
     AgentSlot,
     ArbitrationOutcome,
+    ClaimStatus,
+    ClaimType,
     EscalationDecisionKind,
     EscalationReason,
     FailureCode,
+    FinalReadKind,
     IssueSeverity,
+    PostLevel,
+    PostReviewStage,
     PostStatus,
     ResolutionStatus,
     ReviewLens,
@@ -36,11 +40,11 @@ _HALTED = _TERMINAL | {PostStatus.ESCALATED, PostStatus.FAILED}
 
 # 평가 결과로 갈 수 있는 상태 (설계 03 문서 11·12, 15~18, 20~22행)
 _EVALUATION_TARGETS: dict[PostStatus, frozenset[PostStatus]] = {
-    PostStatus.IN_REVIEW: frozenset({PostStatus.READY_TO_PUBLISH, PostStatus.REVISING}),
+    PostStatus.IN_REVIEW: frozenset({PostStatus.POST_REVIEW, PostStatus.REVISING}),
     PostStatus.IN_SPOT_CHECK: frozenset(
-        {PostStatus.READY_TO_PUBLISH, PostStatus.IN_ARBITRATION, PostStatus.REVISING, PostStatus.ESCALATED}
+        {PostStatus.POST_REVIEW, PostStatus.IN_ARBITRATION, PostStatus.REVISING, PostStatus.ESCALATED}
     ),
-    PostStatus.IN_ARBITRATION: frozenset({PostStatus.READY_TO_PUBLISH, PostStatus.REVISING, PostStatus.ESCALATED}),
+    PostStatus.IN_ARBITRATION: frozenset({PostStatus.POST_REVIEW, PostStatus.REVISING, PostStatus.ESCALATED}),
 }
 
 
@@ -49,7 +53,12 @@ def _now() -> datetime:
 
 
 class ReviewAssignment(BaseModel):
-    slot: AgentSlot
+    """리뷰어 하나. 글마다 렌즈 하나에 모델 하나를 붙이고, 리뷰어는 주 렌즈로 가린다 (설계 03 문서 4절).
+
+    slot·secondary_lens 는 "두 슬롯이 렌즈 셋을 나눠 맡던" 옛 글에만 있다. 옛 글도 두 리뷰어의 주 렌즈가 달라 같은 코드로 돈다.
+    """
+
+    slot: AgentSlot | None = None
     primary_lens: ReviewLens
     secondary_lens: ReviewLens | None = None
 
@@ -58,30 +67,9 @@ class ReviewAssignment(BaseModel):
         return {self.primary_lens} | ({self.secondary_lens} if self.secondary_lens else set())
 
 
-def build_review_assignments(
-    author_slot: AgentSlot, primary_lenses: Mapping[AgentSlot, ReviewLens]
-) -> list[ReviewAssignment]:
-    """작성자를 뺀 두 슬롯에 렌즈를 배정한다 (설계 03 문서 4절, 07 문서 D-12·D-19).
-
-    두 리뷰어의 주 렌즈는 작성자 렌즈를 뺀 둘이다. 작성자 렌즈는 한 리뷰어의 보조 렌즈로 붙인다.
-    붙이는 리뷰어는 주 렌즈가 CRITICAL_PRACTICAL 이 아닌 쪽, 둘 다 아니면 FACT_STRUCTURE 쪽이다.
-    세 슬롯의 주 렌즈가 서로 다르지 않으면 ValueError.
-    """
-    if set(primary_lenses) != set(AgentSlot) or len(set(primary_lenses.values())) != len(AgentSlot):
-        raise ValueError("every slot needs a distinct primary lens")
-    reviewers = [slot for slot in AgentSlot if slot != author_slot]
-    candidates = [slot for slot in reviewers if primary_lenses[slot] != ReviewLens.CRITICAL_PRACTICAL]
-    if len(candidates) > 1:
-        candidates = [slot for slot in candidates if primary_lenses[slot] == ReviewLens.FACT_STRUCTURE]
-    secondary_holder = candidates[0]
-    return [
-        ReviewAssignment(
-            slot=slot,
-            primary_lens=primary_lenses[slot],
-            secondary_lens=primary_lenses[author_slot] if slot == secondary_holder else None,
-        )
-        for slot in reviewers
-    ]
+def build_lens_assignments() -> list[ReviewAssignment]:
+    """모든 글이 세 렌즈를 전담 리뷰로 받는다. 작성 벤더를 피한 모델 선택은 라우트가 한다."""
+    return [ReviewAssignment(primary_lens=lens) for lens in ReviewLens]
 
 
 class ReviewItem(BaseModel):
@@ -91,19 +79,20 @@ class ReviewItem(BaseModel):
 
     item_id: str  # 오케스트레이터가 "{review_id}:{n}" 으로 부여. LLM 출력에는 없다
     source_review_id: str
-    reviewer_slot: AgentSlot
+    reviewer_slot: AgentSlot | None = None  # 옛 글만. 리뷰어는 source_review_id 의 리뷰 렌즈로 찾는다
     section_id: str  # 본문 앵커 id. intro, body-1, code-1, tradeoff, conclusion
     lens: ReviewLens  # 이 지적을 낸 관점 (리뷰어의 primary 또는 secondary 중 하나)
     severity: IssueSeverity
     comment: str
     suggested_fix: str | None = None
     is_new_in_version: bool = False  # SPOT_CHECK 신규 CRITICAL 만 True. 오케스트레이터가 설정
+    from_fact_check: bool = False  # 사실 확인 주장에서 코드가 만든 지적. 분쟁이면 중재자도 검색한다
 
 
 class ItemResolution(BaseModel):
     item_id: str
     status: ResolutionStatus
-    reason: str | None = None  # REJECTED_WITH_REASON 이면 필수
+    reason: str | None = None  # REJECTED_WITH_REASON·OUT_OF_SCOPE 이면 필수
     section_id_after: str | None = None  # 수정으로 섹션이 바뀌었으면 새 앵커
 
     @field_validator("section_id_after")
@@ -113,7 +102,8 @@ class ItemResolution(BaseModel):
 
     @model_validator(mode="after")
     def _rejection_has_reason(self) -> Self:
-        if self.status == ResolutionStatus.REJECTED_WITH_REASON and not (self.reason and self.reason.strip()):
+        retained = self.status in (ResolutionStatus.REJECTED_WITH_REASON, ResolutionStatus.OUT_OF_SCOPE)
+        if retained and not (self.reason and self.reason.strip()):
             raise ValueError(f"resolution {self.item_id} rejects without a reason")
         return self
 
@@ -146,10 +136,22 @@ class VerificationChecklist(BaseModel):
         return self
 
 
+class FactClaim(BaseModel):
+    """외부 문서로 확인한 주장 하나. 출처를 코드로 검사한 뒤의 판정이다. 심각도는 코드가 정한다 (D-03 과 같은 방식)."""
+
+    section_id: str
+    claim_type: ClaimType
+    claim: str
+    status: ClaimStatus
+    source_url: str | None = None
+    note: str = ""
+
+
 class PeerReview(BaseModel):
     review_id: str
     target_version: int
-    reviewer_slot: AgentSlot
+    reviewer_slot: AgentSlot | None = None  # 옛 글만. 리뷰어는 lens 로 가린다
+    model_id: str | None = None  # 이 리뷰를 쓴 모델. 요약 노트가 그대로 적는다
     lens: ReviewLens
     secondary_lens: ReviewLens | None = None
     scope: ReviewScope
@@ -160,12 +162,13 @@ class PeerReview(BaseModel):
     checklist: VerificationChecklist
     overall_feedback: str
     call_id: str
+    claims: list[FactClaim] = Field(default_factory=list)  # FACT_STRUCTURE 렌즈의 사실 확인 결과
 
     @model_validator(mode="after")
     def _items_belong_to_review(self) -> Self:
         lenses = {self.lens} | ({self.secondary_lens} if self.secondary_lens else set())
         for item in self.items:
-            if item.source_review_id != self.review_id or item.reviewer_slot != self.reviewer_slot:
+            if item.source_review_id != self.review_id:
                 raise ValueError(f"item {item.item_id} does not belong to review {self.review_id}")
             if item.lens not in lenses:
                 raise ValueError(f"item {item.item_id} uses lens {item.lens} the reviewer was not assigned")
@@ -192,7 +195,8 @@ class Arbitration(BaseModel):
     arbitration_id: str
     target_version: int
     item_id: str  # 교착된 ReviewItem
-    arbiter_slot: AgentSlot  # author 도 reviewer 도 아닌 제3 슬롯
+    arbiter_slot: AgentSlot | None = None  # 옛 글만. 지금은 작성·리뷰 벤더가 아닌 ARBITRATE 라우트 후보가 맡는다
+    model_id: str | None = None
     outcome: ArbitrationOutcome
     reasoning: str
     call_id: str
@@ -212,6 +216,7 @@ class DraftVersion(BaseModel):
     resolutions: list[ItemResolution] = Field(default_factory=list)
     author_note: str = ""
     call_id: str
+    model_id: str | None = None  # 이 버전을 쓴 모델. 다듬은 버전은 다듬기 기록(PolishRecord)에 있다
 
     def resolution_for(self, item_id: str) -> ItemResolution | None:
         return next((resolution for resolution in self.resolutions if resolution.item_id == item_id), None)
@@ -242,6 +247,60 @@ class FailureRecord(BaseModel):
     occurred_at: datetime
 
 
+class FinalReadFinding(BaseModel):
+    kind: FinalReadKind
+    section_id: str  # 본문에 있는 앵커
+    quote: str  # 본문·코드에서 그대로 옮긴 구절
+    comment: str
+
+
+class FinalRead(BaseModel):
+    """발행 전 전체 읽기 결과. 차단 종류가 있으면 코드가 ESCALATED(FINAL_READ_FLAGGED) 로 보낸다."""
+
+    target_version: int
+    findings: list[FinalReadFinding] = Field(default_factory=list)
+    overall: str = ""
+    call_id: str
+
+    @property
+    def is_blocking(self) -> bool:
+        return any(finding.kind.is_blocking for finding in self.findings)
+
+
+class LevelEvidence(BaseModel):
+    criterion: str
+    quote: str
+
+
+class LevelAssessment(BaseModel):
+    """작성 벤더가 아닌 모델의 수준 평가. 목표 수준을 모른 채 본문 인용으로 판정한다. 발행 전에는 라벨일 뿐 막지 않는다."""
+
+    target_version: int
+    level: PostLevel
+    evidence: list[LevelEvidence] = Field(default_factory=list)
+    reasoning: str = ""
+    criteria_version: str
+    call_id: str
+
+
+class DiscardedPatch(BaseModel):
+    source: str  # regex | format | tone
+    index: int
+    reason: str
+
+
+class PolishRecord(BaseModel):
+    """다듬기 결과와 품질 지표. 패치를 하나도 쓰지 못했거나 호출이 실패해도 남는다. 다듬기 실패는 글을 멈추지 않는다."""
+
+    base_version: int
+    applied: int = 0
+    discarded: list[DiscardedPatch] = Field(default_factory=list)
+    gate_errors: list[str] = Field(default_factory=list)  # 합친 결과가 게이트에 떨어져 전부 버렸을 때의 사유
+    skipped: list[str] = Field(default_factory=list)  # 호출 실패로 건너뛴 다듬기와 그 이유
+    long_paragraphs: list[str] = Field(default_factory=list)  # 정규식이 고칠 수 없어 사람에게 알리는 긴 문단
+    model_ids: list[str] = Field(default_factory=list)  # 패치가 실제로 적용된 모델
+
+
 class EvaluationOutcome(BaseModel):
     """평가 엔진이 정한 다음 상태. apply_evaluation 이 이 결과로 전이만 한다."""
 
@@ -250,7 +309,7 @@ class EvaluationOutcome(BaseModel):
 
     @model_validator(mode="after")
     def _valid_target(self) -> Self:
-        allowed = {PostStatus.READY_TO_PUBLISH, PostStatus.REVISING, PostStatus.IN_ARBITRATION, PostStatus.ESCALATED}
+        allowed = {PostStatus.POST_REVIEW, PostStatus.REVISING, PostStatus.IN_ARBITRATION, PostStatus.ESCALATED}
         if self.next_status not in allowed:
             raise ValueError(f"evaluation cannot lead to {self.next_status}")
         if (self.next_status == PostStatus.ESCALATED) != (self.escalation_reason is not None):
@@ -278,13 +337,18 @@ class PostDraft(BaseModel):
     approved_by: str | None = None  # 발행 승인. 그 버전에 대한 것이라 새 버전이 제출되면 지운다
     approved_at: datetime | None = None
     topic: TopicProposal
-    reviewer_assignments: list[ReviewAssignment] = Field(min_length=2, max_length=2)
+    reviewer_assignments: list[ReviewAssignment] = Field(min_length=2, max_length=len(ReviewLens))
     versions: list[DraftVersion] = Field(default_factory=list)  # 게이트 실패본도 남는다
     reviews: list[PeerReview] = Field(default_factory=list)
     arbitrations: list[Arbitration] = Field(default_factory=list)
     # 평가(리뷰·중재)를 마친 마지막 버전. FULL·SPOT_CHECK 를 가르고 open_blocking_items 의 기준이 된다.
     # "리뷰를 마친 이전 버전"(설계 07 문서 D-21)을 매번 이력에서 다시 계산하지 않으려고 둔다.
     last_reviewed_version: int | None = None
+    post_review_stage: PostReviewStage | None = None  # POST_REVIEW 에서 다음에 할 일. 호출과 같은 저장으로 넘어간다
+    final_read: FinalRead | None = None
+    level_assessment: LevelAssessment | None = None
+    polish: PolishRecord | None = None
+    user_level: PostLevel | None = None  # 사용자가 직접 매긴 수준. 평가자와의 일치도 측정에 쓴다
     publication_intent: PublicationIntent | None = None
     publication: Publication | None = None
     rejected_by: str | None = None  # REJECT·discard 결정을 내린 사람
@@ -295,14 +359,14 @@ class PostDraft(BaseModel):
 
     @model_validator(mode="after")
     def _valid_assignments(self) -> Self:
-        slots = [assignment.slot for assignment in self.reviewer_assignments]
-        if self.author_slot in slots:
+        if self.author_slot in {assignment.slot for assignment in self.reviewer_assignments}:
             raise ValueError("author cannot review their own draft")
-        if len(set(slots)) != len(slots):
-            raise ValueError("reviewer slots must differ")
+        primaries = [assignment.primary_lens for assignment in self.reviewer_assignments]
+        if len(set(primaries)) != len(primaries):
+            raise ValueError("reviewers must have distinct primary lenses")
         lenses = set().union(*(assignment.lenses for assignment in self.reviewer_assignments))
         if lenses != set(ReviewLens):
-            raise ValueError("the two reviewers must cover all three lenses")
+            raise ValueError("the reviewers must cover all three lenses")
         return self
 
     # ── 조회 ──────────────────────────────────────────────────────────
@@ -328,6 +392,18 @@ class PostDraft(BaseModel):
         return next((version for version in reversed(self.versions) if version.passed_validation), None)
 
     @property
+    def authored_publishable_version(self) -> DraftVersion | None:
+        """다듬기 전 발행본. 요약 노트의 "v1 → vN" 과 fast-track 은 다듬은 버전을 세지 않는다."""
+        return next(
+            (
+                version
+                for version in reversed(self.versions)
+                if version.passed_validation and version.origin_cause != RevisionCause.POLISH
+            ),
+            None,
+        )
+
+    @property
     def current_review_scope(self) -> ReviewScope:
         """현재 버전이 받을 리뷰 범위. 리뷰를 마친 이전 버전이 없으면 FULL 이다(설계 07 문서 D-21)."""
         return ReviewScope.FULL if self.last_reviewed_version is None else ReviewScope.SPOT_CHECK
@@ -347,11 +423,18 @@ class PostDraft(BaseModel):
             return self.publication.external_post_id
         return self.publication_intent.external_post_id if self.publication_intent is not None else None
 
-    def assignment_of(self, slot: AgentSlot) -> ReviewAssignment:
+    def assignment_of(self, lens: ReviewLens) -> ReviewAssignment:
         for assignment in self.reviewer_assignments:
-            if assignment.slot == slot:
+            if assignment.primary_lens == lens:
                 return assignment
-        raise ValueError(f"slot {slot} does not review draft {self.draft_id}")
+        raise ValueError(f"lens {lens} has no reviewer in draft {self.draft_id}")
+
+    def reviewer_of(self, item: ReviewItem) -> ReviewLens:
+        """지적을 낸 리뷰어의 주 렌즈. 옛 글의 지적은 보조 렌즈일 수 있어 item.lens 로 가리지 않는다."""
+        for review in self.reviews:
+            if review.review_id == item.source_review_id:
+                return review.lens
+        raise ValueError(f"review {item.source_review_id} is not in draft {self.draft_id}")
 
     def reviews_of(self, version_number: int) -> list[PeerReview]:
         return [review for review in self.reviews if review.target_version == version_number]
@@ -396,28 +479,33 @@ class PostDraft(BaseModel):
             items = carried_over + new_criticals
         return [item for item in items if not self._is_upheld_author(item.item_id)]
 
-    def previous_items_of(self, slot: AgentSlot) -> list[ReviewItem]:
-        """SPOT_CHECK 리뷰어 my_previous_items. 직전 리뷰 완료 버전의 미결 차단 항목 중 그 슬롯이 낸 것."""
+    def previous_items_of(self, lens: ReviewLens) -> list[ReviewItem]:
+        """SPOT_CHECK 리뷰어 my_previous_items. 직전 리뷰 완료 버전의 미결 차단 항목 중 그 리뷰어가 낸 것."""
         if self.last_reviewed_version is None:
             return []
-        return [item for item in self.open_blocking_items(self.last_reviewed_version) if item.reviewer_slot == slot]
+        return [item for item in self.open_blocking_items(self.last_reviewed_version) if self.reviewer_of(item) == lens]
 
-    def required_reviewers(self) -> list[AgentSlot]:
-        """FULL 은 배정된 두 슬롯, SPOT_CHECK 는 직전 리뷰 완료 버전에 본인 미결 항목이 남은 슬롯."""
-        slots = [assignment.slot for assignment in self.reviewer_assignments]
+    def checks_facts(self, lens: ReviewLens) -> bool:
+        """이 리뷰어가 웹 검색으로 사실을 확인하는지. 옛 글은 슬롯 리뷰어라 검색하지 않는다."""
+        return lens == ReviewLens.FACT_STRUCTURE and self.assignment_of(lens).slot is None
+
+    def required_reviewers(self) -> list[ReviewLens]:
+        """FULL 은 배정된 렌즈 전부, SPOT_CHECK 는 본인 미결 항목이 남은 렌즈다.
+
+        사실 확인 렌즈는 미결 항목이 없어도 SPOT_CHECK 를 받는다. 수정으로 들어온 새 주장을 확인하는 곳이 여기뿐이다.
+        """
+        lenses = [assignment.primary_lens for assignment in self.reviewer_assignments]
         if self.current_review_scope == ReviewScope.FULL:
-            return slots
-        return [slot for slot in slots if self.previous_items_of(slot)]
+            return lenses
+        return [lens for lens in lenses if self.previous_items_of(lens) or self.checks_facts(lens)]
 
-    def pending_reviewers(self) -> list[AgentSlot]:
-        """아직 응답하지 않은 필수 리뷰어. 서비스는 이 슬롯만 호출한다(재개하면 빠진 리뷰만)."""
+    def pending_reviewers(self) -> list[ReviewLens]:
+        """아직 응답하지 않은 필수 리뷰어. 서비스는 이 렌즈만 호출한다(재개하면 빠진 리뷰만)."""
         scope = self.current_review_scope
         responded = {
-            review.reviewer_slot
-            for review in self.reviews_of(self.current_version.version_number)
-            if review.scope == scope
+            review.lens for review in self.reviews_of(self.current_version.version_number) if review.scope == scope
         }
-        return [slot for slot in self.required_reviewers() if slot not in responded]
+        return [lens for lens in self.required_reviewers() if lens not in responded]
 
     def is_review_complete(self) -> bool:
         return not self.pending_reviewers()
@@ -425,8 +513,9 @@ class PostDraft(BaseModel):
     def deadlocked_items(self) -> list[ReviewItem]:
         """현재 버전의 교착 항목 (설계 04 문서 5절).
 
-        SPOT_CHECK 에서 resolved=False 이고, 이번 버전의 해소가 REJECTED_WITH_REASON 이며, CRITICAL 이고,
-        이전 버전에서 중재받지 않은 항목. 신규 CRITICAL 과 ACCEPTED 인데 미해소인 항목은 교착이 아니다.
+        SPOT_CHECK 에서 resolved=False 이고, 이전 버전에서 중재받지 않았으며, 이번 버전의 해소가 OUT_OF_SCOPE 이거나
+        (MAJOR 도 중재한다) CRITICAL 의 REJECTED_WITH_REASON 인 항목. 신규 CRITICAL 과 ACCEPTED 인데 미해소인 항목,
+        근거를 들어 기각한 MAJOR 는 교착이 아니다 (설계 07 문서 Q-14).
         """
         version = self.current_version
         earlier_arbitrated = {
@@ -440,10 +529,13 @@ class PostDraft(BaseModel):
                 if check.resolved or check.item_id in earlier_arbitrated:
                     continue
                 resolution = version.resolution_for(check.item_id)
-                if resolution is None or resolution.status != ResolutionStatus.REJECTED_WITH_REASON:
+                if resolution is None:
                     continue
                 item = self.find_item(check.item_id)
-                if item.severity == IssueSeverity.CRITICAL:
+                if resolution.status == ResolutionStatus.OUT_OF_SCOPE or (
+                    resolution.status == ResolutionStatus.REJECTED_WITH_REASON
+                    and item.severity == IssueSeverity.CRITICAL
+                ):
                     deadlocked.append(item)
         return deadlocked
 
@@ -498,6 +590,7 @@ class PostDraft(BaseModel):
         resolutions: list[ItemResolution],
         author_note: str,
         call_id: str,
+        model_id: str | None = None,
     ) -> DraftVersion:
         """작성자 응답을 새 버전으로 붙이고 VALIDATING 으로 간다 (03 문서 3행).
 
@@ -522,6 +615,7 @@ class PostDraft(BaseModel):
             resolutions=resolutions,
             author_note=author_note,
             call_id=call_id,
+            model_id=model_id,
         )
         self.versions.append(version)
         self.revision_cause = None
@@ -572,17 +666,17 @@ class PostDraft(BaseModel):
         if review.target_version != version_number or review.scope != scope:
             raise ValueError(f"review {review.review_id} is not a {scope} review of v{version_number}")
         if any(
-            existing.reviewer_slot == review.reviewer_slot and existing.scope == review.scope
+            existing.lens == review.lens and existing.scope == review.scope
             for existing in self.reviews_of(version_number)
         ):
             return
-        if review.reviewer_slot not in self.required_reviewers():
-            raise ValueError(f"slot {review.reviewer_slot} is not a required reviewer of v{version_number}")
-        assignment = self.assignment_of(review.reviewer_slot)
-        if (review.lens, review.secondary_lens) != (assignment.primary_lens, assignment.secondary_lens):
+        if review.lens not in self.required_reviewers():
+            raise ValueError(f"lens {review.lens} is not a required reviewer of v{version_number}")
+        assignment = self.assignment_of(review.lens)
+        if review.secondary_lens != assignment.secondary_lens:
             raise ValueError(f"review {review.review_id} lenses differ from the assignment")
         if scope == ReviewScope.SPOT_CHECK:
-            expected = {item.item_id for item in self.previous_items_of(review.reviewer_slot)}
+            expected = {item.item_id for item in self.previous_items_of(review.lens)}
             if {check.item_id for check in review.item_checks} != expected:
                 raise ValueError(f"review {review.review_id} must check exactly its previous blocking items")
         self.reviews.append(review)
@@ -601,7 +695,7 @@ class PostDraft(BaseModel):
         item = next((item for item in self.deadlocked_items() if item.item_id == arbitration.item_id), None)
         if item is None:
             raise ValueError(f"item {arbitration.item_id} is not deadlocked in v{version_number}")
-        if arbitration.arbiter_slot in (self.author_slot, item.reviewer_slot):
+        if arbitration.arbiter_slot is not None and arbitration.arbiter_slot in (self.author_slot, item.reviewer_slot):
             raise ValueError("arbiter must be neither the author nor the item's reviewer")
         self.arbitrations.append(arbitration)
 
@@ -620,8 +714,9 @@ class PostDraft(BaseModel):
             return
         self.last_reviewed_version = self.current_version.version_number
         match outcome.next_status:
-            case PostStatus.READY_TO_PUBLISH:
-                self.status = PostStatus.READY_TO_PUBLISH
+            case PostStatus.POST_REVIEW:
+                self.status = PostStatus.POST_REVIEW
+                self.post_review_stage = PostReviewStage.POLISH
             case PostStatus.REVISING:
                 self.revision_cause = RevisionCause.REVIEW
                 self.status = PostStatus.REVISING
@@ -629,6 +724,63 @@ class PostDraft(BaseModel):
                 if outcome.escalation_reason is None:  # EvaluationOutcome 검증기가 보장한다. 타입을 좁히려고 둔다
                     raise ValueError("escalation needs a reason")
                 self.escalate(outcome.escalation_reason)
+
+    def _require_stage(self, stage: PostReviewStage) -> None:
+        self._require(PostStatus.POST_REVIEW)
+        if self.post_review_stage != stage:
+            raise InvalidTransitionError(f"draft {self.draft_id} is at stage {self.post_review_stage}, not {stage}")
+
+    def _advance_post_review(self, stage: PostReviewStage) -> None:
+        self.post_review_stage = stage
+        if stage == PostReviewStage.DONE:
+            self.status = PostStatus.READY_TO_PUBLISH
+
+    def finish_polish(self, record: PolishRecord) -> None:
+        """패치 없이 다듬기를 끝낸다. 호출이 실패했거나 게이트에 떨어져 전부 버린 경우다. 새 버전을 만들지 않는다."""
+        self._require_stage(PostReviewStage.POLISH)
+        self.polish = record
+        self._advance_post_review(PostReviewStage.FINAL_READ)
+
+    def attach_polished_version(
+        self, *, content_markdown: str, section_ids: list[str], record: PolishRecord, call_id: str
+    ) -> DraftVersion:
+        """다듬은 본문을 통과한 새 버전으로 붙인다. 게이트는 호출자가 이미 돌렸고 리뷰는 다시 받지 않는다.
+
+        submit_version 은 DRAFTING 전용이고 pass_validation 은 재리뷰로 보내므로 이 전이를 따로 둔다.
+        """
+        self._require_stage(PostReviewStage.POLISH)
+        current = self.current_version
+        version = DraftVersion(
+            version_number=len(self.versions) + 1,
+            title=current.title,
+            summary=current.summary,
+            content_markdown=content_markdown,
+            section_ids=section_ids,
+            origin_cause=RevisionCause.POLISH,
+            passed_validation=True,
+            call_id=call_id,
+        )
+        self.versions.append(version)
+        self.approved_by = None
+        self.approved_at = None
+        self.polish = record
+        self._advance_post_review(PostReviewStage.FINAL_READ)
+        return version
+
+    def record_final_read(self, final_read: FinalRead) -> None:
+        """전체 읽기 결과. 차단 종류가 있으면 수정 루프가 아니라 사람에게 간다 (READY_TO_PUBLISH 에는 되돌릴 결정이 없다)."""
+        self._require_stage(PostReviewStage.FINAL_READ)
+        self.final_read = final_read
+        if final_read.is_blocking:
+            self.post_review_stage = PostReviewStage.DONE
+            self.escalate(EscalationReason.FINAL_READ_FLAGGED)
+        else:
+            self._advance_post_review(PostReviewStage.ASSESS_LEVEL)
+
+    def record_level_assessment(self, assessment: LevelAssessment) -> None:
+        self._require_stage(PostReviewStage.ASSESS_LEVEL)
+        self.level_assessment = assessment
+        self._advance_post_review(PostReviewStage.DONE)
 
     def escalate(self, reason: EscalationReason) -> None:
         """사람 판단 대기로 보낸다. 종결·ESCALATED·FAILED 에서는 할 수 없다."""
@@ -663,6 +815,7 @@ class PostDraft(BaseModel):
                 if not (instruction and instruction.strip()):
                     raise ValueError("REVISE needs an instruction")
                 self._reset_publishing()
+                self.level_assessment = None  # 사람이 고친 본문은 평가받지 않는다. 옛 평가를 라벨로 내보내지 않는다
                 self.human_instruction = instruction
                 self.revision_cause = RevisionCause.HUMAN
                 self.status = PostStatus.REVISING

@@ -31,7 +31,7 @@
 | 라운드(`PublishingRound`) | 파이프라인 실행 단위. 글 3편을 품는다 |
 | 슬롯(`AgentSlot`) | 라운드 안의 에이전트 자리. `A`, `B`, `C`. 모델 벤더와 분리된 식별자 |
 | 페르소나(`PersonaProfile`) | 작성자로서의 성향과 리뷰어로서의 평가 렌즈 묶음 |
-| 모델 바인딩(`ModelBinding`) | 슬롯에 실제 모델(벤더, 모델 ID, 파라미터)을 연결한 것 |
+| 모델 바인딩(`ModelBinding`) | 슬롯의 페르소나와 작성 모델. 라운드 응답의 계약이다. 호출별 모델은 라우트(`CallModel`)가 정한다(07 문서 D-51) |
 | 초안(`PostDraft`) | 글 한 편의 작업 단위. 버전과 리뷰를 품는 Aggregate Root |
 | 버전(`DraftVersion`) | 초안의 특정 시점 본문. v1, v2, v3 |
 | 리뷰(`PeerReview`) | 리뷰어 하나가 버전 하나에 낸 평가. `ReviewItem` 목록과 판정 |

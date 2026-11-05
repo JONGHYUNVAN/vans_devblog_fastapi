@@ -17,8 +17,11 @@ from app.models.enums import (
     EscalationReason,
     FailureCode,
     IssueSeverity,
+    PostLevel,
+    PostReviewStage,
     PostStatus,
     ResolutionStatus,
+    ReviewLens,
     RevisionCause,
     RoundAbortReason,
     RoundStatus,
@@ -27,8 +30,12 @@ from app.models.model_binding import ModelBinding
 from app.models.post_draft import (
     Arbitration,
     DraftVersion,
+    FactClaim,
     FailureRecord,
+    FinalRead,
+    LevelAssessment,
     PeerReview,
+    PolishRecord,
     Publication,
     PublicationIntent,
     ReviewAssignment,
@@ -41,7 +48,10 @@ from app.models.topic import CategoryOption, TopicProposal
 
 class RoundCreate(BaseModel):
     theme_keyword: str | None = None
-    bindings: dict[AgentSlot, ModelBinding] | None = Field(None, description="없으면 AGENT_SLOT_BINDINGS 설정을 쓴다")
+    bindings: dict[AgentSlot, ModelBinding] | None = Field(
+        None, description="슬롯의 페르소나와 작성 모델을 이 라운드만 바꾼다(A/B). 없으면 agent_routes 를 쓴다"
+    )
+    evidence: str | None = Field(None, description="실제 프로젝트 근거(git 이력, code-graph context, 측정 기록)")
 
 
 class EscalationDecision(BaseModel):
@@ -139,6 +149,11 @@ class DraftHistory(BaseModel):
     reviews: list[PeerReview]
     arbitrations: list[Arbitration]
     last_reviewed_version: int | None
+    post_review_stage: PostReviewStage | None
+    final_read: FinalRead | None
+    level_assessment: LevelAssessment | None
+    polish: PolishRecord | None
+    user_level: PostLevel | None
     publication_intent: PublicationIntent | None
     publication: Publication | None
     rejected_by: str | None
@@ -151,7 +166,8 @@ class ItemSummary(BaseModel):
     """사람용 지적 요약: 지적과 작성자의 마지막 해소, 중재 판정."""
 
     item_id: str
-    reviewer_slot: AgentSlot
+    reviewer_slot: AgentSlot | None
+    lens: ReviewLens
     section_id: str
     severity: IssueSeverity
     comment: str
@@ -177,6 +193,13 @@ class EscalationSummary(BaseModel):
     diff: str = Field(description="직전 버전 → 최종 버전 unified diff. 버전이 하나면 빈 문자열")
     open_blocking_items: list[ItemSummary]
     rejected_items: list[ItemSummary]
+    final_read: FinalRead | None = Field(description="발행 전 전체 읽기. 차단이면 FINAL_READ_FLAGGED, 나머지는 관찰")
+    unverifiable_claims: list[FactClaim] = Field(
+        description="사실 확인에서 확인하지 못한 주장. 막지 않고 사람에게 보인다"
+    )
+    polish: PolishRecord | None
+    polish_diff: str = Field(description="다듬기 전 → 다듬은 버전 unified diff. 다듬은 버전이 없으면 빈 문자열")
+    level_assessment: LevelAssessment | None
 
 
 class CallPublic(BaseModel):
@@ -186,7 +209,7 @@ class CallPublic(BaseModel):
     round_id: str
     draft_id: str | None
     kind: CallKind
-    slot: AgentSlot
+    slot: AgentSlot | None
     provider: str
     model_id: str
     target_version: int | None

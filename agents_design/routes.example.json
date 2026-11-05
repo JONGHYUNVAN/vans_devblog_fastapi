@@ -1,0 +1,84 @@
+[
+  {"_id": "SLOTS", "A": "architect", "B": "systems_engineer", "C": "troubleshooter"},
+
+  {"_id": "PROPOSE_TOPIC:architect", "candidates": [{"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 8000}]},
+  {"_id": "PROPOSE_TOPIC:systems_engineer", "candidates": [{"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000}]},
+  {"_id": "PROPOSE_TOPIC:troubleshooter", "candidates": [{"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 8000}]},
+
+  {"_id": "WRITE_DRAFT:architect", "candidates": [{"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 24000}]},
+  {"_id": "WRITE_DRAFT:systems_engineer", "candidates": [{"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 32768}]},
+  {"_id": "WRITE_DRAFT:troubleshooter", "candidates": [{"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 24000}]},
+
+  {"_id": "REVISE_DRAFT:architect", "candidates": [{"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 24000}]},
+  {"_id": "REVISE_DRAFT:systems_engineer", "candidates": [{"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 32768}]},
+  {"_id": "REVISE_DRAFT:troubleshooter", "candidates": [{"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 24000}]},
+
+  {
+    "_id": "REVIEW:LOGIC_READABILITY",
+    "candidates": [
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000}
+    ],
+    "note": "작성 벤더와 같으면 다음 후보로 넘어간다"
+  },
+  {
+    "_id": "REVIEW:FACT_STRUCTURE",
+    "candidates": [
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 16000}
+    ],
+    "note": "웹 검색 호출이다. 응답을 FACT_TRANSFORM 이 JSON 으로 옮긴다"
+  },
+  {
+    "_id": "REVIEW:CRITICAL_PRACTICAL",
+    "candidates": [
+      {"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000}
+    ]
+  },
+
+  {
+    "_id": "ARBITRATE",
+    "candidates": [
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 16000}
+    ],
+    "note": "작성 벤더와 그 지적을 낸 리뷰 벤더를 피한다. 세 벤더가 모두 있어야 언제나 고를 수 있다"
+  },
+  {
+    "_id": "FINAL_READ",
+    "candidates": [
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000},
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000}
+    ]
+  },
+  {
+    "_id": "ASSESS_LEVEL",
+    "candidates": [
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "medium", "max_output_tokens": 8000},
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "medium", "max_output_tokens": 16000}
+    ]
+  },
+  {
+    "_id": "POLISH_TONE",
+    "candidates": [
+      {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "medium", "max_output_tokens": 16000},
+      {"provider": "google", "model_id": "gemini-4-argon", "effort": "medium", "max_output_tokens": 16000}
+    ],
+    "note": "문단 단위 패치만 받는다. 작성 벤더를 피한다"
+  },
+  {
+    "_id": "POLISH_FORMAT",
+    "candidates": [{"provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000}],
+    "note": "줄바꿈만 고친다. 안전장치를 통과하지 못하면 원문을 둔다"
+  },
+  {
+    "_id": "FACT_TRANSFORM",
+    "candidates": [{"provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000}],
+    "note": "검색 호출의 글을 계약 JSON 으로 옮긴다. URL 은 코드가 검색 호출의 출처와 대조한다"
+  }
+]

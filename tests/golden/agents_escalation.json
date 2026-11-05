@@ -20,7 +20,8 @@
       "suggested_fix": null,
       "resolution": "REJECTED_WITH_REASON",
       "resolution_reason": "근거가 있다",
-      "arbitration": "UPHOLD_REVIEWER"
+      "arbitration": "UPHOLD_REVIEWER",
+      "lens": "FACT_STRUCTURE"
     }
   ],
   "rejected_items": [
@@ -33,7 +34,13 @@
       "suggested_fix": null,
       "resolution": "REJECTED_WITH_REASON",
       "resolution_reason": "근거가 있다",
-      "arbitration": "UPHOLD_REVIEWER"
+      "arbitration": "UPHOLD_REVIEWER",
+      "lens": "FACT_STRUCTURE"
     }
-  ]
+  ],
+  "final_read": null,
+  "unverifiable_claims": [],
+  "polish": null,
+  "polish_diff": "",
+  "level_assessment": null
 }

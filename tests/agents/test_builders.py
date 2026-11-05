@@ -18,6 +18,7 @@ from app.models.post_draft import PostDraft
 from app.models.publishing_round import LockedTopic, TopicAttempt
 from app.services.evaluation import evaluate
 from tests.factories import (
+    LENSES,
     MAX_ITERATIONS,
     MAX_VALIDATION_RETRIES,
     accept,
@@ -162,7 +163,7 @@ def test_review_input_is_blind_and_carries_author_tone_markers():
     draft = make_draft(A)
     write_next_version(draft)
 
-    result = build_review_input(draft, ROUND, C)
+    result = build_review_input(draft, ROUND, LENSES[C])
 
     assert (result.scope, result.lens, result.secondary_lens) == ("FULL", ReviewLens.CRITICAL_PRACTICAL, None)
     assert result.tone_preservation.author_tone_markers == PERSONAS["architect"].tone_markers
@@ -177,7 +178,7 @@ def test_spot_check_input_filters_items_and_resolutions_to_the_slot():
     draft, items = _revising_after_full(IssueSeverity.CRITICAL)
     write_next_version(draft, accept(*items))
 
-    result = build_spot_check_input(draft, ROUND, B)
+    result = build_spot_check_input(draft, ROUND, LENSES[B])
 
     assert result.previous_content == draft.versions[0].content_markdown
     assert result.current_content == draft.versions[1].content_markdown
@@ -185,6 +186,7 @@ def test_spot_check_input_filters_items_and_resolutions_to_the_slot():
     assert [resolution.item_id for resolution in result.resolutions] == [items[0].item_id]
     assert result.lens == ReviewLens.FACT_STRUCTURE
     assert "reviewer_slot" not in result.model_dump_json()  # 지적은 슬롯 필드 없이 넘긴다
+    assert result.topic.core_mechanism == draft.topic.core_mechanism  # 범위 밖 판단을 핵심 메커니즘에 비춰 본다
 
 
 def test_arbitrate_input_extracts_sections_reason_and_note():

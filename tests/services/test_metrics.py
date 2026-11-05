@@ -8,13 +8,19 @@ from app.models.enums import (
     FailureCode,
     IssueSeverity,
     PostStatus,
+    ResolutionStatus,
+    ReviewLens,
     ReviewVerdict,
 )
+from app.models.post_draft import ItemResolution, LevelAssessment, PolishRecord
 from app.services.evaluation import evaluate
-from app.services.metrics import compute_metrics
+from app.services.metrics import compute_metrics, density_of
 from tests.factories import (
+    LENSES,
     MAX_ITERATIONS,
+    accept,
     add_reviews,
+    finish_post_review,
     make_arbitration,
     make_call,
     make_draft,
@@ -72,8 +78,8 @@ def test_metrics_count_ratios_reasons_mismatches_gate_failures_and_tokens():
     assert (metrics.escalated_ratio, metrics.failed_ratio) == (0.333, 0.333)
     assert (metrics.escalation_reasons, metrics.failure_codes) == ({"PUBLISH_FAILED": 1}, {"BUDGET_EXCEEDED": 1})
     assert (metrics.arbitration_ratio, metrics.uphold_author_ratio) == (0.5, 1.0)
-    by_slot = {row.slot: (row.full_reviews, row.mismatched, row.ratio) for row in metrics.verdict_mismatch}
-    assert by_slot == {A: (1, 1, 1.0), B: (1, 0, 0.0), C: (2, 0, 0.0)}
+    by_lens = {row.lens: (row.full_reviews, row.mismatched, row.ratio) for row in metrics.verdict_mismatch}
+    assert by_lens == {LENSES[A]: (1, 1, 1.0), LENSES[B]: (1, 0, 0.0), LENSES[C]: (2, 0, 0.0)}
     assert (metrics.gate_failure_ratio, metrics.gate_failures) == (0.25, {"필수 앵커가 없다": 1})
     assert metrics.rejected_with_reason_ratio == 1.0
     assert metrics.tokens_by_kind == {"PROPOSE_TOPIC": 110, "WRITE_DRAFT": 4600, "REVIEW": 550}
@@ -94,6 +100,7 @@ def test_fast_track_needs_v1_as_the_publishable_version_and_gate_ratio_skips_pen
     write_next_version(rewritten)
     add_reviews(rewritten)
     rewritten.apply_evaluation(evaluate(rewritten, MAX_ITERATIONS))
+    finish_post_review(rewritten)
     # 방금 제출돼 VALIDATING 인 버전은 게이트를 거치지 않았다
     pending = make_draft(B, draft_id="round-1:B")
     pending.start_drafting(MAX_ITERATIONS)
@@ -115,3 +122,94 @@ def test_metrics_on_nothing_have_no_ratios():
         None,
     )
     assert all(row.ratio is None for row in metrics.verdict_mismatch)
+
+
+def test_density_counts_paragraphs_sentences_and_inline_code_outside_code_blocks():
+    markdown = (
+        "<!-- sec:intro -->\n첫 문장이다. 둘째 문장이다.\n\n"
+        "`a` `b` `c` `d` 를 쓴다.\n\n```python\nprint(1)\n```\n\n- 목록은 세지 않는다.\n"
+    )
+
+    density = density_of(markdown)
+
+    assert (density.paragraphs, density.dense_paragraphs) == (2, 1)
+    assert (density.sentences_per_paragraph, density.inline_code_per_paragraph) == (1.5, 2.0)
+    assert density.code_chars == len("print(1)\n")
+    assert density.chars == len(markdown)
+
+
+def test_density_rows_report_growth_between_versions():
+    draft = make_draft(A, draft_id="round-1:A")
+    write_next_version(draft)
+    draft.versions[0].content_markdown = "본문" * 50
+    add_reviews(draft, {B: [IssueSeverity.CRITICAL]})
+    draft.apply_evaluation(evaluate(draft, MAX_ITERATIONS))
+    write_next_version(draft, accept(*draft.open_blocking_items(1)))
+    draft.versions[1].content_markdown = "본문" * 75
+
+    [first, second] = compute_metrics([draft], []).density
+
+    assert (first.version_number, first.growth_ratio) == (1, None)
+    assert (second.version_number, second.growth_ratio) == (2, 0.5)
+
+
+def test_out_of_scope_counts_as_retained_and_has_its_own_ratio():
+    draft = make_draft(A, draft_id="round-1:A")
+    write_next_version(draft)
+    add_reviews(draft, {B: [IssueSeverity.MAJOR, IssueSeverity.CRITICAL]})
+    draft.apply_evaluation(evaluate(draft, MAX_ITERATIONS))
+    major, critical = draft.open_blocking_items(1)
+    write_next_version(
+        draft,
+        [
+            ItemResolution(item_id=major.item_id, status=ResolutionStatus.OUT_OF_SCOPE, reason="범위 밖"),
+            *accept(critical),
+        ],
+    )
+
+    metrics = compute_metrics([draft], [])
+
+    assert (metrics.rejected_with_reason_ratio, metrics.out_of_scope_ratio) == (0.5, 0.5)
+
+
+def test_tokens_are_also_grouped_by_model_and_lens_and_truncations_are_counted():
+    review = make_call(call_id="c1", kind=CallKind.REVIEW, prompt_tokens=10, completion_tokens=5)
+    review.lens = ReviewLens.FACT_STRUCTURE
+    review.model_binding = review.model_binding.model_copy(update={"provider": "google", "model_id": "gemini-4-argon"})
+    truncated = make_call(call_id="c2", prompt_tokens=1, completion_tokens=1)
+    truncated.error = "truncated: max_tokens at max_output_tokens=1000"
+
+    metrics = compute_metrics([], [review, truncated])
+
+    assert metrics.tokens_by_model == {"google/gemini-4-argon": 15, "fake/fake-1": 2}
+    assert metrics.tokens_by_lens == {"FACT_STRUCTURE": 15}
+    assert metrics.truncated_calls == 1
+
+
+def test_level_agreement_compares_the_assessment_with_the_user_label():
+    def labeled(slot, assessed, user):
+        draft = make_draft(slot, draft_id=f"round-1:{slot}", user_level=user)
+        draft.level_assessment = LevelAssessment(target_version=1, level=assessed, criteria_version="v1", call_id="c")
+        return draft
+
+    metrics = compute_metrics([labeled(A, 300, 300), labeled(B, 200, 100), labeled(C, 300, 200)], [])
+
+    assert metrics.level_agreement.pairs == 3
+    assert metrics.level_agreement.exact_ratio == 0.333
+    assert metrics.level_agreement.basic_vs_advanced_ratio == 0.667
+
+
+def test_polished_version_does_not_break_fast_track():
+    draft = make_draft(A, draft_id="round-1:A")
+    write_next_version(draft)
+    add_reviews(draft)
+    draft.apply_evaluation(evaluate(draft, MAX_ITERATIONS))
+    draft.attach_polished_version(
+        content_markdown="다듬은 본문", section_ids=[], record=PolishRecord(base_version=1, applied=1), call_id="c"
+    )
+    finish_post_review(draft)
+
+    metrics = compute_metrics([draft], [])
+
+    assert metrics.fast_track_ratio == 1.0
+    assert metrics.polish_applied == 1

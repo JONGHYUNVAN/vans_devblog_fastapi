@@ -88,6 +88,10 @@ class LLMRetriesExhaustedError(AppError):
     error = "LLM retries exhausted"
 
 
+class LLMOutputTruncatedError(LLMRetriesExhaustedError):
+    """벤더가 출력 한도에서 응답을 잘랐고 한도를 더 올릴 수 없다. 글은 FAILED(OUTPUT_TRUNCATED)."""
+
+
 class BudgetExceededError(AppError):
     """글 소프트 예산 초과. 사용량 합계 + 추정치가 token_limit 을 넘어 호출하지 않았다 (설계 07 문서 D-33)."""
 

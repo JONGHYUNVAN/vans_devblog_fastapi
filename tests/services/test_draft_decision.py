@@ -160,3 +160,16 @@ async def test_discard_releases_registry_and_rejects_non_failed_drafts():
 
 def test_repository_type_is_the_real_one():
     assert isinstance(PipelineHarness().decisions._drafts, PostDraftRepository)  # noqa: SLF001
+
+
+async def test_label_stores_a_valid_level_and_refuses_anything_else():
+    # 틀린 값이 저장되면 글을 읽을 때마다 실패해 러너 스캔이 멈춘다
+    harness = PipelineHarness()
+    await harness.seed_round()
+
+    draft = await harness.decisions.label_level("round-1:A", 300)
+    assert draft.user_level == 300
+
+    with pytest.raises(InvalidRequestError):
+        await harness.decisions.label_level("round-1:A", 350)
+    assert (await harness.draft(AgentSlot.A)).user_level == 300

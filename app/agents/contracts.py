@@ -9,7 +9,18 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, field_validator
 
 from app.agents.personas import PersonaProfile
-from app.models.enums import ArbitrationOutcome, IssueSeverity, ReviewLens, ReviewVerdict
+from app.models.enums import (
+    ArbitrationOutcome,
+    ClaimStatus,
+    ClaimType,
+    FinalReadKind,
+    IssueSeverity,
+    PostLevel,
+    ResolutionStatus,
+    ReviewLens,
+    ReviewVerdict,
+)
+from app.models.level import LevelCriteria
 from app.models.post_draft import ItemCheck, ItemResolution, ReviewItem, VerificationChecklist
 from app.models.sections import REQUIRED_SECTIONS, normalize_section_id
 from app.models.topic import CategoryOption, TopicProposal
@@ -67,6 +78,8 @@ class ProposeTopicInput(BaseModel):
     attempt_number: int
     conflict_feedback: str | None
     categories: list[CategoryOption]
+    level_criteria: LevelCriteria
+    evidence: str | None = None  # 라운드에 준 실제 근거. 있으면 그 기록에서 주제를 찾는다
 
 
 class ProposeTopicOutput(BaseModel):
@@ -80,6 +93,7 @@ class WriteDraftInput(BaseModel):
     persona: PersonaProfile
     topic: TopicProposal
     structure_rules: StructureRules
+    evidence: str | None = None  # 실제 프로젝트 근거. 경험담은 이 안의 사실로만 쓴다
 
 
 class DraftOutput(BaseModel):
@@ -114,6 +128,7 @@ class ReviseDraftInput(BaseModel):
     human_instruction: str | None = None  # 있으면 최우선이고 resolutions 는 비워도 된다
     iteration: int
     max_iterations: int
+    evidence: str | None = None
 
 
 class RevisionOutput(BaseModel):
@@ -134,10 +149,23 @@ class TopicForReviewer(BaseModel):
     audience: str
     keywords: list[str]
     outline: list[str]
+    core_mechanism: str
+    out_of_scope: list[str]
+    target_level: PostLevel | None
+    prerequisites: str
 
     @classmethod
     def from_topic(cls, topic: TopicProposal) -> Self:
-        return cls(title=topic.title, audience=topic.audience, keywords=topic.keywords, outline=topic.outline)
+        return cls(
+            title=topic.title,
+            audience=topic.audience,
+            keywords=topic.keywords,
+            outline=topic.outline,
+            core_mechanism=topic.core_mechanism,
+            out_of_scope=topic.out_of_scope,
+            target_level=topic.target_level,
+            prerequisites=topic.prerequisites,
+        )
 
 
 class ReviewItemForReviewer(BaseModel):
@@ -195,6 +223,7 @@ class SpotCheckInput(BaseModel):
     scope: Literal["SPOT_CHECK"] = "SPOT_CHECK"
     lens: ReviewLens
     secondary_lens: ReviewLens | None
+    topic: TopicForReviewer  # 작성자의 범위 밖 판단을 핵심 메커니즘에 비춰 본다
     previous_content: str
     current_content: str
     my_previous_items: list[ReviewItemForReviewer]  # 직전 리뷰 완료 버전의 open_blocking_items 중 본인이 낸 항목
@@ -215,10 +244,164 @@ class ArbitrateInput(BaseModel):
     item: ReviewItemForReviewer  # 평가 렌즈는 item.lens 하나만 쓴다
     section_before: str
     section_after: str
+    dispute_kind: ResolutionStatus  # REJECTED_WITH_REASON(지적이 틀렸다) | OUT_OF_SCOPE(글의 범위 밖이다)
     author_rejection_reason: str
     reviewer_unresolved_note: str
+    core_mechanism: str
+    out_of_scope: list[str]
+    scope_declaration: str  # 본문의 범위 선언 섹션(tradeoff, 없으면 conclusion)
+    search_evidence: str | None = None  # 사실 확인 지적의 분쟁이면 중재자가 검색해 모은 근거
+
+
+class ArbitrateSearchInput(BaseModel):
+    """사실 확인 지적의 분쟁. 판정 전에 근거만 검색한다. 응답은 글이다."""
+
+    item: ReviewItemForReviewer
+    section_after: str
+    author_rejection_reason: str
 
 
 class ArbitrateOutput(BaseModel):
     outcome: ArbitrationOutcome
     reasoning: str = Field(max_length=800)
+
+
+# ── FACT_CHECK (사실 확인 렌즈: 검색 호출 → 변환 호출) ──────────────────
+
+
+class LinkStatus(BaseModel):
+    """본문 링크의 응답 코드. 네트워크 결과라 게이트에 넣지 않고 확인 입력으로만 준다. None 은 연결 실패다."""
+
+    url: str
+    status: int | None
+
+
+class FactCheckInput(BaseModel):
+    """검색 호출 입력. 응답은 글과 출처다. 다음 변환 호출이 계약 JSON 으로 옮긴다."""
+
+    scope: Literal["FULL", "SPOT_CHECK"]
+    lens: ReviewLens
+    topic: TopicForReviewer
+    content_markdown: str
+    changed_section_ids: list[
+        str
+    ]  # SPOT_CHECK 에서 주장을 뽑을 섹션. 비면 새로 뽑지 않는다. FULL 은 본문 전체라 쓰지 않는다
+    known_claims: list[str] = Field(
+        default_factory=list
+    )  # 이전 버전에서 이미 확인한 주장. 중재가 끝낸 지적을 되살리지 않는다
+    my_previous_items: list[ReviewItemForReviewer]
+    resolutions: list[ItemResolution]
+    link_status: list[LinkStatus]
+    tone_preservation: TonePreservationRule
+
+
+class CitationRef(BaseModel):
+    url: str
+    title: str = ""
+
+
+class FactTransformInput(BaseModel):
+    scope: Literal["FULL", "SPOT_CHECK"]
+    lens: ReviewLens
+    section_ids: list[str]
+    expected_item_ids: list[str]  # SPOT_CHECK 의 item_checks 대상
+    verification_text: str
+    citations: list[CitationRef]
+
+
+class FactClaimOutput(BaseModel):
+    section_id: str
+    claim_type: ClaimType
+    claim: str
+    status: ClaimStatus
+    source_url: str | None = None
+    note: str = ""
+
+    @field_validator("section_id")
+    @classmethod
+    def _normalize_section_id(cls, value: str) -> str:
+        return normalize_section_id(value)
+
+
+class FactCheckOutput(ReviewOutput):
+    """FULL. items 는 사실이 아닌 구조 지적이고, 주장의 심각도는 코드가 정한다."""
+
+    claims: list[FactClaimOutput]
+
+
+class FactSpotCheckOutput(SpotCheckOutput):
+    claims: list[FactClaimOutput]
+
+
+# ── FINAL_READ ─────────────────────────────────────────────────────────
+
+
+class FinalReadInput(BaseModel):
+    title: str
+    topic: TopicForReviewer
+    content_markdown: str
+
+
+class FinalReadFindingOutput(BaseModel):
+    kind: FinalReadKind
+    section_id: str
+    quote: str = Field(min_length=1)
+    comment: str
+
+    @field_validator("section_id")
+    @classmethod
+    def _normalize_section_id(cls, value: str) -> str:
+        return normalize_section_id(value)
+
+
+class FinalReadOutput(BaseModel):
+    findings: list[FinalReadFindingOutput]
+    overall: str = Field(max_length=1000)
+
+
+# ── ASSESS_LEVEL ───────────────────────────────────────────────────────
+
+
+class AssessLevelInput(BaseModel):
+    """목표 수준은 주지 않는다. 모델이 자기 목표를 그대로 돌려주면 평가가 아니다."""
+
+    title: str
+    content_markdown: str
+    level_criteria: LevelCriteria
+
+
+class LevelEvidenceOutput(BaseModel):
+    criterion: str
+    quote: str = Field(min_length=1)
+
+
+class AssessLevelOutput(BaseModel):
+    level: PostLevel
+    evidence: list[LevelEvidenceOutput] = Field(min_length=1)
+    reasoning: str = Field(max_length=1000)
+
+
+# ── POLISH ─────────────────────────────────────────────────────────────
+
+
+class ParagraphForPolish(BaseModel):
+    index: int
+    text: str
+
+
+class PolishFormatInput(BaseModel):
+    paragraphs: list[ParagraphForPolish]
+
+
+class PolishToneInput(BaseModel):
+    paragraphs: list[ParagraphForPolish]
+    tone_markers: list[str]
+
+
+class ParagraphPatch(BaseModel):
+    index: int
+    text: str
+
+
+class PolishOutput(BaseModel):
+    patches: list[ParagraphPatch]

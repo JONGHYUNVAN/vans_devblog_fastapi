@@ -46,9 +46,6 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     google_api_key: SecretStr | None = None
     xai_api_key: SecretStr | None = None
-    # 슬롯 바인딩. JSON 문자열. 예: {"A": {"provider": "anthropic", "model_id": "...", "persona_id": "architect", "max_output_tokens": 16000}, ...}
-    # 원문 그대로 둔다. 슬롯·ModelBinding 검증은 RoundService.create_round 가 한다(core 는 models 를 import 하지 않는다)
-    agent_slot_bindings: dict[str, Any] = {}
     post_be_url: str = ""  # vans_story_be_post. 카테고리 조회·발행
     user_service_url: str = ""  # vans_story_be. 발행 계정 로그인 (설계 07 문서 D-40)
     # 벤더별 발행 계정(관리자). 글을 쓴 슬롯의 벤더 계정이 게시글 작성자가 된다 (D-45)
@@ -69,13 +66,14 @@ class Settings(BaseSettings):
     topic_title_overlap: float = 0.5
     topic_avoid_lookback_days: int = 180
     publish_requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다
+    # 평가 수준을 CreatePostDto.level 로 보낸다. Post BE 는 DTO 에 없는 필드를 400 으로 거부하므로 그쪽 배포 뒤에 켠다
+    publish_post_level: bool = False
     draft_min_chars: int = 4000  # 본문 길이 범위 (설계 07 문서 Q-08)
     draft_max_chars: int = 20000
-    review_temperature: float = 0.2  # REVIEW, ARBITRATE. 작성 호출은 ModelBinding.temperature
     review_timeout_s: int = 300
     draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
     scan_interval_s: int = 15
-    prompt_version: str = "v2"
+    prompt_version: str = "v3"
     llm_concurrency_per_provider: int = 2
 
     # 코드 그래프 (code_graph_design/README.md G-04·G-11). 저장소 키 → 저장소 설정. JSON 문자열, 예시는 code_graph_design/repos.example.json

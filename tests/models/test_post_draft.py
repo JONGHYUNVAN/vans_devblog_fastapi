@@ -12,7 +12,9 @@ from app.models.enums import (
     EscalationDecisionKind,
     EscalationReason,
     FailureCode,
+    FinalReadKind,
     IssueSeverity,
+    PostReviewStage,
     PostStatus,
     ResolutionStatus,
     ReviewLens,
@@ -22,15 +24,19 @@ from app.models.enums import (
 )
 from app.models.post_draft import (
     EvaluationOutcome,
+    FinalRead,
+    FinalReadFinding,
     ItemCheck,
     ItemResolution,
+    LevelAssessment,
     PeerReview,
+    PolishRecord,
     PostDraft,
     Publication,
     ReviewAssignment,
     ReviewItem,
     VerificationChecklist,
-    build_review_assignments,
+    build_lens_assignments,
 )
 from app.services.evaluation import evaluate
 from tests.factories import (
@@ -40,6 +46,8 @@ from tests.factories import (
     MAX_VALIDATION_RETRIES,
     accept,
     add_reviews,
+    build_review_assignments,
+    finish_post_review,
     make_arbitration,
     make_draft,
     make_review,
@@ -91,10 +99,16 @@ def _publication(version: int = 1) -> Publication:
     )
 
 
-def _ready() -> PostDraft:
+def _in_post_review() -> PostDraft:
     draft = _in_review()
     add_reviews(draft)
     _apply(draft)
+    return draft
+
+
+def _ready() -> PostDraft:
+    draft = _in_post_review()
+    finish_post_review(draft)
     return draft
 
 
@@ -117,9 +131,10 @@ def test_build_review_assignments_matches_design_table():
     ]
 
 
-def test_build_review_assignments_raises_when_primary_lenses_repeat():
-    with pytest.raises(ValueError, match="distinct primary lens"):
-        build_review_assignments(A, LENSES | {C: ReviewLens.FACT_STRUCTURE})
+def test_draft_rejects_repeated_primary_lenses():
+    repeated = [ReviewAssignment(primary_lens=ReviewLens.FACT_STRUCTURE) for _ in range(2)]
+    with pytest.raises(ValidationError, match="distinct primary lenses"):
+        make_draft(reviewer_assignments=repeated)
 
 
 def test_draft_rejects_author_as_reviewer():
@@ -375,14 +390,14 @@ def test_add_review_keeps_status_until_complete_and_ignores_duplicates():
 
     assert draft.status == PostStatus.IN_REVIEW
     assert len(draft.reviews) == 1
-    assert draft.pending_reviewers() == [C]
+    assert draft.pending_reviewers() == [LENSES[C]]
     with pytest.raises(InvalidTransitionError, match="every response"):
-        draft.apply_evaluation(EvaluationOutcome(next_status=PostStatus.READY_TO_PUBLISH))
+        draft.apply_evaluation(EvaluationOutcome(next_status=PostStatus.POST_REVIEW))
 
 
 def test_add_review_raises_when_slot_is_not_a_reviewer():
     draft = _in_review()
-    review = make_review(draft, B).model_copy(update={"reviewer_slot": A})
+    review = make_review(draft, B).model_copy(update={"lens": ReviewLens.LOGIC_READABILITY})
 
     with pytest.raises(ValueError, match="not a required reviewer"):
         draft.add_review(review)
@@ -396,13 +411,14 @@ def test_add_review_raises_when_review_targets_other_version():
         draft.add_review(review)
 
 
-def test_full_review_with_only_minor_items_is_ready_to_publish():
+def test_full_review_with_only_minor_items_goes_to_post_review():
     draft = _in_review()
     add_reviews(draft, {B: [MINOR], C: [IssueSeverity.NITPICK]})
 
     _apply(draft)
 
-    assert draft.status == PostStatus.READY_TO_PUBLISH
+    assert draft.status == PostStatus.POST_REVIEW
+    assert draft.post_review_stage == PostReviewStage.POLISH
     assert draft.last_reviewed_version == 1
 
 
@@ -454,9 +470,9 @@ def test_human_revision_at_max_iterations_still_drafts():
 def test_spot_check_only_asks_reviewers_with_open_items():
     draft, items = _in_spot_check()
 
-    assert draft.required_reviewers() == [B]
-    assert draft.previous_items_of(B) == items
-    assert draft.previous_items_of(C) == []
+    assert draft.required_reviewers() == [LENSES[B]]
+    assert draft.previous_items_of(LENSES[B]) == items
+    assert draft.previous_items_of(LENSES[C]) == []
 
 
 def test_spot_check_raises_when_item_checks_do_not_match_previous_items():
@@ -466,13 +482,13 @@ def test_spot_check_raises_when_item_checks_do_not_match_previous_items():
         draft.add_review(make_review(draft, B, checks={}))
 
 
-def test_spot_check_with_all_items_resolved_is_ready_to_publish():
+def test_spot_check_with_all_items_resolved_goes_to_post_review():
     draft, _ = _in_spot_check()
     add_reviews(draft)
 
     _apply(draft)
 
-    assert draft.status == PostStatus.READY_TO_PUBLISH
+    assert draft.status == PostStatus.POST_REVIEW
     assert draft.last_reviewed_version == 2
 
 
@@ -546,14 +562,14 @@ def test_arbitration_waits_for_every_deadlocked_item():
         evaluate(draft, MAX_ITERATIONS)
 
 
-def test_all_upheld_author_with_nothing_else_open_is_ready_to_publish():
+def test_all_upheld_author_with_nothing_else_open_goes_to_post_review():
     draft, items = _in_arbitration(CRITICAL, CRITICAL)
     for item in items:
         draft.add_arbitration(make_arbitration(draft, item, ArbitrationOutcome.UPHOLD_AUTHOR))
 
     _apply(draft)
 
-    assert draft.status == PostStatus.READY_TO_PUBLISH
+    assert draft.status == PostStatus.POST_REVIEW
     assert draft.open_blocking_items(2) == []
 
 
@@ -568,7 +584,7 @@ def test_upheld_reviewer_item_stays_open_into_next_spot_check():
     write_next_version(draft, accept(*items))
 
     assert draft.status == PostStatus.IN_SPOT_CHECK
-    assert draft.previous_items_of(B) == items
+    assert draft.previous_items_of(LENSES[B]) == items
 
 
 def test_item_is_arbitrated_only_once():
@@ -715,7 +731,7 @@ def test_retry_from_failed_returns_to_stage_and_keeps_saved_reviews():
     draft.retry_from_failed(token_limit=200_000)
 
     assert draft.status == PostStatus.IN_REVIEW
-    assert draft.pending_reviewers() == [C]
+    assert draft.pending_reviewers() == [LENSES[C]]
     assert draft.token_limit == 200_000
     assert draft.failure is None
 
@@ -884,3 +900,177 @@ def test_reject_by_abort_raises_when_published():
 def test_transition_raises_when_status_does_not_allow_it(status, action):
     with pytest.raises(InvalidTransitionError):
         action(make_draft(status=status))
+
+
+# ---------- 범위 밖 판단과 MAJOR 중재 ----------
+
+
+def _out_of_scope(*items: ReviewItem) -> list[ItemResolution]:
+    return [
+        ItemResolution(item_id=item.item_id, status=ResolutionStatus.OUT_OF_SCOPE, reason="글의 범위 밖이다")
+        for item in items
+    ]
+
+
+def test_out_of_scope_needs_a_reason():
+    with pytest.raises(ValidationError, match="without a reason"):
+        ItemResolution(item_id="x", status=ResolutionStatus.OUT_OF_SCOPE)
+
+
+def test_major_disputed_as_out_of_scope_is_arbitrated_but_rejected_major_is_not():
+    draft, items = _revising_after_full(MAJOR)
+    write_next_version(draft, _out_of_scope(*items))
+    add_reviews(draft, resolved={item.item_id: False for item in items})
+    assert draft.pending_arbitration_items() == items
+
+    other, other_items = _in_spot_check(MAJOR, rejected=True)
+    add_reviews(other, resolved={item.item_id: False for item in other_items})
+    assert other.pending_arbitration_items() == []
+
+
+def test_uphold_author_closes_out_of_scope_major():
+    draft, items = _revising_after_full(MAJOR)
+    write_next_version(draft, _out_of_scope(*items))
+    add_reviews(draft, resolved={item.item_id: False for item in items})
+    _apply(draft)
+    assert draft.status == PostStatus.IN_ARBITRATION
+
+    draft.add_arbitration(make_arbitration(draft, items[0], ArbitrationOutcome.UPHOLD_AUTHOR))
+    _apply(draft)
+
+    assert draft.status == PostStatus.POST_REVIEW
+    assert draft.open_blocking_items(2) == []
+
+
+# ---------- 렌즈당 모델 하나 ----------
+
+
+def test_lens_assignments_give_every_lens_a_dedicated_review():
+    draft = make_draft(reviewer_assignments=build_lens_assignments())
+    write_next_version(draft)
+
+    assert draft.pending_reviewers() == list(ReviewLens)
+    assert {assignment.secondary_lens for assignment in draft.reviewer_assignments} == {None}
+    assert draft.checks_facts(ReviewLens.FACT_STRUCTURE) is True
+
+
+def test_fact_lens_is_spot_checked_even_without_open_items():
+    # 수정으로 들어온 새 주장을 확인하는 곳이 사실 확인 렌즈의 SPOT_CHECK 뿐이다
+    draft = make_draft(reviewer_assignments=build_lens_assignments())
+    write_next_version(draft)
+    add_reviews(draft, {C: [CRITICAL]})
+    _apply(draft)
+    write_next_version(draft, accept(*draft.open_blocking_items(1)))
+
+    assert draft.required_reviewers() == [ReviewLens.FACT_STRUCTURE, ReviewLens.CRITICAL_PRACTICAL]
+
+
+def test_old_slot_draft_does_not_check_facts():
+    assert _in_review().checks_facts(ReviewLens.FACT_STRUCTURE) is False
+
+
+# ---------- 발행 전 단계 ----------
+
+
+def _final_read(*kinds: FinalReadKind) -> FinalRead:
+    findings = [FinalReadFinding(kind=kind, section_id="body-1", quote="본문", comment="c") for kind in kinds]
+    return FinalRead(target_version=1, findings=findings, overall="총평", call_id="call-read")
+
+
+def _assessment() -> LevelAssessment:
+    return LevelAssessment(target_version=1, level=300, criteria_version="v1", call_id="call-level")
+
+
+def test_post_review_runs_polish_read_assess_then_ready():
+    draft = _in_post_review()
+
+    draft.finish_polish(PolishRecord(base_version=1))
+    assert draft.post_review_stage == PostReviewStage.FINAL_READ
+    draft.record_final_read(_final_read(FinalReadKind.OBSERVATION))
+    assert draft.post_review_stage == PostReviewStage.ASSESS_LEVEL
+    assert draft.status == PostStatus.POST_REVIEW
+    draft.record_level_assessment(_assessment())
+
+    assert draft.status == PostStatus.READY_TO_PUBLISH
+    assert draft.post_review_stage == PostReviewStage.DONE
+    assert draft.level_assessment is not None and draft.level_assessment.level == 300
+
+
+def test_post_review_stage_cannot_be_skipped():
+    draft = _in_post_review()
+
+    with pytest.raises(InvalidTransitionError, match="at stage"):
+        draft.record_final_read(_final_read())
+
+
+@pytest.mark.parametrize("kind", [FinalReadKind.BODY_CODE_CONTRADICTION, FinalReadKind.CORE_MECHANISM_MISSING])
+def test_blocking_final_read_escalates_without_assessment(kind):
+    draft = _in_post_review()
+    draft.finish_polish(PolishRecord(base_version=1))
+
+    draft.record_final_read(_final_read(FinalReadKind.OBSERVATION, kind))
+
+    assert draft.status == PostStatus.ESCALATED
+    assert draft.escalation_reason == EscalationReason.FINAL_READ_FLAGGED
+    assert draft.level_assessment is None
+
+
+def test_escalation_decisions_work_on_final_read_flag():
+    draft = _in_post_review()
+    draft.finish_polish(PolishRecord(base_version=1))
+    draft.record_final_read(_final_read(FinalReadKind.CORE_MECHANISM_MISSING))
+
+    draft.resolve_escalation(EscalationDecisionKind.REVISE, decided_by="admin", instruction="모듈 코드를 넣어라")
+    draft.start_drafting(MAX_ITERATIONS)
+    submit(draft)
+    draft.pass_validation()
+
+    assert draft.status == PostStatus.READY_TO_PUBLISH  # 사람이 고친 본문은 이 단계를 다시 타지 않는다
+
+
+def test_failed_post_review_resumes_at_the_same_stage():
+    draft = _in_post_review()
+    draft.finish_polish(PolishRecord(base_version=1))
+    draft.mark_failed(FailureCode.LLM_RETRIES_EXHAUSTED, "읽기 실패")
+
+    draft.retry_from_failed()
+
+    assert (draft.status, draft.post_review_stage) == (PostStatus.POST_REVIEW, PostReviewStage.FINAL_READ)
+
+
+def test_polished_version_passes_without_review_and_is_not_counted_as_authored():
+    draft = _in_post_review()
+
+    version = draft.attach_polished_version(
+        content_markdown="다듬은 본문",
+        section_ids=["intro"],
+        record=PolishRecord(base_version=1, applied=1),
+        call_id="call-polish",
+    )
+
+    assert (version.version_number, version.origin_cause, version.passed_validation) == (2, RevisionCause.POLISH, True)
+    assert version.title == draft.versions[0].title
+    assert draft.publishable_version == version
+    assert draft.authored_publishable_version == draft.versions[0]
+    assert draft.last_reviewed_version == 1
+    assert draft.post_review_stage == PostReviewStage.FINAL_READ
+
+
+def test_revise_drops_the_assessment_of_the_old_body():
+    draft = _ready()
+    draft.level_assessment = _assessment()
+    draft.escalate(EscalationReason.PUBLISH_FAILED)
+
+    draft.resolve_escalation(EscalationDecisionKind.REVISE, decided_by="admin", instruction="고쳐라")
+
+    assert draft.level_assessment is None
+
+
+def test_old_stored_draft_without_new_fields_still_loads():
+    stored = _in_review().model_dump(by_alias=True)
+    for field in ("post_review_stage", "final_read", "level_assessment", "polish", "user_level"):
+        del stored[field]
+    for field in ("core_mechanism", "out_of_scope", "target_level", "prerequisites"):
+        del stored["topic"][field]
+
+    assert PostDraft.model_validate(stored).topic.core_mechanism == ""

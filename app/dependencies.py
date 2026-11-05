@@ -19,6 +19,7 @@ from pymongo.database import Database
 from app.clients.es import create_es, is_es_reachable
 from app.clients.github import GitHubClient
 from app.clients.kis.stream import KISStreamManager
+from app.clients.link_checker import LinkChecker
 from app.clients.llm.anthropic import AnthropicClient
 from app.clients.llm.base import LLMClient
 from app.clients.llm.google import GoogleClient
@@ -33,6 +34,7 @@ from app.core.exceptions import AuthenticationError
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.code_graph import CodeGraphRepository
+from app.repositories.model_route import ModelRouteRepository
 from app.repositories.popular_search import PopularSearchRepository
 from app.repositories.post import PostRepository
 from app.repositories.post_draft import PostDraftRepository
@@ -245,8 +247,14 @@ async def ensure_agent_indexes(database: AsyncDatabase) -> None:
     await TopicRegistryRepository(database).ensure_indexes()
 
 
+def available_providers(settings: Settings) -> list[str]:
+    """API 키가 있는 벤더. 라운드 스냅샷이 키 없는 후보를 뺀다."""
+    keys = {"anthropic": settings.anthropic_api_key, "google": settings.google_api_key, "xai": settings.xai_api_key}
+    return [provider for provider, key in keys.items() if key]
+
+
 def build_llm_registry(settings: Settings) -> LLMClientRegistry:
-    """키가 있는 벤더만 넣는다. 바인딩이 키 없는 provider 를 가리키면 호출이 KeyError 라 러너가 INTERNAL_ERROR 로 멈춘다."""
+    """키가 있는 벤더만 넣는다. 라운드 생성 뒤 키가 사라지면 호출이 KeyError 라 러너가 INTERNAL_ERROR 로 멈춘다."""
     clients: dict[str, LLMClient] = {}
     if settings.anthropic_api_key:
         clients["anthropic"] = AnthropicClient(settings.anthropic_api_key.get_secret_value())
@@ -303,6 +311,8 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
         PostDraftRepository(database),
         TopicRegistryRepository(database),
         publisher=build_publisher(settings),
+        route_repository=ModelRouteRepository(database),
+        providers=available_providers(settings),
     )
 
 
@@ -327,7 +337,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     draft_repository = PostDraftRepository(database)
     topic_registry_repository = TopicRegistryRepository(database)
     publisher = build_publisher(settings)
-    round_service = RoundService(round_repository, draft_repository, topic_registry_repository, publisher=publisher)
+    round_service = build_round_service(database, settings)
     agent_call_service = build_agent_call_service(database, settings)
     draft_publisher: DraftPublisher = (
         PublishingService(
@@ -358,6 +368,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             gate=ValidationGate(min_chars=settings.draft_min_chars, max_chars=settings.draft_max_chars),
             publisher=draft_publisher,
             settings=settings,
+            link_checker=LinkChecker(),
         ),
         settings=settings,
     )

@@ -1,6 +1,15 @@
 """섹션 앵커 찾기·지우기·자르기 테스트."""
 
-from app.models.sections import find_anchors, section_anchor, section_text, strip_anchors
+from app.models.sections import (
+    REQUIRED_SECTIONS,
+    changed_sections,
+    find_anchors,
+    markdown_links,
+    required_sections_for,
+    section_anchor,
+    section_text,
+    strip_anchors,
+)
 
 BODY = "<!-- sec:intro -->\n서론\n\n<!-- sec:body-1 -->\n본론 <!-- sec:code-1 -->\n```python\nx = 1\n```\n<!-- sec:intro -->\n다시"
 
@@ -33,3 +42,22 @@ def test_section_text_returns_first_match_until_next_anchor():
 
 def test_section_anchor_format():
     assert section_anchor("body-2") == "<!-- sec:body-2 -->"
+
+
+def test_required_sections_drop_tradeoff_only_for_level_100():
+    assert "tradeoff" not in required_sections_for(100)
+    assert required_sections_for(None) == REQUIRED_SECTIONS == required_sections_for(300)
+
+
+def test_changed_sections_lists_edited_and_new_sections():
+    before = "<!-- sec:intro -->\n서론\n\n<!-- sec:body-1 -->\n본론\n"
+    after = "<!-- sec:intro -->\n서론\n\n<!-- sec:body-1 -->\n고친 본론\n\n<!-- sec:body-2 -->\n새 본론\n"
+
+    assert changed_sections(before, after) == ["body-1", "body-2"]
+    assert changed_sections(before, before) == []
+
+
+def test_markdown_links_skips_code_blocks_and_duplicates():
+    markdown = "[a](https://a.test) [a](https://a.test)\n\n```\n[b](https://b.test)\n```\n\n[c](#x)\n"
+
+    assert markdown_links(markdown) == ["https://a.test", "#x"]

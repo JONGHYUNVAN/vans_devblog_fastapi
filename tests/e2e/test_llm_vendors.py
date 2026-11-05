@@ -1,8 +1,10 @@
-"""실제 벤더에 계약 출력 스키마 6종을 보내 구조화 출력이 호환되는지 본다. 기본 실행에서 빠진다 (로드맵 5단계).
+"""실제 벤더에 계약 출력 스키마와 호출 옵션을 보내 호환되는지 본다. 기본 실행에서 빠진다 (로드맵 5단계, 검토 문서 0단계 "벤더 단일 호출").
 
 사용: ANTHROPIC_API_KEY=... GOOGLE_API_KEY=... XAI_API_KEY=... pytest -m e2e tests/e2e/test_llm_vendors.py
 모델은 E2E_ANTHROPIC_MODEL·E2E_GOOGLE_MODEL·E2E_XAI_MODEL 로 바꾼다. 키가 없는 벤더는 건너뛴다.
-호출 수는 6 × 벤더 수다. 평평한 스키마가 아니라 실제 계약($defs/$ref, anyOf, default, min/maxLength, min/maxItems)을 보낸다.
+호출 수는 (계약 11종 + 옵션 확인 3종) × 벤더 수다. 평평한 스키마가 아니라 실제 계약($defs/$ref, anyOf, default, min/maxLength, min/maxItems)을 보낸다.
+
+단위 테스트는 가짜 HTTP 응답으로 돈다. 벤더가 실제로 effort·웹 검색을 받는지, 응답이 문서대로 오는지는 여기서만 확인된다.
 """
 
 import json
@@ -15,7 +17,12 @@ from pydantic import BaseModel
 
 from app.agents.contracts import (
     ArbitrateOutput,
+    AssessLevelOutput,
     DraftOutput,
+    FactCheckOutput,
+    FactSpotCheckOutput,
+    FinalReadOutput,
+    PolishOutput,
     ProposeTopicOutput,
     ReviewOutput,
     RevisionOutput,
@@ -36,6 +43,11 @@ CONTRACTS: list[type[BaseModel]] = [
     ReviewOutput,
     SpotCheckOutput,
     ArbitrateOutput,
+    FactCheckOutput,
+    FactSpotCheckOutput,
+    FinalReadOutput,
+    AssessLevelOutput,
+    PolishOutput,
 ]
 
 
@@ -62,23 +74,63 @@ def _clients() -> list[tuple[str, Callable[[], LLMClient], str]]:
             ("anthropic", partial(AnthropicClient, key), os.environ.get("E2E_ANTHROPIC_MODEL", "claude-opus-5-5"))
         )
     if key := os.environ.get("GOOGLE_API_KEY"):
-        found.append(("google", partial(GoogleClient, key), os.environ.get("E2E_GOOGLE_MODEL", "gemini-2.5-pro")))
+        found.append(("google", partial(GoogleClient, key), os.environ.get("E2E_GOOGLE_MODEL", "gemini-4-argon")))
     if key := os.environ.get("XAI_API_KEY"):
-        found.append(("xai", partial(XAIClient, key), os.environ.get("E2E_XAI_MODEL", "grok-4")))
+        found.append(("xai", partial(XAIClient, key), os.environ.get("E2E_XAI_MODEL", "grok-4.7")))
     return found
 
 
-@pytest.mark.parametrize("schema", CONTRACTS, ids=lambda schema: schema.__name__)
-@pytest.mark.parametrize(
+_VENDORS = pytest.mark.parametrize(
     ("provider", "make_client", "model_id"), _clients(), ids=lambda value: value if isinstance(value, str) else ""
 )
+
+
+@pytest.mark.parametrize("schema", CONTRACTS, ids=lambda schema: schema.__name__)
+@_VENDORS
 async def test_vendor_accepts_each_contract_schema_and_returns_matching_json(provider, make_client, model_id, schema):
-    params = LLMParams(model_id=model_id, temperature=0.7, max_output_tokens=4000)
+    params = LLMParams(model_id=model_id, max_output_tokens=4000)
 
     response = await make_client().complete(_messages(schema), schema.model_json_schema(), params, timeout=_TIMEOUT)
 
     schema.model_validate_json(response.text)
     assert response.usage.prompt_tokens > 0 and response.usage.completion_tokens > 0
+
+
+@_VENDORS
+async def test_vendor_accepts_the_effort_value_the_routes_use(provider, make_client, model_id):
+    params = LLMParams(model_id=model_id, effort="high", max_output_tokens=4000)
+
+    response = await make_client().complete(
+        _messages(ArbitrateOutput), ArbitrateOutput.model_json_schema(), params, timeout=_TIMEOUT
+    )
+
+    ArbitrateOutput.model_validate_json(response.text)
+
+
+@_VENDORS
+async def test_web_search_returns_text_with_citations(provider, make_client, model_id):
+    messages = [
+        LLMMessage(
+            role="user", content="MongoDB findOneAndUpdate 가 문서 하나를 원자적으로 갱신하는지 공식 문서로 확인해 줘."
+        )
+    ]
+    params = LLMParams(model_id=model_id, max_output_tokens=4000, web_search=True)
+
+    response = await make_client().complete(messages, None, params, timeout=_TIMEOUT)
+
+    assert response.text.strip()
+    assert response.citations, f"{provider} returned no citations; stop_reason={response.stop_reason}"
+    assert all(citation.url.startswith("http") for citation in response.citations)
+
+
+@_VENDORS
+async def test_small_output_limit_is_reported_as_truncated(provider, make_client, model_id):
+    messages = [LLMMessage(role="user", content="MongoDB 낙관적 잠금을 2000자로 설명해 줘.")]
+    params = LLMParams(model_id=model_id, max_output_tokens=40)
+
+    response = await make_client().complete(messages, None, params, timeout=_TIMEOUT)
+
+    assert response.truncated, f"{provider} stop_reason={response.stop_reason} text={response.text[:80]!r}"
 
 
 def test_at_least_one_vendor_key_is_present():

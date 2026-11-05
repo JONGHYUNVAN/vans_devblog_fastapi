@@ -17,12 +17,12 @@ from app.clients.publisher.base import PostCreatePayload, Publisher
 from app.core.config import Settings
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError, PublishFailedError, PublishUncertainError
 from app.models.enums import (
-    AgentSlot,
     ArbitrationOutcome,
     EscalationReason,
     IssueSeverity,
     ResolutionStatus,
     ReviewLens,
+    RevisionCause,
     TopicRegistryStatus,
 )
 from app.models.post_draft import ItemResolution, PostDraft, Publication, PublicationIntent
@@ -52,9 +52,12 @@ _MARKDOWN_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+\-.!<>&|~^])")
 
 
 def build_peer_review_note(draft: PostDraft, publishing_round: PublishingRound) -> str:
-    """피어 리뷰 요약 노트 마크다운 (05 문서 5절 템플릿). LLM 호출 없음. 발행 본문 뒤에 붙여 함께 Tiptap 으로 변환한다."""
-    version = draft.publishable_version or draft.current_version
-    reviewer_1, reviewer_2 = draft.reviewer_assignments
+    """피어 리뷰 요약 노트 마크다운 (05 문서 5절 템플릿). LLM 호출 없음. 발행 본문 뒤에 붙여 함께 Tiptap 으로 변환한다.
+
+    다듬은 버전은 버전 수에 넣지 않는다. 모델은 본문에 영향을 준 것만 적는다.
+    """
+    version = draft.authored_publishable_version or draft.publishable_version or draft.current_version
+    lens_labels = ", ".join(_LENS_LABELS[assignment.primary_lens] for assignment in draft.reviewer_assignments)
     items = [item for review in draft.reviews for item in review.items]
     severity_counts = Counter(item.severity for item in items)
     final_resolutions = _final_resolutions(draft)
@@ -70,39 +73,35 @@ def build_peer_review_note(draft: PostDraft, publishing_round: PublishingRound) 
         "",
         "## 이 글은 어떻게 만들어졌나",
         "",
-        f"이 글은 **{_display(publishing_round, draft.author_slot)}**가 작성하고 "
-        f"**{_display(publishing_round, reviewer_1.slot)}**({_LENS_LABELS[reviewer_1.primary_lens]})와 "
-        f"**{_display(publishing_round, reviewer_2.slot)}**({_LENS_LABELS[reviewer_2.primary_lens]})의 "
-        "교차 리뷰를 거쳐 완성되었습니다.",
+        f"이 글은 **{_display(publishing_round, draft)}**가 작성하고 {lens_labels} 관점의 교차 리뷰를 거쳐 완성되었습니다.",
         "",
         f"- 버전: v1 → v{version.version_number}",
         f"- 발행을 막은 사항: CRITICAL {severity_counts[IssueSeverity.CRITICAL]}, MAJOR {severity_counts[IssueSeverity.MAJOR]}",
         f"- 기록만 남긴 사항: MINOR {severity_counts[IssueSeverity.MINOR]}, NITPICK {severity_counts[IssueSeverity.NITPICK]} "
         "(발행을 막지 않아 수정하지 않음)",
         f"- 작성자가 수용한 사항: {accepted}건 / 근거를 들어 유지한 사항: {len(rejected)}건",
-        f"- 모델: {_model(publishing_round, draft.author_slot)} 작성, "
-        f"{_model(publishing_round, reviewer_1.slot)}·{_model(publishing_round, reviewer_2.slot)} 리뷰",
+        f"- 모델: {_model_line(draft, publishing_round)}",
     ]
     if draft.arbitrations:
         lines.append(f"- 의견이 갈려 제3자 판정을 받은 사항: {len(arbitration_by_item)}건")
     for item in rejected[:_MAX_REJECTED_SHOWN]:
         resolution = final_resolutions[item.item_id]
         quote = [
-            f"> **{_display(publishing_round, item.reviewer_slot)}의 지적**: {_plain(item.comment)}",
+            f"> **{_LENS_LABELS[draft.reviewer_of(item)]} 리뷰의 지적**: {_plain(item.comment)}",
             f"> **작성자의 입장**: {_plain(resolution.reason or '')}",
         ]
         arbitration = arbitration_by_item.get(item.item_id)
         if arbitration is not None:
-            quote.append(
-                f"> **판정 ({_display(publishing_round, arbitration.arbiter_slot)})**: "
-                f"{_OUTCOME_TEXT[arbitration.outcome]} — {_plain(arbitration.reasoning)}"
-            )
+            quote.append(f"> **판정**: {_OUTCOME_TEXT[arbitration.outcome]} — {_plain(arbitration.reasoning)}")
         lines += ["", "\\\n".join(quote)]  # 줄 끝 백슬래시는 hardBreak (04 문서 8절 변환표)
     return "\n".join(lines) + "\n"
 
 
-def build_payload(draft: PostDraft, note: str) -> PostCreatePayload:
-    """발행본(마지막 passed_validation 버전) + 노트 → CreatePostDto (04 문서 8절 매핑표)."""
+def build_payload(draft: PostDraft, note: str, *, include_level: bool = False) -> PostCreatePayload:
+    """발행본(마지막 passed_validation 버전) + 노트 → CreatePostDto (04 문서 8절 매핑표).
+
+    사람 경로로 발행하는 글은 평가가 없어 level 이 비고 키도 빠진다.
+    """
     version = draft.publishable_version
     if version is None:
         raise InvalidTransitionError(f"draft {draft.draft_id} has no version that passed validation")
@@ -115,6 +114,7 @@ def build_payload(draft: PostDraft, note: str) -> PostCreatePayload:
         main_category_id=draft.topic.main_category_id,
         sub_category_id=draft.topic.sub_category_id,
         language=_LANGUAGE,
+        level=draft.level_assessment.level if include_level and draft.level_assessment else None,
     )
 
 
@@ -155,7 +155,7 @@ class PublishingService:
         if previous is not None:
             await self._sleep(_BACKOFF_BASE_S * 2 ** (previous.attempt - 1))  # 결과 확정 실패 뒤 재호출
         note = build_peer_review_note(draft, publishing_round)
-        payload = build_payload(draft, note)
+        payload = build_payload(draft, note, include_level=self._settings.publish_post_level)
         intent = draft.begin_publish(requires_approval)
         await self._drafts.save(draft)  # 이 쓰기가 실패(충돌)하면 호출하지 않는다 (8절 6단계)
         # 호출과 결과 반영은 글 코루틴이 cancel 돼도(runner.stop) 끝까지 간다. 끊기면 결과를 모르는 의도가 남아
@@ -258,15 +258,47 @@ def _final_resolutions(draft: PostDraft) -> dict[str, ItemResolution]:
 
 
 def _is_rejected(resolution: ItemResolution | None) -> bool:
-    return resolution is not None and resolution.status == ResolutionStatus.REJECTED_WITH_REASON
+    """작성자가 지적을 받아들이지 않고 유지한 항목. 범위 밖 판단도 유지다."""
+    return resolution is not None and resolution.status in (
+        ResolutionStatus.REJECTED_WITH_REASON,
+        ResolutionStatus.OUT_OF_SCOPE,
+    )
 
 
-def _display(publishing_round: PublishingRound, slot: AgentSlot) -> str:
-    return get_persona(publishing_round.slot_bindings[slot].persona_id).display_name
+def _display(publishing_round: PublishingRound, draft: PostDraft) -> str:
+    return get_persona(publishing_round.slot_bindings[draft.author_slot].persona_id).display_name
 
 
-def _model(publishing_round: PublishingRound, slot: AgentSlot) -> str:
-    return publishing_round.slot_bindings[slot].model_id
+def _model_line(draft: PostDraft, publishing_round: PublishingRound) -> str:
+    """본문에 영향을 준 모델만 적는다: 작성·리뷰는 항상, 수정은 작성과 다를 때, 중재는 있었을 때, 다듬기는 패치가 적용됐을 때.
+
+    전체 읽기·수준 평가는 본문을 바꾸지 않아 적지 않는다(agent_calls 에 남는다). 옛 글은 슬롯 바인딩에서 찾는다.
+    """
+    bindings = publishing_round.slot_bindings
+    writer = next((version.model_id for version in draft.versions if version.model_id), None)
+    writer = writer or bindings[draft.author_slot].model_id
+    parts = [f"{writer} 작성"]
+    reviewers: dict[ReviewLens, str] = {}
+    for review in draft.reviews:
+        reviewers.setdefault(review.lens, review.model_id or bindings[review.reviewer_slot].model_id)
+    if reviewers:
+        parts.append("·".join(f"{model}({_LENS_LABELS[lens]})" for lens, model in reviewers.items()) + " 리뷰")
+    revisers = {
+        version.model_id
+        for version in draft.versions
+        if version.origin_cause in (RevisionCause.REVIEW, RevisionCause.HUMAN)
+        and version.model_id not in (None, writer)
+    }
+    if revisers:
+        parts.append("·".join(sorted(revisers)) + " 수정")
+    arbiters = {
+        arbitration.model_id or bindings[arbitration.arbiter_slot].model_id for arbitration in draft.arbitrations
+    }
+    if arbiters:
+        parts.append("·".join(sorted(arbiters)) + " 중재")
+    if draft.polish and draft.polish.model_ids:
+        parts.append("·".join(sorted(set(draft.polish.model_ids))) + " 다듬기")
+    return ", ".join(parts)
 
 
 def _plain(text: str) -> str:

@@ -1,18 +1,22 @@
 """AgentCallService 테스트. 재시도 메시지 구성, 백오프, 소진, 소프트 예산, 영수증을 확인한다 (설계 06 문서 6절)."""
 
 import asyncio
+import json
 
 import pytest
 from pydantic import BaseModel
 
-from app.clients.llm.base import LLMResponse, LLMUsage
+from app.agents.builders import render_messages
+from app.agents.contracts import FactSpotCheckOutput, FinalReadOutput, StructureRules, WriteDraftInput
+from app.agents.personas import get_persona
+from app.clients.llm.base import LLMCitation, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.core.config import Settings
 from app.core.exceptions import BudgetExceededError, LLMOutputError, LLMRetriesExhaustedError, LLMTransportError
-from app.models.agent_call import ChatMessage
+from app.models.agent_call import AgentCall, ChatMessage
 from app.models.enums import AgentSlot, CallKind
-from app.services.agent_calls import AgentCallService
-from tests.factories import make_binding, make_draft
+from app.services.agent_calls import AgentCallService, output_schema_of
+from tests.factories import draft_output, make_call, make_call_model, make_draft, make_topic
 from tests.fakes import FakeAgentCallRepository, FakeLLMClient
 
 pytestmark = pytest.mark.anyio
@@ -34,7 +38,6 @@ class Harness:
         self.settings = Settings(
             _env_file=None,
             max_llm_retries=max_llm_retries,
-            review_temperature=0.2,
             review_timeout_s=300,
             draft_timeout_s=600,
             prompt_version="v1",
@@ -56,7 +59,7 @@ class Harness:
             kind=kind,
             round_id="round-1",
             slot=AgentSlot.A,
-            binding=make_binding(),
+            binding=make_call_model(),
             messages=MESSAGES,
             schema=Answer,
             draft=draft,
@@ -88,7 +91,7 @@ async def test_call_returns_parsed_model_and_records_receipt():
     assert (receipt.output_raw, receipt.usage.prompt_tokens, receipt.usage.completion_tokens) == (GOOD, 100, 50)
     assert receipt.messages == MESSAGES
     assert receipt.prompt_template_version == "v1"
-    assert receipt.model_binding == make_binding()
+    assert receipt.model_binding == make_call_model()
     [sent] = harness.llm.calls
     assert [m.content for m in sent.messages] == [m.content for m in MESSAGES]
     assert sent.schema == Answer.model_json_schema()
@@ -171,22 +174,180 @@ async def test_topic_proposal_skips_budget_check():
 
 
 @pytest.mark.parametrize(
-    ("kind", "temperature", "timeout"),
+    ("kind", "timeout"),
     [
-        (CallKind.WRITE_DRAFT, 0.7, 600.0),
-        (CallKind.REVISE_DRAFT, 0.7, 600.0),
-        (CallKind.PROPOSE_TOPIC, 0.7, 600.0),
-        (CallKind.REVIEW, 0.2, 300.0),
-        (CallKind.ARBITRATE, 0.2, 300.0),
+        (CallKind.WRITE_DRAFT, 600.0),
+        (CallKind.REVISE_DRAFT, 600.0),
+        (CallKind.PROPOSE_TOPIC, 600.0),
+        (CallKind.REVIEW, 300.0),
+        (CallKind.ARBITRATE, 300.0),
+        (CallKind.FINAL_READ, 300.0),
+        (CallKind.POLISH_TONE, 300.0),
     ],
 )
-async def test_review_kinds_use_review_temperature_and_timeout(kind, temperature, timeout):
+async def test_call_kind_picks_the_timeout(kind, timeout):
     harness = Harness([GOOD])
 
     await harness.call(kind=kind)
 
     [sent] = harness.llm.calls
-    assert (sent.params.temperature, sent.params.max_output_tokens, sent.timeout) == (temperature, 1000, timeout)
+    assert (sent.params.max_output_tokens, sent.timeout) == (1000, timeout)
+
+
+async def test_timeout_grows_with_the_raised_output_limit():
+    truncated = LLMResponse(text="{", usage=LLMUsage(), stop_reason="max_tokens", truncated=True)
+    harness = Harness([truncated, GOOD])
+
+    await harness.call(kind=CallKind.REVIEW)
+
+    first, second = harness.llm.calls
+    assert (first.params.max_output_tokens, first.timeout) == (1000, 300.0)
+    assert (second.params.max_output_tokens, second.timeout) == (2000, 600.0)
+
+
+async def test_temperature_and_effort_come_only_from_the_route_candidate():
+    harness = Harness([GOOD, GOOD])
+
+    await harness.call()
+    await harness.service.call(
+        kind=CallKind.REVIEW,
+        round_id="round-1",
+        binding=make_call_model(temperature=0.3, effort="high"),
+        messages=MESSAGES,
+        schema=Answer,
+    )
+
+    first, second = harness.llm.calls
+    assert (first.params.temperature, first.params.effort) == (None, None)
+    assert (second.params.temperature, second.params.effort) == (0.3, "high")
+
+
+async def test_empty_body_retries_without_an_empty_assistant_message():
+    # 빈 assistant 메시지는 벤더가 400 으로 거부한다. 거부(refusal)·생각만 한 응답에서 생긴다
+    harness = Harness([LLMResponse(text="", usage=LLMUsage(), stop_reason="refusal"), GOOD])
+
+    await harness.call()
+
+    assert [m.role for m in harness.llm.calls[1].messages] == ["system", "user"]
+    assert harness.calls.calls[0].stop_reason == "refusal"
+
+
+async def test_search_returns_text_and_citations_and_records_them():
+    response = LLMResponse(
+        text="확인 결과",
+        usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+        citations=[LLMCitation(url="https://docs.test/a", title="A")],
+    )
+    harness = Harness([response])
+
+    result = await harness.service.search(
+        round_id="round-1", binding=make_call_model(), messages=MESSAGES, draft=make_draft()
+    )
+
+    assert result.text == "확인 결과"
+    assert [citation.url for citation in result.citations] == ["https://docs.test/a"]
+    [sent] = harness.llm.calls
+    assert (sent.params.web_search, sent.schema, sent.timeout) == (True, None, 600.0)
+    [receipt] = harness.calls.calls
+    assert (receipt.kind, receipt.citations, result.call_id) == (
+        CallKind.FACT_CHECK,
+        ["https://docs.test/a"],
+        receipt.call_id,
+    )
+
+
+async def test_search_budget_estimate_counts_search_results():
+    harness = Harness([GOOD])
+
+    with pytest.raises(BudgetExceededError):
+        await harness.service.search(
+            round_id="round-1", binding=make_call_model(), messages=MESSAGES, draft=make_draft(token_limit=20_000)
+        )
+    assert harness.llm.calls == []
+
+
+async def test_old_receipt_with_persona_id_still_loads_and_replays():
+    harness = Harness([GOOD])
+    stored = make_call().model_dump(by_alias=True)
+    stored["model_binding"] = {
+        "provider": "fake",
+        "model_id": "old",
+        "persona_id": "architect",
+        "temperature": 0.7,
+        "max_output_tokens": 500,
+    }
+    stored["slot"] = "A"
+
+    call = AgentCall.model_validate(stored)
+
+    assert call.model_binding.model_id == "old"
+    assert (await harness.service.replay(call)).text == GOOD
+
+
+async def test_compare_write_prompts_rebuilds_the_input_per_version_and_measures_density():
+    harness = Harness([draft_output(), draft_output()])
+    write_input = WriteDraftInput(
+        persona=get_persona("architect"),
+        topic=make_topic(core_mechanism="", out_of_scope=[]),
+        structure_rules=StructureRules(min_chars=1, max_chars=100),
+    )
+    call = make_call()
+    call.messages = render_messages(write_input, "v2")
+
+    rows = await harness.service.compare_write_prompts(
+        call, versions=["v2", "v3"], runs=1, core_mechanism="메커니즘", out_of_scope=["범위 밖"]
+    )
+
+    assert [(row[0], row[1], row[3]) for row in rows] == [("v2", 1, None), ("v3", 1, None)]
+    assert rows[0][2] is not None and rows[0][2].paragraphs == 4
+    sent_v3 = harness.llm.calls[1].messages
+    assert "topic.core_mechanism" in sent_v3[0].content and '"core_mechanism": "메커니즘"' in sent_v3[1].content
+    assert len(harness.calls.calls) == 0
+
+
+async def test_probe_fact_check_searches_transforms_and_checks_urls_without_receipts():
+    claim = {
+        "section_id": "body-1",
+        "claim_type": "API",
+        "claim": "c",
+        "status": "SUPPORTED",
+        "source_url": "https://made-up.test/x",
+        "note": "",
+    }
+    transformed = {
+        "verdict": "APPROVE",
+        "items": [],
+        "checklist": {"checked_claims": ["c"], "checked_code_blocks": [], "unverifiable": []},
+        "overall_feedback": "",
+        "claims": [claim],
+    }
+    searched = LLMResponse(
+        text="확인 결과", usage=LLMUsage(), citations=[LLMCitation(url="https://docs.test/a", title="A")]
+    )
+    harness = Harness([searched, json.dumps(transformed)])
+
+    claims, citations = await harness.service.probe_fact_check(
+        "<!-- sec:body-1 -->\n본문",
+        binding=make_call_model(effort="high"),
+        transformer=make_call_model(),
+        prompt_version="v3",
+    )
+
+    assert [(each.status, each.source_url) for each in claims] == [("UNVERIFIABLE", None)]
+    assert [each.url for each in citations] == ["https://docs.test/a"]
+    search, transform = harness.llm.calls
+    assert (search.params.web_search, search.schema, transform.params.web_search) == (True, None, False)
+    assert harness.calls.calls == []
+
+
+def test_output_schema_of_search_and_transform_receipts():
+    search = make_call(kind=CallKind.FACT_CHECK)
+    transform = make_call(kind=CallKind.FACT_TRANSFORM)
+    transform.messages = [ChatMessage(role="user", content='입력(JSON):\n{\n  "scope": "SPOT_CHECK"\n}')]
+
+    assert output_schema_of(search) is None
+    assert output_schema_of(transform) is FactSpotCheckOutput
+    assert output_schema_of(make_call(kind=CallKind.FINAL_READ)) is FinalReadOutput
 
 
 async def test_usage_from_vendor_is_recorded_per_attempt():
@@ -231,7 +392,7 @@ async def test_check_hook_failure_retries_like_a_schema_violation():
         kind=CallKind.WRITE_DRAFT,
         round_id="round-1",
         slot=AgentSlot.A,
-        binding=make_binding(),
+        binding=make_call_model(),
         messages=MESSAGES,
         schema=Answer,
         check=check,
@@ -258,7 +419,7 @@ async def test_check_hook_raising_validation_error_is_a_schema_violation_too():
         kind=CallKind.WRITE_DRAFT,
         round_id="round-1",
         slot=AgentSlot.A,
-        binding=make_binding(),
+        binding=make_call_model(),
         messages=MESSAGES,
         schema=Answer,
         check=check,
@@ -278,13 +439,13 @@ async def test_replay_resends_the_receipt_messages_without_a_new_receipt():
         kind=CallKind.WRITE_DRAFT,
         round_id="round-1",
         slot=AgentSlot.A,
-        binding=make_binding(),
+        binding=make_call_model(),
         messages=MESSAGES,
         schema=Answer,
         draft=make_draft(),
     )
     [call] = harness.calls.calls
-    other = make_binding(provider="fake", model_id="fake-2", temperature=0.1)
+    other = make_call_model(provider="fake", model_id="fake-2", temperature=0.1)
 
     result = await harness.service.replay(call, binding=other)
 
@@ -298,8 +459,6 @@ async def test_replay_resends_the_receipt_messages_without_a_new_receipt():
 
 def test_output_schema_of_review_receipts_depends_on_scope():
     from app.agents.contracts import ReviewOutput, SpotCheckOutput
-    from app.services.agent_calls import output_schema_of
-    from tests.factories import make_call
 
     full = make_call(kind=CallKind.REVIEW)
     full.messages = [ChatMessage(role="user", content='입력(JSON):\n{\n  "scope": "FULL"\n}')]

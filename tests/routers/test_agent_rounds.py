@@ -25,6 +25,7 @@ from app.models.enums import (
 from app.models.post_draft import FailureRecord
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
+from app.repositories.model_route import ModelRouteRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.evaluation import evaluate
@@ -32,6 +33,7 @@ from app.services.round import RoundService
 from tests.clients.publisher.test_post_be import ROWS
 from tests.conftest import load_golden
 from tests.factories import (
+    FAKE_VENDORS,
     add_reviews,
     make_arbitration,
     make_call,
@@ -39,6 +41,7 @@ from tests.factories import (
     make_registry_entry,
     make_round,
     reject,
+    route_documents,
     write_next_version,
 )
 from tests.fakes import FakeAsyncDatabase, FakePostBE
@@ -100,6 +103,7 @@ def database() -> FakeAsyncDatabase:
     )
     app.dependency_overrides[get_async_database] = lambda: database
     asyncio.run(_seed(database))
+    asyncio.run(ModelRouteRepository(database).replace_all(route_documents()))
     return database
 
 
@@ -139,6 +143,8 @@ def test_create_round_400_without_post_be_and_201_with_categories(client, databa
                     for row in ROWS
                 ]
             ),
+            route_repository=ModelRouteRepository(database),
+            providers=["fake", *FAKE_VENDORS.values()],
         )
 
     app.dependency_overrides[get_round_service] = with_post_be

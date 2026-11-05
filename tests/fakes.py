@@ -9,7 +9,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from app.clients.llm.base import LLMMessage, LLMParams, LLMResponse, LLMUsage
+from app.clients.llm.base import LLMCitation, LLMMessage, LLMParams, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.clients.publisher.base import PostCategory, PostCreatePayload, Publisher, PublishResult
 from app.core.config import Settings
@@ -24,6 +24,7 @@ from app.models.publishing_round import LockedTopic, PublishingRound, TopicAttem
 from app.models.topic import TopicRegistryEntry
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
+from app.repositories.model_route import ModelRouteRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
@@ -34,7 +35,21 @@ from app.services.round import RoundService
 from app.services.runner import PipelineRunner
 from app.services.topic_selection import TopicSelectionService
 from app.services.validation import ValidationGate
-from tests.factories import make_call, make_round, make_topic
+from tests.factories import (
+    FACT_CITATION,
+    FAKE_VENDORS,
+    assess_level_output,
+    fact_claim,
+    fact_search_text,
+    fact_transform_output,
+    final_read_output,
+    make_call,
+    make_round,
+    make_routing,
+    make_topic,
+    polish_output,
+    route_documents,
+)
 
 
 class FakePostIndexRepository:
@@ -303,11 +318,15 @@ class FakeAsyncCollection:
     def find(self, query: dict[str, Any]) -> FakeAsyncCursor:
         return FakeAsyncCursor([copy.deepcopy(doc) for doc in self.docs if _matches(doc, query)])
 
-    async def replace_one(self, query: dict[str, Any], replacement: dict[str, Any]) -> _WriteResult:
+    async def replace_one(
+        self, query: dict[str, Any], replacement: dict[str, Any], upsert: bool = False
+    ) -> _WriteResult:
         for index, doc in enumerate(self.docs):
             if _matches(doc, query):
                 self.docs[index] = copy.deepcopy(replacement)
                 return _WriteResult(1)
+        if upsert:
+            self.docs.append(copy.deepcopy(replacement))
         return _WriteResult(0)
 
     async def update_one(self, query: dict[str, Any], update: dict[str, Any]) -> _WriteResult:
@@ -350,7 +369,9 @@ class FakeAsyncDatabase:
 
 
 class FakeLLMCall:
-    def __init__(self, messages: list[LLMMessage], schema: dict[str, Any], params: LLMParams, timeout: float) -> None:
+    def __init__(
+        self, messages: list[LLMMessage], schema: dict[str, Any] | None, params: LLMParams, timeout: float
+    ) -> None:
         self.messages = messages
         self.schema = schema
         self.params = params
@@ -376,7 +397,7 @@ class FakeLLMClient:
         return LLMResponse(text=text, usage=LLMUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens))
 
     async def complete(
-        self, messages: list[LLMMessage], schema: dict[str, Any], params: LLMParams, timeout: float
+        self, messages: list[LLMMessage], schema: dict[str, Any] | None, params: LLMParams, timeout: float
     ) -> LLMResponse:
         self.calls.append(FakeLLMCall(messages, schema, params, timeout))
         self.active += 1
@@ -405,6 +426,13 @@ _KIND_MARKERS = {
     "`content_markdown` 을 `lens`": "REVIEW_FULL",
     "해소됐는지 확인": "SPOT_CHECK",
     "리뷰 분쟁을 판정": "ARBITRATE",
+    "분쟁의 근거를 찾는": "ARBITRATE_SEARCH",
+    "사실 확인 담당": "FACT_CHECK",
+    "JSON 으로 옮기는 변환기": "FACT_TRANSFORM",
+    "마지막 독자": "FINAL_READ",
+    "전문성 수준을 판정": "ASSESS_LEVEL",
+    "조판 담당": "POLISH_FORMAT",
+    "교정자": "POLISH_TONE",
 }
 
 ScriptOutcome = str | LLMResponse | Exception | Callable[[dict[str, Any]], "str | LLMResponse | Exception"]
@@ -423,10 +451,31 @@ def call_input_of(messages: list[LLMMessage]) -> dict[str, Any]:
     return json.loads(messages[1].content.removeprefix("입력(JSON):\n"))
 
 
+def default_scripts() -> dict[str, Any]:
+    """시나리오의 주제가 아닌 호출의 기본 응답: 사실 확인은 지적 없음, 다듬기는 패치 없음, 전체 읽기는 지적 없음, 수준은 200."""
+    return {
+        "FACT_CHECK": LLMResponse(
+            text=fact_search_text(),
+            usage=LLMUsage(prompt_tokens=100, completion_tokens=50),
+            citations=[LLMCitation(url=FACT_CITATION, title="docs.example.com")],
+        ),
+        "FACT_TRANSFORM": fact_transform_output(fact_claim()),
+        "POLISH_FORMAT": polish_output(),
+        "POLISH_TONE": polish_output(),
+        "FINAL_READ": final_read_output(),
+        "ASSESS_LEVEL": assess_level_output(),
+    }
+
+
+# 시나리오가 보는 호출. kinds 는 이 목록만 남겨 시나리오 단언이 기본 호출에 흔들리지 않게 한다
+_SCENARIO_KINDS = {"PROPOSE_TOPIC", "WRITE_DRAFT", "REVISE_DRAFT", "REVIEW_FULL", "SPOT_CHECK", "ARBITRATE"}
+
+
 class ScriptedLLMClient(FakeLLMClient):
     """종류별 스크립트. 값은 FakeLLMClient 와 같고, callable 이면 입력 JSON 을 받아 값을 만든다.
 
     종류의 스크립트가 list 면 순서대로 소비하고, callable 하나면 그 종류의 모든 호출에 쓴다. 스크립트가 없거나 모자라면 AssertionError.
+    all_kinds 는 불린 호출 전부, kinds 는 그중 시나리오가 보는 호출이다.
     """
 
     def __init__(self, scripts: dict[str, list[ScriptOutcome] | Callable[..., Any]], delay_s: float = 0.0) -> None:
@@ -434,11 +483,15 @@ class ScriptedLLMClient(FakeLLMClient):
         self.scripts = {
             kind: (list(script) if isinstance(script, list) else script) for kind, script in scripts.items()
         }
-        self.kinds: list[str] = []
+        self.all_kinds: list[str] = []
+
+    @property
+    def kinds(self) -> list[str]:
+        return [kind for kind in self.all_kinds if kind in _SCENARIO_KINDS]
 
     def _next_outcome(self, messages: list[LLMMessage]) -> str | LLMResponse | Exception:
         kind = call_kind_of(messages)
-        self.kinds.append(kind)
+        self.all_kinds.append(kind)
         script = self.scripts.get(kind)
         if script is None or (isinstance(script, list) and not script):
             raise AssertionError(f"ScriptedLLMClient has no outcome left for {kind}")
@@ -546,7 +599,7 @@ class PipelineHarness:
         **settings_overrides: Any,
     ) -> None:
         self.database = database or FakeAsyncDatabase()
-        self.llm = ScriptedLLMClient(scripts or {}, delay_s)
+        self.llm = ScriptedLLMClient(default_scripts() | (scripts or {}), delay_s)
         self.settings = Settings(
             _env_file=None,
             **({"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2} | settings_overrides),
@@ -556,10 +609,20 @@ class PipelineHarness:
         self.topics = TopicRegistryRepository(self.database)
         self.calls = AgentCallRepository(self.database)
         self.publisher = publisher or FakePostBE()
-        self.round_service = RoundService(self.rounds, self.drafts, self.topics, publisher=self.publisher)
+        self.routes = ModelRouteRepository(self.database)
+        self.round_service = RoundService(
+            self.rounds,
+            self.drafts,
+            self.topics,
+            publisher=self.publisher,
+            route_repository=self.routes,
+            providers=["fake", *FAKE_VENDORS.values()],
+        )
         self.call_service = AgentCallService(
             self.calls,
-            LLMClientRegistry({"fake": self.llm}, concurrency_per_provider=3),
+            LLMClientRegistry(
+                {vendor: self.llm for vendor in ("fake", *FAKE_VENDORS.values())}, concurrency_per_provider=3
+            ),
             self.settings,
             sleep=_no_sleep,
         )
@@ -604,7 +667,8 @@ class PipelineHarness:
 
     async def seed_round(self, round_id: str = "round-1") -> PublishingRound:
         """주제가 확정된 IN_PROGRESS 라운드와 TOPIC_LOCKED 글 3편, RESERVED 레지스트리 3건."""
-        publishing_round = make_round(round_id)
+        await self.seed_routes()
+        publishing_round = make_round(round_id, routing=make_routing())
         attempt = TopicAttempt(attempt_number=1)
         for index, slot in enumerate(AgentSlot):
             topic = make_topic(title=f"주제 {slot}", keywords=[f"k{index}a", f"k{index}b", f"k{index}c"])
@@ -626,6 +690,9 @@ class PipelineHarness:
                 )
             )
         return publishing_round
+
+    async def seed_routes(self) -> None:
+        await self.routes.replace_all(route_documents())
 
     async def draft(self, slot: AgentSlot = AgentSlot.A, round_id: str = "round-1") -> PostDraft:
         draft = await self.drafts.get(f"{round_id}:{slot}")

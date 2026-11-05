@@ -16,22 +16,26 @@ stateDiagram-v2
     VALIDATING --> REVISING : 게이트 실패, cause=GATE
     VALIDATING --> FAILED : 게이트 재시도 소진
     IN_REVIEW --> IN_REVIEW : add_review (미완료)
-    IN_REVIEW --> READY_TO_PUBLISH : evaluate: 차단 0건
+    IN_REVIEW --> POST_REVIEW : evaluate: 차단 0건
     IN_REVIEW --> REVISING : evaluate: 차단 ≥1
     IN_REVIEW --> FAILED : 리뷰 재시도 소진
     REVISING --> DRAFTING : cause=REVIEW, iteration+1
     REVISING --> DRAFTING : cause=GATE 또는 HUMAN, iteration 유지
     REVISING --> ESCALATED : cause=REVIEW, iteration == MAX
-    IN_SPOT_CHECK --> READY_TO_PUBLISH : evaluate: 해소
-    IN_SPOT_CHECK --> IN_ARBITRATION : evaluate: 기각된 CRITICAL 교착
+    IN_SPOT_CHECK --> POST_REVIEW : evaluate: 해소
+    IN_SPOT_CHECK --> IN_ARBITRATION : evaluate: 교착(기각된 CRITICAL, 범위 밖으로 돌린 차단 항목)
     IN_SPOT_CHECK --> REVISING : evaluate: 미해소, iteration < MAX
     IN_SPOT_CHECK --> ESCALATED : evaluate: 미해소, iteration == MAX
     IN_SPOT_CHECK --> FAILED : 재시도 소진
     IN_ARBITRATION --> IN_ARBITRATION : add_arbitration (미완료)
-    IN_ARBITRATION --> READY_TO_PUBLISH : 전부 UPHOLD_AUTHOR, 다른 미해소 0
+    IN_ARBITRATION --> POST_REVIEW : 전부 UPHOLD_AUTHOR, 다른 미해소 0
     IN_ARBITRATION --> REVISING : 인용 또는 다른 미해소, iteration < MAX
     IN_ARBITRATION --> ESCALATED : 인용 또는 다른 미해소, iteration == MAX
     IN_ARBITRATION --> FAILED : 재시도 소진
+    POST_REVIEW --> POST_REVIEW : 다듬기·전체 읽기 (단계마다 저장)
+    POST_REVIEW --> READY_TO_PUBLISH : 수준 평가 완료
+    POST_REVIEW --> ESCALATED : 전체 읽기 차단 결함
+    POST_REVIEW --> FAILED : 전체 읽기·평가 재시도 소진
     ESCALATED --> READY_TO_PUBLISH : 사람: 그대로 발행
     ESCALATED --> REVISING : 사람: 지시문과 함께 수정 (iteration 리셋 안 함, 사람 지시는 예외 허용)
     ESCALATED --> REJECTED : 사람: 폐기
@@ -40,6 +44,7 @@ stateDiagram-v2
     FAILED --> IN_REVIEW : retry
     FAILED --> IN_SPOT_CHECK : retry
     FAILED --> IN_ARBITRATION : retry
+    FAILED --> POST_REVIEW : retry (끝낸 단계는 되풀이하지 않는다)
     READY_TO_PUBLISH --> PUBLISHED : publish
     READY_TO_PUBLISH --> ESCALATED : 발행 실패 N회 또는 결과 불명
     ESCALATED --> PUBLISHED : 사람: 게시 확인
@@ -62,29 +67,34 @@ stateDiagram-v2
 | 1 | (문서 없음) | 세 슬롯 주제 확정 | – | `TOPIC_LOCKED` | 글 3편 생성(`token_limit = DRAFT_TOKEN_LIMIT`). 레지스트리 `RESERVED`. 쓰기 순서는 04 문서 1절 |
 | 2 | `TOPIC_LOCKED` | 글 코루틴 | – | `DRAFTING` | 이어서 `WRITE_DRAFT` 호출. iteration 은 0 |
 | 3 | `DRAFTING` | 작성자 응답 파싱 성공 | 스키마 유효 | `VALIDATING` | 버전 추가, `passed_validation=False`. 새 버전의 `origin_cause`는 `revision_cause`로 정하고, `revision_cause`와 승인을 지운다 |
-| 4 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION` | 응답 실패 | 증가 후 시도 수 `< MAX_LLM_RETRIES` | 변화 없음 | 호출 서비스 안에서 백오프 뒤 다시 호출한다. 글은 저장하지 않는다 |
-| 5 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION` | 응답 실패 | 증가 후 시도 수 `== MAX_LLM_RETRIES` | `FAILED` | `FailureRecord(LLM_RETRIES_EXHAUSTED)`. 병렬 단계는 다른 호출이 끝나기를 기다려 성공한 결과를 저장한 뒤 `FAILED`. 사유가 여럿이면 `BUDGET_EXCEEDED`를 남긴다 |
-| 5a | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION` | 호출 전 예산 검사 | 글 사용량 + 추정치 `> token_limit` | `FAILED` | `FailureRecord(BUDGET_EXCEEDED)`. 호출하지 않는다. 병렬 단계는 5행처럼 성공분을 저장 |
+| 4 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW` | 응답 실패 | 증가 후 시도 수 `< MAX_LLM_RETRIES` | 변화 없음 | 호출 서비스 안에서 백오프 뒤 다시 호출한다. 글은 저장하지 않는다 |
+| 5 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW`(다듬기 제외) | 응답 실패 | 증가 후 시도 수 `== MAX_LLM_RETRIES` | `FAILED` | `FailureRecord(LLM_RETRIES_EXHAUSTED)`. 병렬 단계는 다른 호출이 끝나기를 기다려 성공한 결과를 저장한 뒤 `FAILED`. 사유가 여럿이면 `BUDGET_EXCEEDED`를 남긴다 |
+| 5a | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW`(다듬기 제외) | 호출 전 예산 검사 | 글 사용량 + 추정치 `> token_limit` | `FAILED` | `FailureRecord(BUDGET_EXCEEDED)`. 호출하지 않는다. 병렬 단계는 5행처럼 성공분을 저장 |
 | 6a | `VALIDATING` | 게이트 통과 | `origin_cause == HUMAN` | `READY_TO_PUBLISH` | `passed_validation=True`, `validation_retries=0`. 사람이 개입해 고친 버전은 에이전트 재리뷰 없이 발행 대기 |
-| 6b | `VALIDATING` | 게이트 통과 | `origin_cause != HUMAN`, 리뷰 완료 이전 버전 없음 | `IN_REVIEW` | `passed_validation=True`, `validation_retries=0`. FULL 리뷰 호출 ×2 |
-| 7 | `VALIDATING` | 게이트 통과 | `origin_cause != HUMAN`, 리뷰 완료 이전 버전 있음 | `IN_SPOT_CHECK` | `passed_validation=True`, `validation_retries=0`. 그 버전의 `open_blocking_items` 에 본인 항목이 남은 리뷰어만 SPOT_CHECK |
+| 6b | `VALIDATING` | 게이트 통과 | `origin_cause != HUMAN`, 리뷰 완료 이전 버전 없음 | `IN_REVIEW` | `passed_validation=True`, `validation_retries=0`. 렌즈마다 FULL 리뷰 호출. 사실 확인 렌즈는 검색과 변환 두 호출이다 |
+| 7 | `VALIDATING` | 게이트 통과 | `origin_cause != HUMAN`, 리뷰 완료 이전 버전 있음 | `IN_SPOT_CHECK` | `passed_validation=True`, `validation_retries=0`. 그 버전의 `open_blocking_items` 에 본인 항목이 남은 리뷰어와 사실 확인 렌즈만 SPOT_CHECK |
 | 8 | `VALIDATING` | 게이트 실패 | 증가 후 `validation_retries < MAX_VALIDATION_RETRIES` | `REVISING` | `cause=GATE`. `iteration`·`origin_cause` 유지. 상한 2이면 재작성은 1회 |
 | 9 | `VALIDATING` | 게이트 실패 | 증가 후 `validation_retries == MAX_VALIDATION_RETRIES` | `FAILED` | 연속 두 번째 실패. `FailureRecord(GATE_RETRIES_EXHAUSTED)` |
 | 10 | `IN_REVIEW` | 리뷰 도착 | 미완료 | `IN_REVIEW` | `derived_verdict` 저장 |
-| 11 | `IN_REVIEW` | 리뷰 도착 | 완료, 차단 0건 | `READY_TO_PUBLISH` | MINOR·NITPICK 은 수정 대상이 아니다 |
+| 11 | `IN_REVIEW` | 리뷰 도착 | 완료, 차단 0건 | `POST_REVIEW` | MINOR·NITPICK 은 수정 대상이 아니다. `post_review_stage=POLISH` |
 | 12 | `IN_REVIEW` | 리뷰 도착 | 완료, 차단 ≥1 | `REVISING` | `cause=REVIEW` |
 | 13a | `REVISING` | 글 코루틴 | `cause=GATE` | `DRAFTING` | `iteration` 과 직전 `origin_cause` 유지. `REVISE_DRAFT`. 직전 `origin_cause == HUMAN` 이면 `human_instruction` 도 넣는다 |
 | 13b | `REVISING` | 글 코루틴 | `cause=HUMAN` | `DRAFTING` | `iteration` 유지, 새 버전의 `origin_cause=HUMAN`. `human_instruction` 입력 포함 |
 | 13c | `REVISING` | 글 코루틴 | `cause=REVIEW`, `iteration < MAX` | `DRAFTING` | `iteration += 1`, 새 버전의 `origin_cause=REVIEW`. `REVISE_DRAFT` |
 | 14 | `REVISING` | 글 코루틴 | `cause=REVIEW`, `iteration == MAX` | `ESCALATED` | `MAX_ITERATIONS_REACHED`. 13a·13b 다음에 평가한다. 17·21행이 이미 `iteration < MAX`를 보므로 `MAX_ITERATIONS ≥ 1`이면 도달하지 않는 방어 행이다 |
-| 15 | `IN_SPOT_CHECK` | 리뷰 도착 | 완료, 미해소 0건 | `READY_TO_PUBLISH` | – |
-| 16 | `IN_SPOT_CHECK` | 리뷰 도착 | 완료, 미중재 교착 CRITICAL 존재 | `IN_ARBITRATION` | 교착 항목마다 `ARBITRATE`. iteration 과 무관하게 16이 17·18보다 앞 |
+| 15 | `IN_SPOT_CHECK` | 리뷰 도착 | 완료, 미해소 0건 | `POST_REVIEW` | `post_review_stage=POLISH` |
+| 16 | `IN_SPOT_CHECK` | 리뷰 도착 | 완료, 미중재 교착 항목 존재 | `IN_ARBITRATION` | 교착 항목마다 `ARBITRATE`. iteration 과 무관하게 16이 17·18보다 앞 |
 | 17 | `IN_SPOT_CHECK` | 리뷰 도착 | 완료, 미해소 ≥1, `iteration < MAX` | `REVISING` | `cause=REVIEW`. 신규 CRITICAL, 수용 후 미해소가 여기 온다 |
 | 18 | `IN_SPOT_CHECK` | 리뷰 도착 | 완료, 미해소 ≥1, `iteration == MAX` | `ESCALATED` | – |
 | 19 | `IN_ARBITRATION` | 항목 하나 도착 | `not arbitration_complete()` | `IN_ARBITRATION` | 저장만 |
-| 20 | `IN_ARBITRATION` | 전체 도착 | 전원 `UPHOLD_AUTHOR` 이고 그 외 미해소 0 | `READY_TO_PUBLISH` | 인용된 항목 종결 |
+| 20 | `IN_ARBITRATION` | 전체 도착 | 전원 `UPHOLD_AUTHOR` 이고 그 외 미해소 0 | `POST_REVIEW` | 인용된 항목 종결. `post_review_stage=POLISH` |
 | 21 | `IN_ARBITRATION` | 전체 도착 | `UPHOLD_REVIEWER` 또는 그 외 미해소, `iteration < MAX` | `REVISING` | `cause=REVIEW`. 인용 항목은 다음 버전에서 기각 불가 |
 | 22 | `IN_ARBITRATION` | 전체 도착 | 21과 같고 `iteration == MAX` | `ESCALATED` | – |
+| 22a | `POST_REVIEW`(`POLISH`) | 다듬기 끝 | 적용할 패치가 있고 합친 본문이 게이트 통과 | `POST_REVIEW`(`FINAL_READ`) | `origin_cause=POLISH` 인 통과 버전 추가. 다시 리뷰하지 않는다 |
+| 22b | `POST_REVIEW`(`POLISH`) | 다듬기 끝 | 패치 없음, 호출 실패, 또는 게이트 실패 | `POST_REVIEW`(`FINAL_READ`) | 새 버전 없음. 다듬기 실패는 글을 멈추지 않는다. 사유는 `PolishRecord` |
+| 22c | `POST_REVIEW`(`FINAL_READ`) | 전체 읽기 응답 | 차단 종류 없음 | `POST_REVIEW`(`ASSESS_LEVEL`) | 관찰은 `final_read` 에 남는다 |
+| 22d | `POST_REVIEW`(`FINAL_READ`) | 전체 읽기 응답 | `BODY_CODE_CONTRADICTION`·`CORE_MECHANISM_MISSING` 존재 | `ESCALATED` | `FINAL_READ_FLAGGED`. 수준 평가를 하지 않는다. 사람은 23~25행으로 정한다 |
+| 22e | `POST_REVIEW`(`ASSESS_LEVEL`) | 평가 응답 | – | `READY_TO_PUBLISH` | `level_assessment` 저장. 막지 않는다 |
 | 23 | `ESCALATED` | `PUBLISH_AS_IS` | `passed_validation` 버전이 있음. 없으면 409 | `READY_TO_PUBLISH` | `approved_by` 기록. 발행본은 마지막 `passed_validation` 버전. `publish_attempts=0`, `publication_intent` 삭제. `PUBLISH_UNCERTAIN` 이면 블로그에 글이 없음을 사람이 확인한 뒤에만 고른다 |
 | 23a | `ESCALATED` | `CONFIRM_PUBLISHED(external_post_id)` | `escalation_reason == PUBLISH_UNCERTAIN` | `PUBLISHED` | 사람이 블로그에서 찾은 게시글 id로 `Publication` 저장, 레지스트리 `PUBLISHED`. Post BE 를 다시 호출하지 않는다 |
 | 24 | `ESCALATED` | `REVISE(instruction)` | – | `REVISING` | `cause=HUMAN`, `human_instruction` 저장. `publish_attempts=0`, `publication_intent` 삭제. `PUBLISH_UNCERTAIN` 이면 블로그에 글이 없음을 사람이 확인한 뒤에만 고른다. 통과 시 6a 행으로 바로 `READY_TO_PUBLISH` |
@@ -130,7 +140,9 @@ stateDiagram-v2
 
 ## 4. 리뷰 렌즈 배정
 
-슬롯 번호에 렌즈를 고정하지 않는다. 라운드의 `ModelBinding` 이 가리키는 세 `primary_lens` 로 계산한다. 세 렌즈가 서로 다르면 계산할 수 있고, 같으면 라운드 시작이 거절한다.
+모든 글은 세 렌즈를 각각 전담 리뷰로 받는다(`build_lens_assignments`). 렌즈마다 모델 하나이고 리뷰어는 주 렌즈로 가린다. 모델은 `REVIEW:{lens}` 라우트에서 작성 벤더를 피해 고른다(07 문서 D-52, D-55).
+
+아래는 그 전의 배정이다. 이미 저장된 글은 이 모양으로 남아 있고 같은 코드로 돈다.
 
 각 글에서 두 리뷰어의 주 렌즈는 작성자 렌즈를 뺀 둘이다. 작성자 렌즈는 어느 리뷰어의 주 렌즈도 아니므로, 한 리뷰어의 `secondary_lens` 로 붙인다. 붙이는 리뷰어는 다음 순서로 고른다.
 
@@ -151,6 +163,7 @@ stateDiagram-v2
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
+| `PUBLISH_POST_LEVEL` | false | 평가 수준을 `CreatePostDto.level` 로 보낸다. Post BE 가 DTO 에 없는 필드를 거부하므로 그쪽 배포 뒤에 켠다 |
 | `MAX_ITERATIONS` | 2 | 리뷰 반영 수정 횟수. v1 위에 v2·v3. 게이트 재시도와 사람 재수정은 세지 않는다 |
 | `MAX_TOPIC_ATTEMPTS` | 2 | 초기 포함 총 제안 횟수. `attempt_number`는 1부터. 2번 시도가 실패하면 `ABORTED` |
 | `MAX_LLM_RETRIES` | 3 | 한 단계 호출이 모두 실패할 때의 호출 수. 실패를 센 뒤 3이면 글 `FAILED`, 주제 선정이면 라운드 `ABORTED` |

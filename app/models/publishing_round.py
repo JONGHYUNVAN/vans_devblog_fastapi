@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.exceptions import InvalidTransitionError
 from app.models.enums import AgentSlot, RoundAbortReason, RoundStatus
 from app.models.model_binding import ModelBinding
+from app.models.routing import RoutingSnapshot
 from app.models.topic import CategoryOption, TopicProposal
 
 
@@ -51,7 +52,13 @@ class PublishingRound(BaseModel):
     round_seq: int = Field(ge=1)  # 주제 배정 동률을 round_seq % 3 으로 가른다
     status: RoundStatus = RoundStatus.TOPIC_SELECTION
     theme_keyword: str | None = None
-    slot_bindings: dict[AgentSlot, ModelBinding]  # 라운드 생성 때 스냅샷. 요청으로 덮어쓸 수 있다(A/B)
+    slot_bindings: dict[
+        AgentSlot, ModelBinding
+    ]  # 슬롯의 페르소나와 작성 모델. 응답 계약이자 발행 계정(D-45)의 기준이다
+    routing: RoutingSnapshot | None = None  # 호출별 모델 후보. 응답에 내보내지 않는다. 라우팅 전 라운드는 None
+    evidence: str | None = (
+        None  # 실제 프로젝트 근거(git 이력, code-graph context, 측정 기록). 없어도 300 까지는 쓸 수 있다
+    )
     categories: list[CategoryOption] = Field(min_length=1)  # 라운드 생성 때 Post BE 에서 읽은 스냅샷
     draft_ids: list[str] = Field(default_factory=list)  # 길이 0 (주제 선정 중) 또는 3 (확정 후)
     topic_attempts: list[TopicAttempt] = Field(default_factory=list)

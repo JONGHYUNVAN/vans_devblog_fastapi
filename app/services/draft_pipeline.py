@@ -11,31 +11,71 @@ from typing import Protocol
 
 from app.agents.builders import (
     build_arbitrate_input,
+    build_arbitrate_search_input,
+    build_assess_level_input,
+    build_fact_check_input,
+    build_fact_transform_input,
+    build_final_read_input,
     build_review_input,
     build_revise_draft_input,
     build_spot_check_input,
     build_write_draft_input,
+    level_criteria_of,
     render_messages,
 )
 from app.agents.contracts import (
     ArbitrateOutput,
+    AssessLevelOutput,
     DraftOutput,
+    FactCheckOutput,
+    FactSpotCheckOutput,
+    FinalReadOutput,
+    LinkStatus,
     ReviewOutput,
     RevisionOutput,
     SpotCheckOutput,
     StructureRules,
 )
-from app.agents.parsers import review_items, review_output_check, spot_check_items, spot_check_output_check
+from app.agents.parsers import (
+    claim_items,
+    fact_output_check,
+    fact_spot_check_output_check,
+    final_read_check,
+    level_assessment_check,
+    normalize_claims,
+    review_items,
+    review_output_check,
+    spot_check_items,
+    spot_check_output_check,
+)
+from app.clients.link_checker import LinkChecker
 from app.core.config import Settings
-from app.core.exceptions import BudgetExceededError, ConcurrentUpdateError, LLMRetriesExhaustedError
-from app.models.enums import AgentSlot, CallKind, FailureCode, PostStatus, ReviewScope, RoundStatus
-from app.models.post_draft import Arbitration, PeerReview, PostDraft, ReviewItem
+from app.core.exceptions import (
+    BudgetExceededError,
+    ConcurrentUpdateError,
+    LLMOutputTruncatedError,
+    LLMRetriesExhaustedError,
+)
+from app.models.enums import CallKind, FailureCode, PostReviewStage, PostStatus, ReviewLens, ReviewScope, RoundStatus
+from app.models.post_draft import (
+    Arbitration,
+    FinalRead,
+    FinalReadFinding,
+    LevelAssessment,
+    LevelEvidence,
+    PeerReview,
+    PostDraft,
+    ReviewItem,
+    VerificationChecklist,
+)
 from app.models.publishing_round import PublishingRound
-from app.models.sections import find_anchors
+from app.models.sections import find_anchors, markdown_links, required_sections_for
 from app.repositories.post_draft import PostDraftRepository
 from app.services.agent_calls import AgentCallService
 from app.services.evaluation import derive_verdict, evaluate
+from app.services.polishing import PolishingService
 from app.services.round import RoundService
+from app.services.routing import DraftRoutes
 from app.services.validation import ValidationGate
 
 logger = logging.getLogger(__name__)
@@ -68,6 +108,7 @@ class DraftPipelineService:
         gate: ValidationGate,
         publisher: DraftPublisher,
         settings: Settings,
+        link_checker: LinkChecker | None = None,
     ) -> None:
         self._drafts = draft_repository
         self._rounds = round_service
@@ -75,6 +116,8 @@ class DraftPipelineService:
         self._gate = gate
         self._publisher = publisher
         self._settings = settings
+        self._links = link_checker
+        self._polisher = PolishingService(agent_call_service=agent_call_service, gate=gate, settings=settings)
         self._rules = StructureRules(min_chars=settings.draft_min_chars, max_chars=settings.draft_max_chars)
 
     async def drive(self, draft_id: str) -> None:
@@ -117,6 +160,8 @@ class DraftPipelineService:
                 await self._review(draft, publishing_round)
             case PostStatus.IN_ARBITRATION:
                 await self._arbitrate(draft, publishing_round)
+            case PostStatus.POST_REVIEW:
+                await self._post_review(draft, publishing_round)
             case PostStatus.READY_TO_PUBLISH:
                 await self._publisher.publish(draft, publishing_round)
                 return draft  # 발행은 의도·결과를 스스로 저장한다
@@ -125,18 +170,24 @@ class DraftPipelineService:
         await self._drafts.save(draft)
         return draft
 
+    def _rules_for(self, draft: PostDraft) -> StructureRules:
+        return self._rules.model_copy(update={"required_sections": required_sections_for(draft.topic.target_level)})
+
     async def _write(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
         """revision_cause 가 없으면 WRITE_DRAFT, 있으면 REVISE_DRAFT. DRAFTING 에서 재시작해도 같은 호출이다 (설계 07 문서 D-11)."""
         target_version = len(draft.versions) + 1
+        routes = DraftRoutes(publishing_round, draft)
+        rules = self._rules_for(draft)
         try:
             if draft.revision_cause is None:
+                model = routes.writer
                 result = await self._calls.call(
                     kind=CallKind.WRITE_DRAFT,
                     round_id=draft.round_id,
                     slot=draft.author_slot,
-                    binding=publishing_round.slot_bindings[draft.author_slot],
+                    binding=model,
                     messages=render_messages(
-                        build_write_draft_input(draft, publishing_round, self._rules), self._settings.prompt_version
+                        build_write_draft_input(draft, publishing_round, rules), self._settings.prompt_version
                     ),
                     schema=DraftOutput,
                     draft=draft,
@@ -144,14 +195,15 @@ class DraftPipelineService:
                 )
                 resolutions, author_note = [], ""
             else:
+                model = routes.reviser
                 result = await self._calls.call(
                     kind=CallKind.REVISE_DRAFT,
                     round_id=draft.round_id,
                     slot=draft.author_slot,
-                    binding=publishing_round.slot_bindings[draft.author_slot],
+                    binding=model,
                     messages=render_messages(
                         build_revise_draft_input(
-                            draft, publishing_round, self._rules, max_iterations=self._settings.max_iterations
+                            draft, publishing_round, rules, max_iterations=self._settings.max_iterations
                         ),
                         self._settings.prompt_version,
                     ),
@@ -172,6 +224,7 @@ class DraftPipelineService:
             resolutions=resolutions,
             author_note=author_note,
             call_id=result.call_id,
+            model_id=model.model_id,
         )
 
     def _validate(self, draft: PostDraft) -> None:
@@ -188,7 +241,7 @@ class DraftPipelineService:
         """
         scope = draft.current_review_scope
         reviews, failures = await _gather(
-            [self._call_review(draft, publishing_round, slot, scope) for slot in draft.pending_reviewers()]
+            [self._call_review(draft, publishing_round, lens, scope) for lens in draft.pending_reviewers()]
         )
         for review in reviews:
             draft.add_review(review)
@@ -208,6 +261,68 @@ class DraftPipelineService:
         elif draft.arbitration_complete():
             draft.apply_evaluation(evaluate(draft, self._settings.max_iterations))
 
+    async def _post_review(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        """다듬기 → 전체 읽기 → 수준 평가. 한 걸음에 한 단계만 하고 포인터와 결과를 함께 저장해 재개 때 되풀이하지 않는다.
+
+        읽기와 평가가 최종 본문을 보도록 다듬기가 먼저다. 다듬기 실패는 건너뛰고, 읽기·평가의 재시도 소진·예산 초과는 FAILED 다.
+        """
+        try:
+            match draft.post_review_stage:
+                case PostReviewStage.POLISH:
+                    await self._polisher.polish(draft, publishing_round)
+                case PostReviewStage.FINAL_READ:
+                    await self._final_read(draft, publishing_round)
+                case PostReviewStage.ASSESS_LEVEL:
+                    await self._assess_level(draft, publishing_round)
+                case stage:
+                    raise ValueError(f"draft {draft.draft_id} is POST_REVIEW at stage {stage}")
+        except _STEP_FAILURES as exc:
+            self._fail(draft, [exc])
+
+    async def _final_read(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        version = draft.current_version
+        result = await self._calls.call(
+            kind=CallKind.FINAL_READ,
+            round_id=draft.round_id,
+            binding=DraftRoutes(publishing_round, draft).final_reader,
+            messages=render_messages(build_final_read_input(draft), self._settings.prompt_version),
+            schema=FinalReadOutput,
+            check=final_read_check(version.content_markdown, find_anchors(version.content_markdown)),
+            draft=draft,
+            target_version=version.version_number,
+        )
+        draft.record_final_read(
+            FinalRead(
+                target_version=version.version_number,
+                findings=[FinalReadFinding(**finding.model_dump()) for finding in result.output.findings],
+                overall=result.output.overall,
+                call_id=result.call_id,
+            )
+        )
+
+    async def _assess_level(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        version = draft.current_version
+        result = await self._calls.call(
+            kind=CallKind.ASSESS_LEVEL,
+            round_id=draft.round_id,
+            binding=DraftRoutes(publishing_round, draft).level_assessor,
+            messages=render_messages(build_assess_level_input(draft, publishing_round), self._settings.prompt_version),
+            schema=AssessLevelOutput,
+            check=level_assessment_check(version.content_markdown),
+            draft=draft,
+            target_version=version.version_number,
+        )
+        draft.record_level_assessment(
+            LevelAssessment(
+                target_version=version.version_number,
+                level=result.output.level,
+                evidence=[LevelEvidence(**evidence.model_dump()) for evidence in result.output.evidence],
+                reasoning=result.output.reasoning,
+                criteria_version=level_criteria_of(publishing_round).version,
+                call_id=result.call_id,
+            )
+        )
+
     def _fail(self, draft: PostDraft, failures: list[Exception]) -> None:
         """사유가 여럿이면 BUDGET_EXCEEDED 를 남긴다 (설계 03 문서 5행). 재개 때 상한을 올릴 수 있기 때문이다.
 
@@ -220,6 +335,8 @@ class DraftPipelineService:
             code = FailureCode.BUDGET_EXCEEDED
         elif unexpected:
             code = FailureCode.INTERNAL_ERROR
+        elif any(isinstance(failure, LLMOutputTruncatedError) for failure in failures):
+            code = FailureCode.OUTPUT_TRUNCATED
         else:
             code = FailureCode.LLM_RETRIES_EXHAUSTED
         draft.mark_failed(
@@ -231,20 +348,23 @@ class DraftPipelineService:
         )
 
     async def _call_review(
-        self, draft: PostDraft, publishing_round: PublishingRound, slot: AgentSlot, scope: ReviewScope
+        self, draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens, scope: ReviewScope
     ) -> PeerReview:
+        if draft.checks_facts(lens):
+            return await self._call_fact_review(draft, publishing_round, lens, scope)
         version = draft.current_version
-        assignment = draft.assignment_of(slot)
-        review_id = f"{draft.draft_id}:v{version.version_number}:{slot}:{scope}"
+        assignment = draft.assignment_of(lens)
+        review_id = f"{draft.draft_id}:v{version.version_number}:{assignment.slot or lens}:{scope}"
         section_ids = find_anchors(version.content_markdown)
+        model = DraftRoutes(publishing_round, draft).reviewer(lens)
         if scope == ReviewScope.FULL:
             result = await self._calls.call(
                 kind=CallKind.REVIEW,
                 round_id=draft.round_id,
-                slot=slot,
-                binding=publishing_round.slot_bindings[slot],
+                lens=lens,
+                binding=model,
                 messages=render_messages(
-                    build_review_input(draft, publishing_round, slot), self._settings.prompt_version
+                    build_review_input(draft, publishing_round, lens), self._settings.prompt_version
                 ),
                 schema=ReviewOutput,
                 check=review_output_check(section_ids, assignment.lenses),
@@ -252,19 +372,19 @@ class DraftPipelineService:
                 target_version=version.version_number,
             )
             output = result.output
-            items = review_items(output.items, review_id=review_id, reviewer_slot=slot)
+            items = review_items(output.items, review_id=review_id)
             item_checks: list = []
             reported = output.verdict
             feedback = output.overall_feedback
         else:
-            expected_ids = [item.item_id for item in draft.previous_items_of(slot)]
+            expected_ids = [item.item_id for item in draft.previous_items_of(lens)]
             result = await self._calls.call(
                 kind=CallKind.REVIEW,
                 round_id=draft.round_id,
-                slot=slot,
-                binding=publishing_round.slot_bindings[slot],
+                lens=lens,
+                binding=model,
                 messages=render_messages(
-                    build_spot_check_input(draft, publishing_round, slot), self._settings.prompt_version
+                    build_spot_check_input(draft, publishing_round, lens), self._settings.prompt_version
                 ),
                 schema=SpotCheckOutput,
                 check=spot_check_output_check(section_ids, expected_ids, assignment.lenses),
@@ -272,7 +392,7 @@ class DraftPipelineService:
                 target_version=version.version_number,
             )
             output = result.output
-            items = spot_check_items(output, review_id=review_id, reviewer_slot=slot)
+            items = spot_check_items(output, review_id=review_id)
             item_checks = list(output.item_checks)
             reported = None
             feedback = ""
@@ -283,7 +403,8 @@ class DraftPipelineService:
         return PeerReview(
             review_id=review_id,
             target_version=version.version_number,
-            reviewer_slot=slot,
+            reviewer_slot=assignment.slot,
+            model_id=model.model_id,
             lens=assignment.primary_lens,
             secondary_lens=assignment.secondary_lens,
             scope=scope,
@@ -296,17 +417,132 @@ class DraftPipelineService:
             call_id=result.call_id,
         )
 
+    async def _link_status(self, markdown: str) -> list[LinkStatus]:
+        if self._links is None:
+            return []
+        statuses = await self._links.check(markdown_links(markdown))
+        return [LinkStatus(url=url, status=status) for url, status in statuses.items()]
+
+    async def _call_fact_review(
+        self, draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens, scope: ReviewScope
+    ) -> PeerReview:
+        """사실 확인 렌즈: 웹 검색 호출 → 변환 호출. 심각도는 코드가 정한다(REFUTED CRITICAL, UNVERIFIABLE MINOR).
+
+        구조화 출력과 검색을 한 호출에 묶을 수 있는지가 벤더마다 달라(Claude 는 400) 모든 벤더가 두 호출을 쓴다.
+        변환 모델이 URL 을 지어내도 검색 호출의 출처에 없으면 지운다. 검색 도구 자체의 실패는 호출 실패다.
+        """
+        version = draft.current_version
+        review_id = f"{draft.draft_id}:v{version.version_number}:{lens}:{scope}"
+        routes = DraftRoutes(publishing_round, draft)
+        model = routes.reviewer(lens)
+        fact_input = build_fact_check_input(
+            draft, publishing_round, lens, await self._link_status(version.content_markdown)
+        )
+        if scope == ReviewScope.SPOT_CHECK and not (fact_input.changed_section_ids or fact_input.my_previous_items):
+            # 바뀐 섹션도 확인할 지적도 없다. 호출하지 않고 리뷰만 남긴다
+            return PeerReview(
+                review_id=review_id,
+                target_version=version.version_number,
+                model_id=model.model_id,
+                lens=lens,
+                scope=scope,
+                derived_verdict=derive_verdict(scope, [], []),
+                checklist=VerificationChecklist(checked_claims=["수정으로 바뀐 섹션이 없다"]),
+                overall_feedback="",
+                call_id="",
+            )
+        searched = await self._calls.search(
+            round_id=draft.round_id,
+            binding=model,
+            messages=render_messages(fact_input, self._settings.prompt_version),
+            draft=draft,
+            lens=lens,
+            target_version=version.version_number,
+        )
+        transform_messages = render_messages(
+            build_fact_transform_input(draft, lens, searched.text, searched.citations), self._settings.prompt_version
+        )
+        section_ids = find_anchors(version.content_markdown)
+        if scope == ReviewScope.FULL:
+            result = await self._calls.call(
+                kind=CallKind.FACT_TRANSFORM,
+                round_id=draft.round_id,
+                lens=lens,
+                binding=routes.fact_transformer,
+                messages=transform_messages,
+                schema=FactCheckOutput,
+                check=fact_output_check(section_ids, {lens}),
+                draft=draft,
+                target_version=version.version_number,
+            )
+            output = result.output
+            items = review_items(output.items, review_id=review_id)
+            item_checks: list = []
+            reported = output.verdict
+            feedback = output.overall_feedback
+        else:
+            expected_ids = [item.item_id for item in draft.previous_items_of(lens)]
+            result = await self._calls.call(
+                kind=CallKind.FACT_TRANSFORM,
+                round_id=draft.round_id,
+                lens=lens,
+                binding=routes.fact_transformer,
+                messages=transform_messages,
+                schema=FactSpotCheckOutput,
+                check=fact_spot_check_output_check(section_ids, expected_ids, {lens}),
+                draft=draft,
+                target_version=version.version_number,
+            )
+            output = result.output
+            items = spot_check_items(output, review_id=review_id)
+            item_checks = list(output.item_checks)
+            reported = None
+            feedback = ""
+        if output.claims and not searched.citations:
+            # 모델이 검색 없이 기억으로 답했다. 전부 UNVERIFIABLE 로 내려 틀린 사실이 조용히 통과하지 않게 호출 실패로 둔다
+            raise LLMRetriesExhaustedError(f"fact check {review_id} made claims but the search call cited nothing")
+        known = set(fact_input.known_claims)  # 모델이 지시를 어겨도 이미 끝난 주장이 새 지적으로 되살아나지 않는다
+        claims = normalize_claims([claim for claim in output.claims if claim.claim not in known], searched.citations)
+        items += claim_items(claims, review_id=review_id, lens=lens, scope=scope, start=len(items) + 1)
+        return PeerReview(
+            review_id=review_id,
+            target_version=version.version_number,
+            model_id=model.model_id,
+            lens=lens,
+            scope=scope,
+            reported_verdict=reported,
+            derived_verdict=derive_verdict(scope, items, item_checks),
+            items=items,
+            item_checks=item_checks,
+            checklist=output.checklist,
+            overall_feedback=feedback,
+            call_id=result.call_id,
+            claims=claims,
+        )
+
     async def _call_arbitrate(
         self, draft: PostDraft, publishing_round: PublishingRound, item: ReviewItem
     ) -> Arbitration:
-        arbiter = next(slot for slot in AgentSlot if slot not in (draft.author_slot, item.reviewer_slot))
+        """중재자는 작성·리뷰 벤더가 아닌 ARBITRATE 후보다. 사실 확인 지적의 분쟁이면 기억이 아니라 검색한 근거로 판정한다."""
+        model = DraftRoutes(publishing_round, draft).arbiter(draft.reviewer_of(item))
         version_number = draft.current_version.version_number
+        evidence = None
+        if item.from_fact_check:
+            searched = await self._calls.search(
+                round_id=draft.round_id,
+                binding=model,
+                messages=render_messages(build_arbitrate_search_input(draft, item), self._settings.prompt_version),
+                draft=draft,
+                target_version=version_number,
+                item_id=item.item_id,
+            )
+            sources = "\n".join(citation.url for citation in searched.citations)
+            evidence = f"{searched.text}\n\n출처:\n{sources}" if sources else searched.text
         result = await self._calls.call(
             kind=CallKind.ARBITRATE,
             round_id=draft.round_id,
-            slot=arbiter,
-            binding=publishing_round.slot_bindings[arbiter],
-            messages=render_messages(build_arbitrate_input(draft, item), self._settings.prompt_version),
+            binding=model,
+            messages=render_messages(build_arbitrate_input(draft, item, evidence), self._settings.prompt_version),
             schema=ArbitrateOutput,
             draft=draft,
             target_version=version_number,
@@ -316,7 +552,7 @@ class DraftPipelineService:
             arbitration_id=f"{item.item_id}:arb:v{version_number}",
             target_version=version_number,
             item_id=item.item_id,
-            arbiter_slot=arbiter,
+            model_id=model.model_id,
             outcome=result.output.outcome,
             reasoning=result.output.reasoning,
             call_id=result.call_id,

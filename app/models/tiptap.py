@@ -31,6 +31,16 @@ def parse_markdown(markdown: str) -> list[Token]:
     return _parser.parse(markdown)
 
 
+def top_level_paragraphs(markdown: str) -> list[tuple[int, int, Token]]:
+    """최상위 문단마다 (시작 줄, 끝 줄(미포함), inline 토큰). 목록·표·인용·코드 안은 뺀다. 밀도 지표와 다듬기가 쓴다."""
+    tokens = parse_markdown(markdown)
+    return [
+        (token.map[0], token.map[1], tokens[index + 1])
+        for index, token in enumerate(tokens)
+        if token.type == "paragraph_open" and token.level == 0 and token.map
+    ]
+
+
 def markdown_to_tiptap(markdown: str) -> dict[str, Any]:
     """앵커를 지우고 변환한다. HTML·이미지·각주·mermaid·그 밖의 변환표 밖 문법은 ValueError."""
     text = strip_anchors(markdown)

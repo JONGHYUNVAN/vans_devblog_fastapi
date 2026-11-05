@@ -24,6 +24,7 @@ from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
 from app.services.round import RoundService
+from app.services.routing import proposer_of
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ class TopicSelectionService:
                     kind=CallKind.PROPOSE_TOPIC,
                     round_id=publishing_round.round_id,
                     slot=slot,
-                    binding=publishing_round.slot_bindings[slot],
+                    binding=proposer_of(publishing_round, slot),
                     messages=render_messages(
                         build_propose_topic_input(
                             publishing_round,
@@ -103,7 +104,11 @@ class TopicSelectionService:
                         self._settings.prompt_version,
                     ),
                     schema=ProposeTopicOutput,
-                    check=topic_proposal_check(publishing_round.categories),
+                    check=topic_proposal_check(
+                        publishing_round.categories,
+                        persona_id=publishing_round.slot_bindings[slot].persona_id,
+                        has_evidence=bool(publishing_round.evidence),
+                    ),
                     topic_attempt=attempt.attempt_number,
                 )
                 for slot in slots

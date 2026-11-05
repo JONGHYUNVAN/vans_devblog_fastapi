@@ -5,8 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import AgentSlot, CallKind
-from app.models.model_binding import ModelBinding
+from app.models.enums import AgentSlot, CallKind, ReviewLens
+from app.models.model_binding import CallModel
 
 
 class TokenUsage(BaseModel):
@@ -35,8 +35,9 @@ class AgentCall(BaseModel):
     round_id: str
     draft_id: str | None = None  # 주제 제안 호출은 글이 없다
     kind: CallKind
-    slot: AgentSlot
-    model_binding: ModelBinding  # 호출 시점 스냅샷
+    slot: AgentSlot | None = None  # 작성자 호출과 옛 리뷰만. 리뷰는 lens, 나머지는 슬롯과 무관하다
+    lens: ReviewLens | None = None  # 어느 렌즈의 호출인지. 모델·렌즈별 지표에 쓴다
+    model_binding: CallModel  # 호출 시점 스냅샷. 옛 영수증의 persona_id 는 읽을 때 버린다
     prompt_template_version: str
     # 어느 단계의 호출인지
     target_version: int | None = None
@@ -46,6 +47,8 @@ class AgentCall(BaseModel):
     messages: list[ChatMessage]  # 이 시도에 실제로 보낸 메시지
     output_raw: str | None = None
     output_parsed_ok: bool = False
+    stop_reason: str = ""  # 벤더가 준 종료 사유
+    citations: list[str] = Field(default_factory=list)  # 검색 호출이 실제로 쓴 출처 URL
     error: str | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
     latency_ms: int = 0

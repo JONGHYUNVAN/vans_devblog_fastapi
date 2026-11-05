@@ -4,12 +4,13 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from app.core.config import get_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.dependencies import (
     build_agent_call_service,
     build_code_graph_service,
@@ -26,6 +27,7 @@ from app.dependencies import (
     open_clients,
 )
 from app.models.enums import EscalationDecisionKind, RoundStatus
+from app.models.model_binding import CallModel
 from app.schemas.agent_pipeline import RoundProgress
 from app.schemas.sync import SyncOptions
 from app.services.pipeline_views import build_draft_public
@@ -91,7 +93,7 @@ def setup_popular(
 
 
 def _run_agents(coroutine_factory):
-    """비동기 Mongo 연결을 열고 코루틴을 돌린 뒤 닫는다. agents 명령이 같이 쓴다. 없는 id 는 메시지와 종료 코드 1."""
+    """비동기 Mongo 연결을 열고 코루틴을 돌린 뒤 닫는다. agents 명령이 같이 쓴다. 없는 id 와 잘못된 값은 메시지와 종료 코드 1."""
     settings = get_settings()
     if not settings.mongodb_db_name:
         typer.echo("MongoDB DB 이름(MONGODB_DATABASE 또는 URI 경로)이 없다.", err=True)
@@ -103,7 +105,7 @@ def _run_agents(coroutine_factory):
 
     try:
         return asyncio.run(_main())
-    except NotFoundError as exc:
+    except (NotFoundError, InvalidRequestError) as exc:
         typer.echo(exc.message, err=True)
         raise typer.Exit(1) from exc
 
@@ -131,12 +133,18 @@ def start_round(
     wait: Annotated[
         bool, typer.Option(help="러너가 더 할 일이 없을 때(종결·사람 대기)까지 폴링하며 상태를 찍는다")
     ] = False,
+    evidence_file: Annotated[
+        Path | None,
+        typer.Option(
+            help="실제 프로젝트 근거 파일(git 이력, code-graph context, 측정 기록). 없으면 400 을 고를 수 없다"
+        ),
+    ] = None,
 ) -> None:
     """Post BE 카테고리를 읽어 라운드를 TOPIC_SELECTION 으로 만든다. 진행은 러너(서버 또는 `agents run`)가 한다."""
 
     async def _start(database, settings):
         publishing_round = await build_round_service(database, settings).start_round(
-            theme_keyword=theme, slot_bindings=settings.agent_slot_bindings
+            theme_keyword=theme, evidence=evidence_file.read_text(encoding="utf-8") if evidence_file else None
         )
         typer.echo(
             json.dumps({"round_id": publishing_round.round_id, "status": publishing_round.status}, ensure_ascii=False)
@@ -200,6 +208,14 @@ def show(
                 typer.echo(f"   [{item.severity}] {item.item_id} ({item.section_id}) {item.comment}")
         for arbitration in history.arbitrations:
             typer.echo(f"-- arbitration {arbitration.item_id}: {arbitration.outcome} — {arbitration.reasoning}")
+        if history.polish:
+            typer.echo(f"-- polish {history.polish.model_dump(mode='json')}")
+        if history.final_read:
+            typer.echo(f"-- final read v{history.final_read.target_version}: {history.final_read.overall}")
+            for finding in history.final_read.findings:
+                typer.echo(f"   [{finding.kind}] ({finding.section_id}) {finding.comment} «{finding.quote}»")
+        if history.level_assessment:
+            typer.echo(f"-- level {history.level_assessment.level}: {history.level_assessment.reasoning}")
         if history.publication:
             typer.echo(f"-- publication {history.publication.model_dump(mode='json', exclude={'peer_review_note'})}")
         chosen = (
@@ -299,6 +315,104 @@ def replay(
         typer.echo(f"\n===== 응답 =====\n{result.text}")
 
     _run_agents(_replay)
+
+
+@agents.command()
+def compare_prompts(
+    call_id: str,
+    version: Annotated[list[str], typer.Option(help="비교할 프롬프트 버전. 여러 번 준다")],
+    core_mechanism: Annotated[str, typer.Option(help="옛 입력에 없는 핵심 메커니즘")],
+    out_of_scope: Annotated[list[str], typer.Option(help="옛 입력에 없는 '다루지 않을 것'. 여러 번 준다")],
+    runs: Annotated[int, typer.Option(min=1, help="버전마다 몇 번 쓸지")] = 3,
+) -> None:
+    """저장된 WRITE_DRAFT 입력을 프롬프트 버전별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다."""
+
+    async def _compare(database, settings):
+        service = build_agent_call_service(database, settings)
+        rows = await service.compare_write_prompts(
+            await service.get(call_id),
+            versions=version,
+            runs=runs,
+            core_mechanism=core_mechanism,
+            out_of_scope=out_of_scope,
+        )
+        for prompt_version, run, density, error in rows:
+            _echo(
+                {
+                    "version": prompt_version,
+                    "run": run,
+                    "error": error,
+                    "density": density.model_dump(mode="json") if density else None,
+                }
+            )
+
+    _run_agents(_compare)
+
+
+@agents.command()
+def fact_check(
+    file: Path,
+    provider: Annotated[str, typer.Option(help="검색 호출 벤더")],
+    model: Annotated[str, typer.Option(help="검색 호출 모델")],
+    effort: Annotated[str | None, typer.Option(help="low | medium | high | xhigh | max")] = None,
+    transform_provider: Annotated[str, typer.Option(help="JSON 변환 벤더")] = "anthropic",
+    transform_model: Annotated[str, typer.Option(help="JSON 변환 모델")] = "claude-haiku-5-5",
+    max_output_tokens: Annotated[int, typer.Option(min=1)] = 16000,
+) -> None:
+    """마크다운 파일 하나를 사실 확인해 주장을 찍는다. 잘못된 API 를 심은 글로 재현율·오탐을 잰다. 영수증·상태는 바꾸지 않는다."""
+
+    async def _fact_check(database, settings):
+        claims, citations = await build_agent_call_service(database, settings).probe_fact_check(
+            file.read_text(encoding="utf-8"),
+            binding=CallModel(provider=provider, model_id=model, effort=effort, max_output_tokens=max_output_tokens),
+            transformer=CallModel(provider=transform_provider, model_id=transform_model, max_output_tokens=8000),
+            prompt_version=settings.prompt_version,
+        )
+        _echo(
+            {
+                "claims": [claim.model_dump(mode="json") for claim in claims],
+                "citations": [citation.url for citation in citations],
+            }
+        )
+
+    _run_agents(_fact_check)
+
+
+@agents.command()
+def seed_routes(file: Path) -> None:
+    """호출별 모델 라우트(JSON 배열, 예시는 agents_design/routes.example.json)를 넣는다. 진행 중인 라운드는 스냅샷을 쓴다."""
+
+    async def _seed(database, settings):
+        documents = json.loads(file.read_text(encoding="utf-8"))
+        await build_round_service(database, settings).seed_routes(documents)
+        typer.echo(f"라우트 문서 {len(documents)}건을 넣었다.")
+
+    try:
+        _run_agents(_seed)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@agents.command()
+def routes() -> None:
+    """현재 라우트 문서를 찍는다."""
+
+    async def _routes(database, settings):
+        _echo(await build_round_service(database, settings).list_route_documents())
+
+    _run_agents(_routes)
+
+
+@agents.command()
+def label(draft_id: str, level: Annotated[int, typer.Argument(help="100 | 200 | 300 | 400")]) -> None:
+    """사용자가 매긴 수준을 글에 남긴다. `agents metrics` 의 일치도 측정에 쓴다. 흐름은 바꾸지 않는다."""
+
+    async def _label(database, settings):
+        await build_draft_decision_service(database, settings).label_level(draft_id, level)
+        typer.echo(f"{draft_id} 를 {level} 로 표시했다.")
+
+    _run_agents(_label)
 
 
 @agents.command()

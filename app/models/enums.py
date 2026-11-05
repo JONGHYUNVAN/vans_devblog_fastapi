@@ -1,6 +1,9 @@
 """파이프라인 도메인 열거형 (설계 02 문서 1절)."""
 
 from enum import StrEnum
+from typing import Literal
+
+PostLevel = Literal[100, 200, 300, 400]  # 글의 전문성 수준 (models/level.py 기준표)
 
 
 class AgentSlot(StrEnum):
@@ -24,6 +27,7 @@ class PostStatus(StrEnum):
     IN_SPOT_CHECK = "IN_SPOT_CHECK"  # SPOT_CHECK 리뷰 진행
     IN_ARBITRATION = "IN_ARBITRATION"  # 제3 슬롯 중재 진행
     REVISING = "REVISING"  # 작성자 호출 전 대기. revision_cause 가 리뷰·게이트·사람 중 무엇인지를 말한다
+    POST_REVIEW = "POST_REVIEW"  # 리뷰 통과 뒤 발행 전 단계. post_review_stage 가 어디까지 했는지 말한다
     READY_TO_PUBLISH = "READY_TO_PUBLISH"
     PUBLISHED = "PUBLISHED"  # 종결
     ESCALATED = "ESCALATED"  # 사람 판단 대기
@@ -57,6 +61,9 @@ class ResolutionStatus(StrEnum):
     ACCEPTED = "ACCEPTED"
     REJECTED_WITH_REASON = "REJECTED_WITH_REASON"
     DEFERRED = "DEFERRED"  # MINOR·NITPICK 에만 허용. "이번 버전에서 다루지 않음"
+    OUT_OF_SCOPE = (
+        "OUT_OF_SCOPE"  # 차단 항목에만 허용. 글의 범위 밖이라 본문을 넓히지 않고 범위 선언에 남긴다. 사유 필수
+    )
 
 
 class ArbitrationOutcome(StrEnum):
@@ -76,12 +83,16 @@ class RevisionCause(StrEnum):
     REVIEW = "REVIEW"  # 리뷰 평가가 수정을 요구. 나갈 때 iteration += 1
     GATE = "GATE"  # 결정론적 게이트 실패. iteration 유지
     HUMAN = "HUMAN"  # 사람이 ESCALATED 에서 1회 재수정을 허가. iteration 유지
+    POLISH = "POLISH"  # origin_cause 전용. 발행 전 단계의 다듬기가 만든 버전. REVISING 을 거치지 않는다
 
 
 class EscalationReason(StrEnum):
     MAX_ITERATIONS_REACHED = "MAX_ITERATIONS_REACHED"
     PUBLISH_FAILED = "PUBLISH_FAILED"
     PUBLISH_UNCERTAIN = "PUBLISH_UNCERTAIN"  # 발행 호출 결과를 모름. 중복 게시를 막으려고 자동 재시도하지 않는다
+    FINAL_READ_FLAGGED = (
+        "FINAL_READ_FLAGGED"  # 발행 전 전체 읽기가 차단 결함을 찾았다. 수정 루프로 돌리지 않고 사람이 정한다
+    )
 
 
 class EscalationDecisionKind(StrEnum):
@@ -100,6 +111,7 @@ class FailureCode(StrEnum):
     GATE_RETRIES_EXHAUSTED = "GATE_RETRIES_EXHAUSTED"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"  # 호출 전 소프트 예산 검사 실패. 재개 때 상한을 올릴 수 있다
     INTERNAL_ERROR = "INTERNAL_ERROR"  # 코루틴 안의 예상하지 못한 예외. 같은 오류로 호출을 되풀이하지 않으려고 멈춘다
+    OUTPUT_TRUNCATED = "OUTPUT_TRUNCATED"  # 벤더 출력 한도까지 올려도 응답이 잘렸다. 같은 한도로 되풀이하지 않는다
 
 
 class RoundAbortReason(StrEnum):
@@ -121,3 +133,46 @@ class CallKind(StrEnum):
     REVISE_DRAFT = "REVISE_DRAFT"
     REVIEW = "REVIEW"
     ARBITRATE = "ARBITRATE"
+    FACT_CHECK = "FACT_CHECK"  # 웹 검색으로 사실을 확인한다. 응답은 글과 출처다
+    FACT_TRANSFORM = "FACT_TRANSFORM"  # FACT_CHECK 응답을 계약 JSON 으로 옮긴다
+    FINAL_READ = "FINAL_READ"
+    ASSESS_LEVEL = "ASSESS_LEVEL"
+    POLISH_FORMAT = "POLISH_FORMAT"
+    POLISH_TONE = "POLISH_TONE"
+
+
+class PostReviewStage(StrEnum):
+    """POST_REVIEW 안에서 다음에 할 일. 끝낸 호출을 재개 때 되풀이하지 않게 호출과 함께 저장한다."""
+
+    POLISH = "POLISH"
+    FINAL_READ = "FINAL_READ"
+    ASSESS_LEVEL = "ASSESS_LEVEL"
+    DONE = "DONE"
+
+
+class FinalReadKind(StrEnum):
+    """전체 읽기가 낸 지적의 종류. 격리 여부는 모델의 판정이 아니라 이 종류로 코드가 정한다."""
+
+    BODY_CODE_CONTRADICTION = "BODY_CODE_CONTRADICTION"  # 본문과 코드가 어긋난다. 차단
+    CORE_MECHANISM_MISSING = "CORE_MECHANISM_MISSING"  # 제목과 핵심 메커니즘을 본문·코드가 보여 주지 않는다. 차단
+    OBSERVATION = "OBSERVATION"  # 그 밖의 관찰. 차단하지 않고 사람용 요약에 남긴다
+
+    @property
+    def is_blocking(self) -> bool:
+        return self != FinalReadKind.OBSERVATION
+
+
+class ClaimType(StrEnum):
+    """외부 문서로 참·거짓을 가릴 수 있는 주장의 종류. 설계 판단·의견은 추출하지 않는다."""
+
+    API = "API"  # 프레임워크·라이브러리 API 동작
+    CONFIG_OPTION = "CONFIG_OPTION"  # 설정 옵션 이름
+    VERSION = "VERSION"  # 특정 버전에서 달라졌다는 서술
+    DB_SYNTAX = "DB_SYNTAX"  # DB 문법
+    PROTOCOL_OR_FIGURE = "PROTOCOL_OR_FIGURE"  # 프로토콜·전달 보장·벤치마크 수치
+
+
+class ClaimStatus(StrEnum):
+    SUPPORTED = "SUPPORTED"
+    REFUTED = "REFUTED"
+    UNVERIFIABLE = "UNVERIFIABLE"

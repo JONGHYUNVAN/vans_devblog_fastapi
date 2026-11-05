@@ -52,7 +52,7 @@ routers, cli ─→ services ─→ repositories ─→ clients
 | 계층 | import 해도 되는 것 | import 하면 안 되는 것 |
 |---|---|---|
 | `routers/`, `cli/` | `services`, `schemas`, `dependencies`, `core` | `repositories`, `models`, `clients`, `elasticsearch`, `pymongo` |
-| `services/` | `repositories`, `models`, `schemas`, `agents`, `clients/kis`, `clients/llm`, `clients/publisher`, `clients/github`, `clients/openapi`, `core` | `fastapi`, `starlette`(Request·Response·HTTPException), `elasticsearch`, `pymongo` |
+| `services/` | `repositories`, `models`, `schemas`, `agents`, `clients/kis`, `clients/llm`, `clients/publisher`, `clients/github`, `clients/openapi`, `clients/link_checker`, `core` | `fastapi`, `starlette`(Request·Response·HTTPException), `elasticsearch`, `pymongo` |
 | `agents/` | `models`, `core` | `services`, `repositories`, `clients`, `schemas`, `fastapi` |
 | `repositories/` | `models`, `clients`, `core`, `elasticsearch`, `pymongo` | `services`, `schemas`, `fastapi` |
 | `models/`, `schemas/` | `core` | 그 외 `app` 전부. 서로도 import하지 않는다(변환은 서비스가 한다) |

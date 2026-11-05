@@ -30,14 +30,16 @@ app/
 ├─ main.py                     lifespan: Mongo(async) 연결, 인덱스 보장, PipelineRunner 시작·종료(DB 이름이 없으면 러너를 돌리지 않는다)
 ├─ dependencies.py             build_pipeline_runner·build_llm_registry·build_publisher·build_round_service·build_draft_decision_service·build_pipeline_view_service·build_agent_call_service(lifespan·CLI 공용 조립), open_async_database(CLI 연결), get_async_database·get_round_service·get_draft_decision_service·get_pipeline_view_service(라우터), verify_agents_key(AGENTS_INTERNAL_API_KEY, 07 문서 D-44). 라우터·CLI 에 리포지토리를 직접 주지 않는다
 ├─ core/
-│  ├─ config.py                Settings: 벤더 키, 슬롯 바인딩(원문 dict. 검증은 RoundService.create_round. core 는 models 를 import 하지 않는다), 반복·예산 상수, 승인 토글, 벤더별 발행 계정
+│  ├─ config.py                Settings: 벤더 키, 반복·예산 상수, 승인 토글, 벤더별 발행 계정
 │  └─ exceptions.py            AppError + InvalidTransitionError(409), ConcurrentUpdateError(409), BudgetExceededError, LLMTransportError, LLMOutputError, LLMRetriesExhaustedError, PublishFailedError, PublishUncertainError
 ├─ routers/
 │  └─ agent_rounds.py          내부 API (X-Internal-Key)
 ├─ schemas/
 │  └─ agent_pipeline.py        RoundCreate, RoundPublic, DraftPublic, DraftHistory, EscalationDecision, DraftApproval, DraftRetry, DraftDiscard, RoundProgress(CLI), … 필드 타입으로만 models 를 쓴다. 변환은 services/pipeline_views.py
 ├─ services/
-│  ├─ round.py                 RoundService: 라운드 생성(create_round: 바인딩·페르소나·렌즈 매트릭스 검증, round_id 는 uuid, round_seq 는 기존 라운드 수 + 1)·글 문서 생성(build_draft)·종결(close_if_complete)·중단(abort_round)·정리(reconcile)
+│  ├─ routing.py               DraftRoutes(글 하나의 호출별 모델 선택), 라우팅 전 라운드의 legacy_snapshot
+│  ├─ polishing.py             PolishingService: 정규식·줄바꿈·문체 패치와 안전장치
+│  ├─ round.py                 RoundService: 라우트 넣기·스냅샷, 라운드 생성(create_round: 라우트·페르소나·조합 검증, round_id 는 uuid, round_seq 는 기존 라운드 수 + 1)·글 문서 생성(build_draft)·종결(close_if_complete)·중단(abort_round)·정리(reconcile)
 │  ├─ topic_selection.py       TopicSelectionService.drive(round_id): 제안 수집, 중복 판별, 배정, 확정 (Phase 1). 한 걸음(제안·배정·확정)마다 라운드를 저장한다
 │  ├─ draft_pipeline.py        DraftPipelineService.drive(draft_id): 글 하나를 사람 대기나 종결까지 진행. 발행은 DraftPublisher 계약(PublishingService 가 구현)
 │  ├─ draft_decision.py        DraftDecisionService: 사람 결정(승인, 격리 해소, 재개, 폐기). 충돌이면 다시 읽어 재적용, 종결이면 레지스트리·close_if_complete 따라 쓰기
@@ -49,7 +51,7 @@ app/
 │  ├─ pipeline_views.py        PipelineViewService: 읽기 전용(라운드 목록·상세·진행 상태, 글 이력, 격리 요약, 영수증, 지표)과 엔티티 → 응답 변환 함수(build_round_public·build_draft_public·build_escalation_summary·…). 라우터·CLI 는 리포지토리 대신 이것을 부른다
 │  └─ agent_calls.py           AgentCallService.call -> CallResult(output, call_id): 예산 검사, 호출, 재시도, 영수증. replay(call, binding?) -> ReplayResult: 영수증 메시지 재전송(영수증·재시도 없음)
 ├─ agents/                     [프롬프트 자산 계층] 도메인 → 프롬프트 입력, LLM 출력 → 도메인
-│  ├─ personas.py              PersonaProfile 상수 3종, 렌즈 정의
+│  ├─ personas.py              PersonaProfile 상수 3종
 │  ├─ contracts.py             05 문서의 입출력 Pydantic 모델
 │  ├─ builders.py              build_*_input(draft, round, …) 가 입력 모델을 만들고 render_messages(model, prompt_version) 가 [system=템플릿, user=입력 JSON] 을 만든다. 블라인드 처리 포함
 │  ├─ parsers.py               문맥 검사(*_check 클로저 → AgentCallService.call 의 check 인자, 위반은 LLMOutputError 로 재시도)와 출력 → ReviewItem 변환(review_items, spot_check_items)
@@ -61,12 +63,15 @@ app/
 │     │  ├─ review_full.md
 │     │  ├─ review_spot_check.md
 │     │  └─ arbitrate.md
-│     └─ registry.py           PROMPT_VERSION = "v1", 템플릿 로더(load_template). 템플릿은 string.Template($display_name, $writer_bias)이고 .dockerignore 의 *.md 에서 예외다
+│     ├─ v2/                   작성·수정에 문장 규칙 (D-47)
+│     ├─ v3/                   범위·수준·문단 규칙과 arbitrate_search, fact_check, fact_transform, final_read, assess_level, polish_format, polish_tone (D-59)
+│     └─ registry.py           PROMPT_VERSION = "v3", 템플릿 로더(load_template). 템플릿은 string.Template($display_name, $writer_bias)이고 .dockerignore 의 *.md 에서 예외다
 ├─ repositories/
 │  ├─ optimistic_lock.py       replace_with_revision: revision 조건 저장. agent_round·post_draft 가 같이 쓴다
 │  ├─ agent_round.py           agent_rounds 컬렉션, 주제 선정 라운드 부분 unique 인덱스
 │  ├─ post_draft.py            agent_drafts 컬렉션, revision 기반 낙관적 잠금
 │  ├─ agent_call.py            agent_calls 컬렉션, 글별 usage 합계
+│  ├─ model_route.py           agent_routes 컬렉션. 호출별 후보, SLOTS, LEVEL_CRITERIA 문서
 │  └─ topic_registry.py        agent_topics 컬렉션. list_active(중복 판별용 전체)·list_active_since(회피 목록용)
 ├─ models/
 │  ├─ enums.py                 02 문서 열거형
@@ -76,21 +81,24 @@ app/
 │  ├─ topic.py                 TopicProposal, CategoryOption, TopicRegistryEntry
 │  ├─ sections.py              섹션 앵커 찾기·지우기·자르기(find_anchors, strip_anchors, section_text). 빌더·게이트·변환이 같이 쓴다
 │  ├─ tiptap.py                markdown_to_tiptap: 04 문서 8절 변환표. markdown-it-py(commonmark + table·strikethrough)로 파싱한다. 순수 함수. 변환 불가는 ValueError
-│  └─ model_binding.py         ModelBinding
+│  ├─ routing.py               RoutingSnapshot, 후보 선택(select_*), 벤더·모델 지원표(candidate_errors), 라운드 생성 전 검사(validate_snapshot)
+│  ├─ level.py                 수준 기준표와 참고 글
+│  └─ model_binding.py         ModelBinding(슬롯 응답 계약), CallModel(호출·영수증)
 └─ clients/
    ├─ mongo.py                 create_async_mongo_client
+   ├─ link_checker.py          본문 링크 응답 코드. 공인 주소만, 리다이렉트를 따르지 않는다
    ├─ llm/                     외부 시스템 하나 = 하위 패키지 하나
    │  ├─ base.py               LLMClient Protocol: complete(messages, schema, params, timeout) -> LLMResponse(text, usage). LLMParams 는 model_id·temperature·max_output_tokens(레지스트리는 provider 만 알므로 모델은 호출마다 받는다). 네트워크·429·5xx·타임아웃은 LLMTransportError(429 는 rate_limited=True), 그 밖의 4xx 는 ValueError(설정 오류, 재시도 없음). LLMMessage·LLMUsage 도 여기(clients 는 models 를 import 하지 않는다)
    │  ├─ anthropic.py          공식 SDK(anthropic 2.x, httpx2 기반) AsyncAnthropic + output_config.format=json_schema(transform_schema). SDK 재시도 off. 현행 API(2026-10-21)가 sampling 을 거부해 temperature 는 보내지 않는다
    │  ├─ google.py             REST generateContent + responseMimeType=application/json·responseJsonSchema. thoughtsTokenCount 도 completion 에 더한다
-   │  ├─ xai.py                REST chat/completions(OpenAI 호환) + response_format=json_schema
+   │  ├─ xai.py                REST Responses API + text.format=json_schema, reasoning.effort. chat/completions 는 legacy 라 옮겼다
    │  ├─ http.py               google·xai 가 같이 쓰는 post_json: httpx2 호출과 실패 분류
    │  └─ registry.py           provider 문자열 → 클라이언트와 ProviderGate(세마포어 + 429 뒤 cooldown 동안 1건씩). dependencies.build_llm_registry 가 키 있는 벤더만 넣는다
    └─ publisher/
       ├─ base.py               Publisher Protocol: list_categories() -> list[PostCategory], publish(PostCreatePayload) -> PublishResult. PostCreatePayload 는 CreatePostDto(camelCase alias)
       └─ post_be.py            PostBEPublisher: GET /api/v1/categories?activeOnly=true, 발행마다 vans_story_be POST /api/v1/auth/login(토큰은 응답 Authorization 헤더) → POST /api/v1/posts(Bearer). 실패 분류는 3절
 cli/
-└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics
+└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics·seed-routes·routes·label·compare-prompts·fact-check
 ```
 
 ### `agents/`의 위치
@@ -186,7 +194,9 @@ class DraftPipelineService:
 
 ### `services/agent_calls.py`
 
-- `call(kind, round_id, slot, binding, messages, schema, check=None, draft=None, target_version=None, topic_attempt=None, item_id=None) -> CallResult(output, call_id)`: 재시도 루프를 이 메서드 안에서 끝낸다. 성공하면 파싱된 계약 모델과 그 시도의 영수증 `call_id`를 돌려주고(버전·리뷰·중재가 영수증을 가리킨다), 소진하면 `LLMRetriesExhaustedError`를 던진다. `binding`은 호출자가 라운드 스냅샷에서 꺼내 넘긴다(영수증의 `model_binding`). `schema`는 Pydantic 계약 모델 클래스이고 파싱은 `model_validate_json`이다. 입력 문맥이 필요한 의미 검사(카테고리가 목록에 있는지 등)는 3단계 `agents/parsers.py`가 더한다.
+- `search(round_id, binding, messages, draft, ...) -> SearchResult(text, call_id, citations)`: 웹 검색을 켜고 글로 받는다. 예산 추정에 검색 결과분을 더한다.
+- 출력 한도에서 잘린 응답(`LLMResponse.truncated`)은 계약 위반이 아니다. 같은 한도로 되풀이하지 않고 벤더 상한까지 두 배로 올려 부르고, 더 못 올리면 `LLMOutputTruncatedError`(`FAILED(OUTPUT_TRUNCATED)`)다.
+- `call(kind, round_id, binding, messages, schema, check=None, slot=None, lens=None, draft=None, target_version=None, topic_attempt=None, item_id=None) -> CallResult(output, call_id)`: 재시도 루프를 이 메서드 안에서 끝낸다. 성공하면 파싱된 계약 모델과 그 시도의 영수증 `call_id`를 돌려주고(버전·리뷰·중재가 영수증을 가리킨다), 소진하면 `LLMRetriesExhaustedError`를 던진다. `binding`은 호출자가 라운드 스냅샷에서 꺼내 넘긴다(영수증의 `model_binding`). `schema`는 Pydantic 계약 모델 클래스이고 파싱은 `model_validate_json`이다. 입력 문맥이 필요한 의미 검사(카테고리가 목록에 있는지 등)는 3단계 `agents/parsers.py`가 더한다.
 - 시도마다: ① 글 호출이면 소프트 예산 검사. 그 글의 `AgentCall.usage` 합계 + 추정치(메시지 문자 수 + `max_output_tokens`) > `draft.token_limit`이면 호출하지 않고 `BudgetExceededError`. ② 벤더 세마포어 안에서 타임아웃(`review_timeout_s` 또는 `draft_timeout_s`)을 걸고 호출. ③ 성공·실패와 무관하게 `AgentCall`을 insert. ④ `agents/parsers.py`로 파싱.
 - 실패 처리: 네트워크·5xx·429·타임아웃(클라이언트가 `LLMTransportError`로 던진다)은 지수 백오프 뒤 같은 메시지로, `LLMOutputError`(스키마 위반)는 첫 시도 메시지 뒤에 직전 실패 출력과 오류 안내를 붙여 다시 부른다. `check`가 `ValidationError`를 던져도 같은 실패다. 429(`LLMTransportError.rate_limited`)는 그 벤더의 게이트를 `_RATE_LIMIT_COOLDOWN_S`(30초) 동안 동시 1건으로 줄인다(04 문서 9절). 시도 수는 이 메서드의 지역 값이라 재개하면 새로 센다.
 - 주제 제안 호출(`draft=None`)은 예산을 검사하지 않는다(02 문서 3절 예산).
@@ -231,7 +241,12 @@ class DraftPipelineService:
 
 | 명령 | 동작 |
 |---|---|
-| `agents start-round [--theme] [--wait]` | Post BE 카테고리를 읽어 라운드 생성 후 종료(진행은 러너). `--wait`면 러너가 더 할 일이 없을 때(라운드 종결, 또는 글이 모두 승인 대기·사람 결정 대기·종결. 승인됐거나 토글이 꺼진 `READY_TO_PUBLISH`는 발행 중이라 기다린다)까지 `SCAN_INTERVAL_S` 마다 상태를 찍는다 |
+| `agents seed-routes <file>` | 호출별 모델 라우트를 넣는다(예시 `agents_design/routes.example.json`). 깨진 설정은 거절한다. 진행 중인 라운드는 스냅샷을 쓴다 |
+| `agents routes` | 현재 라우트 문서를 찍는다 |
+| `agents label <draft_id> <level>` | 사용자가 매긴 수준을 남긴다. `metrics` 의 일치도에 쓴다 |
+| `agents compare-prompts <call_id> --version v2 --version v3 --core-mechanism … --out-of-scope … [--runs 3]` | 저장된 `WRITE_DRAFT` 입력을 프롬프트 버전별로 다시 써 밀도를 비교한다 |
+| `agents fact-check <file> --provider … --model … [--effort]` | 글 하나를 사실 확인한다. 잘못된 API 를 심은 글로 재현율·오탐을 잰다 |
+| `agents start-round [--theme] [--wait] [--evidence-file]` | Post BE 카테고리를 읽어 라운드 생성 후 종료(진행은 러너). `--wait`면 러너가 더 할 일이 없을 때(라운드 종결, 또는 글이 모두 승인 대기·사람 결정 대기·종결. 승인됐거나 토글이 꺼진 `READY_TO_PUBLISH`는 발행 중이라 기다린다)까지 `SCAN_INTERVAL_S` 마다 상태를 찍는다 |
 | `agents run` | 서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 쓰지 않는다 |
 | `agents status <round_id>` | 글 3편 상태·승인 대기 여부·iteration·토큰·`external_post_id`(`PipelineViewService.get_round_progress`, `RoundProgress`) |
 | `agents show <draft_id> [--version N]` | 본문·리뷰·결정 출력 |
@@ -252,9 +267,6 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     xai_api_key: SecretStr | None = None
 
-    # 슬롯 바인딩. JSON 문자열. 예: {"A": {"provider": "anthropic", "model_id": "...", "persona_id": "architect"}, ...}
-    agent_slot_bindings: dict[AgentSlot, ModelBinding] = {}   # 비어 있으면 start-round 가 거절한다
-
     # 파이프라인 상수 (03 문서 5절)
     max_iterations: int = 2
     max_topic_attempts: int = 2
@@ -267,7 +279,6 @@ class Settings(BaseSettings):
     topic_avoid_lookback_days: int = 180
     draft_min_chars: int = 4000
     draft_max_chars: int = 20000
-    review_temperature: float = 0.2       # REVIEW, ARBITRATE. 작성은 ModelBinding.temperature
     review_timeout_s: int = 300
     draft_timeout_s: int = 600           # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
     scan_interval_s: int = 15
@@ -286,11 +297,12 @@ class Settings(BaseSettings):
 
     # 운영
     publish_requires_approval: bool = True
-    prompt_version: str = "v2"
+    publish_post_level: bool = False      # Post BE 에 level 필드를 넣어 배포한 뒤에 켠다
+    prompt_version: str = "v3"
     llm_concurrency_per_provider: int = 2
 ```
 
-새 변수는 `.env.example`에 같이 추가한다. 바인딩을 라운드 생성 요청으로 덮어쓸 수 있게 해 A/B 테스트를 지원한다(라운드 문서에 스냅샷 저장).
+호출별 모델은 `Settings` 가 아니라 Mongo `agent_routes` 컬렉션이다(07 문서 D-51). temperature·effort 도 후보에 있다. 새 변수는 `.env.example`에 같이 추가한다. 슬롯의 페르소나·작성 모델을 라운드 생성 요청으로 덮어쓸 수 있게 해 A/B 테스트를 지원한다(라운드 문서에 스냅샷 저장).
 
 ## 5. 비동기 모델
 
@@ -313,7 +325,9 @@ class Settings(BaseSettings):
 | `services/agent_calls.py` | 시도마다 `AgentCall` 1건과 비용 합산, 스키마 위반 재시도의 메시지 구성(첫 메시지 + 직전 실패 출력 + 오류 안내), 5xx·429·타임아웃 백오프 재시도, 429 는 벤더 게이트 축소(`ProviderGate`), `check` 의 `ValidationError` 도 재시도, 소진 시 `LLMRetriesExhaustedError`, 글 사용량 + 추정치가 상한을 넘으면 호출 전에 `BudgetExceededError`, 주제 제안은 예산을 검사하지 않음 |
 | `services/runner.py` | 같은 글에 코루틴이 둘 생기지 않음, 승인 대기·`ESCALATED`·`FAILED` 글은 띄우지 않음, 스캔마다 정리가 `ABORTED` 라운드의 남은 글·레지스트리와 `PUBLISHED`·`REJECTED` 글의 레지스트리를 맞춤, 종료가 발행 호출 중인 글을 끊지 않고 `PUBLISHED` 까지 기다림 |
 | `services/draft_decision.py` | 결정마다 전제 상태 검사와 409, 재승인·토글 꺼짐 승인은 409, 충돌 시 다시 읽어 재적용, 종결 결정 뒤 레지스트리와 `close_if_complete`, 재개의 `token_limit` 검사 |
-| `services/metrics.py` | 순수 함수. fast-track(v1 이 발행본인 글만)·iteration·격리·실패 사유·중재·판정 불일치(슬롯별)·게이트 실패 종류(게이트를 거친 버전만)·`REJECTED_WITH_REASON`·종류별·글별 토큰. 빈 입력은 비율이 `None` |
+| `models/routing.py` | 후보 선택(벤더 회피, 결정론), 키 없는 벤더 제외, 라우트 누락·지원하지 않는 조합 거절, 예시 파일 검사 |
+| `services/polishing.py` | 안전장치별 패치 거절, 문단 위치 유지, 패치 없으면 새 버전 없음, 호출·게이트 실패가 글을 멈추지 않음 |
+| `services/metrics.py` | 순수 함수. 밀도·범위 밖 비율·수준 일치도·모델/렌즈별 토큰과 fast-track(v1 이 발행본인 글만)·iteration·격리·실패 사유·중재·판정 불일치(렌즈별)·게이트 실패 종류(게이트를 거친 버전만)·`REJECTED_WITH_REASON`·종류별·글별 토큰. 빈 입력은 비율이 `None` |
 | `services/pipeline_views.py` | 라운드 진행 상태(승인 대기·글별 토큰), 격리 요약(diff·미해소·기각·중재), 영수증 필터(둘 다 없으면 400), 없는 id 는 404. 응답 형태는 라우터 golden 이 본다 |
 | `AgentCallService.replay` | 영수증 메시지를 그대로 보내고 새 영수증을 남기지 않음, 바인딩 덮어쓰기, `REVIEW` 영수증의 scope 로 출력 계약 선택 |
 | `services/publishing.py` | `CreatePostDto` 매핑. 외부 호출 후 로컬 반영 전 장애를 재현하면 다시 `drive`해도 호출하지 않고 `PUBLISH_UNCERTAIN`. `PublishFailedError`는 재시도 후 상한에서 `PUBLISH_FAILED`, `PublishUncertainError`는 즉시 `PUBLISH_UNCERTAIN`. `CONFIRM_PUBLISHED`는 호출 없이 `PUBLISHED`, `PUBLISH_AS_IS`·`REVISE`는 카운터·의도를 지움. 로그인 단계 실패는 결과 확정. 요약 노트에 HTML·여러 줄이 든 지적이 있어도 변환 성공. 응답 반영 전에 `REJECTED`이면 `PUBLISHED`로 쓰지 않고 `external_post_id`만 의도에 남긴다 |
@@ -321,6 +335,6 @@ class Settings(BaseSettings):
 | `clients/publisher/post_be.py` | `httpx2.MockTransport`. 로그인 요청·토큰 추출, `CreatePostDto` 전송, 로그인 단계의 어떤 실패(401·5xx·토큰 없음·타임아웃)든 `PublishFailedError`, 글 생성의 4xx·3xx·연결 거부·연결 타임아웃은 `PublishFailedError`, 5xx·읽기 타임아웃·연결 끊김·`_id` 없는 응답은 `PublishUncertainError`, 벤더 계정 설정 없음은 `ValueError`, 주어진 벤더의 계정으로 로그인 |
 | `cli/` | `_is_waiting_on_human`: 승인 대기·사람 결정 대기·종결만 멈춘 것으로 보고, 승인됐거나 토글이 꺼진 `READY_TO_PUBLISH` 는 계속 폴링 |
 | `routers/` | `dependency_overrides`로 서비스 교체, `tests/golden/`에 응답 계약. 에이전트 API는 `get_async_database`를 `FakeAsyncDatabase`로 바꿔 실제 리포지토리·서비스가 돌고, 시각을 고정한 시드로 `agents_*.json` golden 과 값까지 비교한다 |
-| e2e | `@pytest.mark.e2e`. `tests/e2e/test_llm_vendors.py` 가 키 있는 벤더마다 계약 출력 스키마 6종(`$defs`·`anyOf`·길이·개수 제약 포함)을 보내(6 × 벤더 수 호출) 구조화 출력 호환을 확인하고, `tests/e2e/test_post_be.py` 가 `POST_BE_URL` 의 활성 카테고리가 메인·서브 쌍을 이루는지와 벤더별 발행 계정 로그인(글은 만들지 않는다)을 본다. 키·URL 이 없으면 건너뛴다. 기본 실행 제외 |
+| e2e | `@pytest.mark.e2e`. `tests/e2e/test_llm_vendors.py` 가 키 있는 벤더마다 effort 값, 웹 검색과 출처, 작은 출력 한도의 잘림 표시를 확인하고 계약 출력 스키마 11종(`$defs`·`anyOf`·길이·개수 제약 포함)을 보내(6 × 벤더 수 호출) 구조화 출력 호환을 확인하고, `tests/e2e/test_post_be.py` 가 `POST_BE_URL` 의 활성 카테고리가 메인·서브 쌍을 이루는지와 벤더별 발행 계정 로그인(글은 만들지 않는다)을 본다. 키·URL 이 없으면 건너뛴다. 기본 실행 제외 |
 
 `tests/fakes.py`에 `FakeLLMClient`를 두고 응답(본문·`LLMResponse`·예외)을 순서대로 스크립트한다. `FakePostBE`는 `delay_s`로 발행 HTTP 호출 시간을 흉내 낸다. `LLMClient` 계약에는 호출 종류가 없으므로 `ScriptedLLMClient`(4단계)가 시스템 프롬프트의 템플릿 문구로 종류(`PROPOSE_TOPIC`·`WRITE_DRAFT`·`REVISE_DRAFT`·`REVIEW_FULL`·`SPOT_CHECK`·`ARBITRATE`)를 가려 종류별 스크립트를 소비한다. 값이 callable 이면 입력 JSON 을 받아 응답을 만든다(SPOT_CHECK 의 `item_checks` 처럼 입력에 따라 달라지는 응답). 슬롯은 입력의 페르소나로 가린다. 파이프라인 테스트는 `FakePostDraftRepository` 대신 `FakeAsyncDatabase` 위의 실제 리포지토리를 써서 저장 조건(revision)까지 같이 검사한다. 토큰 사용량도 가짜로 돌려 소프트 예산을 테스트한다. Mongo 리포지토리는 `FakeAsyncCollection`(같음·`$in`·`$gte` 조건, `$group`/`$sum` 집계만)으로 질의·저장 조건을 검사한다.

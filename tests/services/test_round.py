@@ -6,12 +6,20 @@ import pytest
 
 from app.clients.publisher.base import PostCategory
 from app.core.exceptions import InvalidTransitionError, PublishFailedError
-from app.models.enums import AgentSlot, EscalationReason, FailureCode, PostStatus, RoundAbortReason, RoundStatus
+from app.models.enums import (
+    AgentSlot,
+    EscalationReason,
+    FailureCode,
+    PostStatus,
+    ReviewLens,
+    RoundAbortReason,
+    RoundStatus,
+)
 from app.models.post_draft import Publication
 from app.models.publishing_round import PublishingRound
 from app.repositories.agent_round import PublishingRoundRepository
 from app.services.round import RoundService, category_options
-from tests.factories import make_binding, make_category
+from tests.factories import FAKE_VENDORS, make_binding, make_category, route_documents
 from tests.fakes import FakeAsyncDatabase, PipelineHarness
 
 pytestmark = pytest.mark.anyio
@@ -33,8 +41,9 @@ async def _publish(harness: PipelineHarness, slot: AgentSlot) -> None:
     await harness.drafts.save(draft)
 
 
-async def test_create_round_validates_lens_matrix_and_rejects_second_topic_selection_round():
+async def test_create_round_validates_personas_and_rejects_second_topic_selection_round():
     harness = PipelineHarness()
+    await harness.seed_routes()
     await harness.rounds.ensure_indexes()
 
     created = await harness.round_service.create_round(
@@ -188,7 +197,15 @@ def test_category_options_pairs_active_subs_under_active_mains_in_order():
 
 async def test_start_round_snapshots_post_be_categories():
     harness = PipelineHarness()
-    service = RoundService(harness.rounds, harness.drafts, harness.topics, publisher=FakePublisher(CATEGORIES))
+    await harness.seed_routes()
+    service = RoundService(
+        harness.rounds,
+        harness.drafts,
+        harness.topics,
+        publisher=FakePublisher(CATEGORIES),
+        route_repository=harness.routes,
+        providers=["fake", *FAKE_VENDORS.values()],
+    )
 
     publishing_round = await service.start_round(theme_keyword="mongodb", slot_bindings=BINDINGS)
 
@@ -215,9 +232,10 @@ async def test_start_round_does_not_create_round_when_categories_fail_or_are_emp
 
 
 async def test_create_round_validates_raw_settings_bindings():
-    """Settings 는 바인딩을 원문 dict 로 두고(core 는 models 를 모른다) 여기서 검증한다."""
+    """요청의 A/B 값은 원문 dict 로 받아 여기서 검증한다."""
     harness = PipelineHarness()
-    service = RoundService(harness.rounds, harness.drafts, harness.topics)
+    await harness.seed_routes()
+    service = harness.round_service
     raw = {slot: binding.model_dump() for slot, binding in BINDINGS.items()}
 
     publishing_round = await service.create_round(theme_keyword=None, slot_bindings=raw, categories=[make_category()])
@@ -231,3 +249,112 @@ async def test_create_round_validates_raw_settings_bindings():
         await service.create_round(
             theme_keyword=None, slot_bindings={**raw, "A": {"provider": "x"}}, categories=[make_category()]
         )
+
+
+# ---------- 라우트 스냅샷 ----------
+
+
+async def test_create_round_snapshots_routes_and_fills_slot_bindings_from_write_routes():
+    harness = PipelineHarness()
+    await harness.seed_routes()
+
+    created = await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
+
+    assert created.routing is not None
+    assert created.slot_bindings[A].provider == "fake-a"
+    assert (created.slot_bindings[A].model_id, created.slot_bindings[A].persona_id) == ("fake-a-1", "architect")
+    stored = await harness.rounds.get(created.round_id)
+    assert stored is not None and stored.routing == created.routing
+
+
+async def test_later_route_changes_do_not_touch_a_running_round():
+    harness = PipelineHarness()
+    await harness.seed_routes()
+    created = await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
+
+    documents = route_documents()
+    next(each for each in documents if each["_id"] == "WRITE_DRAFT:architect")["candidates"][0]["model_id"] = "new"
+    await harness.routes.replace_all(documents)
+
+    stored = await harness.rounds.get(created.round_id)
+    assert stored is not None
+    assert stored.routing.candidates("WRITE_DRAFT:architect")[0].model_id == "fake-a-1"
+
+
+async def test_create_round_fails_without_routes_and_leaves_no_document():
+    harness = PipelineHarness()
+
+    with pytest.raises(ValueError, match="SLOTS"):
+        await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
+    assert harness.database.agent_rounds.docs == []
+
+
+async def test_create_round_fails_when_a_vendor_key_is_missing_for_a_needed_route():
+    harness = PipelineHarness()
+    await harness.seed_routes()
+    service = RoundService(
+        harness.rounds, harness.drafts, harness.topics, route_repository=harness.routes, providers=["fake-a", "fake-b"]
+    )
+
+    with pytest.raises(ValueError, match="has no candidate"):
+        await service.create_round(theme_keyword=None, categories=[make_category()])
+
+
+async def test_override_with_a_provider_without_a_key_is_refused():
+    harness = PipelineHarness()
+    await harness.seed_routes()
+
+    with pytest.raises(ValueError, match="no API key"):
+        await harness.round_service.create_round(
+            theme_keyword=None,
+            slot_bindings={"A": make_binding(provider="nokey", persona_id="architect")},
+            categories=[make_category()],
+        )
+
+
+async def test_override_changes_only_that_slot():
+    harness = PipelineHarness()
+    await harness.seed_routes()
+
+    created = await harness.round_service.create_round(
+        theme_keyword=None,
+        slot_bindings={"A": make_binding(provider="fake-b", model_id="ab", persona_id="architect")},
+        categories=[make_category()],
+    )
+
+    assert (created.slot_bindings[A].provider, created.slot_bindings[A].model_id) == ("fake-b", "ab")
+    assert created.slot_bindings[B].provider == "fake-b"
+
+
+async def test_evidence_is_kept_on_the_round():
+    harness = PipelineHarness()
+    await harness.seed_routes()
+
+    created = await harness.round_service.create_round(
+        theme_keyword=None, categories=[make_category()], evidence="git log"
+    )
+
+    assert created.evidence == "git log"
+
+
+async def test_build_draft_gives_each_lens_its_own_reviewer():
+    harness = PipelineHarness()
+    publishing_round = await harness.seed_round()
+
+    draft = await harness.draft(A)
+
+    assert [assignment.primary_lens for assignment in draft.reviewer_assignments] == list(ReviewLens)
+    assert {assignment.slot for assignment in draft.reviewer_assignments} == {None}
+    assert publishing_round.routing is not None
+
+
+async def test_seed_routes_refuses_a_broken_file():
+    harness = PipelineHarness()
+    broken = [each for each in route_documents() if each["_id"] != "ARBITRATE"]
+
+    with pytest.raises(ValueError, match="ARBITRATE"):
+        await harness.round_service.seed_routes(broken)
+    assert await harness.round_service.list_route_documents() == []
+
+    await harness.round_service.seed_routes(route_documents())
+    assert len(await harness.round_service.list_route_documents()) == len(route_documents())

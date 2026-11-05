@@ -1,4 +1,4 @@
-"""페르소나 프로필 3종과 리뷰 렌즈 정의 (설계 05 문서 1절). 어떤 모델이 어떤 페르소나를 맡는지는 ModelBinding 이 정한다."""
+"""페르소나 프로필 3종 (설계 05 문서 1절). 렌즈 문구는 리뷰 프롬프트(prompts/*/review_full.md)에 있다. 어떤 모델이 어떤 페르소나를 맡는지는 ModelBinding 이 정한다."""
 
 from pydantic import BaseModel
 
@@ -11,11 +11,6 @@ class PersonaProfile(BaseModel):
     writer_bias: str  # 작성자 프롬프트에 들어가는 성향 서술
     primary_lens: ReviewLens
     tone_markers: list[str]  # 톤 보존 규칙에서 "건드리지 말 것"으로 리뷰어에게 전달할 특징. 페르소나 이름을 넣지 않는다
-
-
-class LensGuide(BaseModel):
-    looks_at: str
-    ignores: str
 
 
 PERSONAS: dict[str, PersonaProfile] = {
@@ -36,24 +31,9 @@ PERSONAS: dict[str, PersonaProfile] = {
     "troubleshooter": PersonaProfile(
         persona_id="troubleshooter",
         display_name="실용주의 트러블슈터",
-        writer_bias="장애 대응기, 트렌드 비평, 극한 테스트를 다룬다. 직설적이고 위트 있는 톤으로 관행에 의문을 제기한다.",
+        writer_bias="공개된 장애 사례 분석, 트렌드 비평, 공개된 측정 결과 해석을 다룬다. 직설적이고 위트 있는 톤으로 관행에 의문을 제기한다.",
         primary_lens=ReviewLens.CRITICAL_PRACTICAL,
-        tone_markers=["직설적이고 시니컬한 표현", "유머와 위트", "1인칭 경험담", "관행에 대한 의문 제기"],
-    ),
-}
-
-LENS_GUIDES: dict[ReviewLens, LensGuide] = {
-    ReviewLens.LOGIC_READABILITY: LensGuide(
-        looks_at="문맥 비약, 전제 없이 등장하는 개념, 예제 코드의 버그·컨벤션 위반, 이해하기 어려운 문장 구조",
-        ignores="기술 스펙의 사실 여부(FACT 렌즈 몫), 어조",
-    ),
-    ReviewLens.FACT_STRUCTURE: LensGuide(
-        looks_at="잘못된 스펙·버전·API 시그니처(할루시네이션), 누락된 필수 배경, 다루지 않은 엣지 케이스, 표·목차 구조 완결성",
-        ignores="문체, 실무 효용 판단",
-    ),
-    ReviewLens.CRITICAL_PRACTICAL: LensGuide(
-        looks_at='"이론만 그렇다"는 반론, 실무 제약(비용, 운영, 팀 규모), 상투적 완충 문구·AI 클리셰, 과장된 결론',
-        ignores="문법·어조·유머. 클리셰 제거는 의미 없는 문구에 한정한다",
+        tone_markers=["직설적이고 시니컬한 표현", "유머와 위트", "관행에 대한 의문 제기"],
     ),
 }
 

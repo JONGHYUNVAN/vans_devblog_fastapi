@@ -5,7 +5,7 @@
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -13,11 +13,13 @@ from app.agents.personas import get_persona
 from app.clients.publisher.base import PostCategory, Publisher
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError
 from app.models.enums import AgentSlot, PostStatus, RoundAbortReason, RoundStatus, TopicRegistryStatus
-from app.models.model_binding import ModelBinding
-from app.models.post_draft import PostDraft, build_review_assignments
+from app.models.model_binding import CallModel, ModelBinding
+from app.models.post_draft import PostDraft, build_lens_assignments
 from app.models.publishing_round import PublishingRound
+from app.models.routing import RoutingSnapshot, build_snapshot, select_writer, validate_snapshot
 from app.models.topic import CategoryOption
 from app.repositories.agent_round import PublishingRoundRepository
+from app.repositories.model_route import ModelRouteRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 
@@ -37,11 +39,15 @@ class RoundService:
         draft_repository: PostDraftRepository,
         topic_registry_repository: TopicRegistryRepository,
         publisher: Publisher | None = None,
+        route_repository: ModelRouteRepository | None = None,
+        providers: Iterable[str] = (),
     ) -> None:
         self._rounds = round_repository
         self._drafts = draft_repository
         self._topics = topic_registry_repository
         self._publisher = publisher
+        self._routes = route_repository
+        self._providers = list(providers)  # API 키가 있는 벤더. 라운드 스냅샷에서 키 없는 후보를 뺀다
 
     async def get(self, round_id: str) -> PublishingRound | None:
         return await self._rounds.get(round_id)
@@ -52,7 +58,13 @@ class RoundService:
         rounds = [publishing_round for each in statuses for publishing_round in await self._rounds.list_by_status(each)]
         return sorted(rounds, key=lambda publishing_round: publishing_round.created_at, reverse=True)
 
-    async def start_round(self, *, theme_keyword: str | None, slot_bindings: Mapping[str, Any]) -> PublishingRound:
+    async def start_round(
+        self,
+        *,
+        theme_keyword: str | None,
+        slot_bindings: Mapping[str, Any] | None = None,
+        evidence: str | None = None,
+    ) -> PublishingRound:
         """Post BE 활성 카테고리를 읽어 스냅샷을 만들고 라운드를 만든다 (설계 06 문서 3절 라우터 표).
 
         조회 실패(PublishFailedError)나 활성 서브 카테고리가 없으면 라운드를 만들지 않는다.
@@ -62,26 +74,28 @@ class RoundService:
         categories = category_options(await self._publisher.list_categories())
         if not categories:
             raise ValueError("Post BE has no active sub category under an active main category")
-        return await self.create_round(theme_keyword=theme_keyword, slot_bindings=slot_bindings, categories=categories)
+        return await self.create_round(
+            theme_keyword=theme_keyword, slot_bindings=slot_bindings, categories=categories, evidence=evidence
+        )
 
     async def create_round(
         self,
         *,
         theme_keyword: str | None,
-        slot_bindings: Mapping[str, Any],
         categories: list[CategoryOption],
+        slot_bindings: Mapping[str, Any] | None = None,
+        evidence: str | None = None,
     ) -> PublishingRound:
-        """검사(바인딩 3개, 페르소나 존재, 렌즈 매트릭스)를 마친 라운드를 TOPIC_SELECTION 으로 만든다 (설계 03 문서 3절).
+        """라우트를 스냅샷으로 뜨고 끝까지 고를 수 있는지 검사한 라운드를 TOPIC_SELECTION 으로 만든다 (설계 03 문서 3절).
 
-        slot_bindings 는 설정 원문(dict)이든 ModelBinding 이든 받아 여기서 검증한다. 틀리면 ValueError(pydantic 오류 포함).
+        slot_bindings 는 슬롯의 페르소나·작성 모델을 이 라운드만 바꾸는 A/B 값이다. 라우트가 빠졌거나 지원하지 않는 조합이면 ValueError.
         다른 라운드가 주제 선정 중이면 InvalidTransitionError(409) 이고 문서는 남지 않는다. 카테고리 스냅샷은 호출자가 읽어 넘긴다.
         """
-        bindings = {AgentSlot(slot): ModelBinding.model_validate(binding) for slot, binding in slot_bindings.items()}
-        if set(bindings) != set(AgentSlot):
-            raise ValueError("slot_bindings must bind every slot (A, B, C)")
-        primary_lenses = {slot: get_persona(binding.persona_id).primary_lens for slot, binding in bindings.items()}
-        for slot in AgentSlot:
-            build_review_assignments(slot, primary_lenses)  # 세 렌즈가 모두 들어가는지. 아니면 ValueError
+        routing = await self._routing_snapshot(slot_bindings)
+        bindings = {
+            slot: _binding_of(select_writer(routing, persona_id), persona_id)
+            for slot, persona_id in routing.slot_personas.items()
+        }
         # round_seq 는 동률 판정(round_seq % 3)에만 쓰므로 기존 라운드 수 + 1 이면 된다. 동시 생성은 부분 unique 인덱스가 막는다.
         existing = 0
         for status in RoundStatus:
@@ -91,27 +105,58 @@ class RoundService:
             round_seq=existing + 1,
             theme_keyword=theme_keyword,
             slot_bindings=bindings,
+            routing=routing,
+            evidence=evidence,
             categories=categories,
         )
         await self._rounds.add(publishing_round)
         return publishing_round
+
+    async def _routing_snapshot(self, slot_bindings: Mapping[str, Any] | None) -> RoutingSnapshot:
+        if self._routes is None:
+            raise ValueError("no model route repository is configured")
+        overrides = {
+            AgentSlot(slot): ModelBinding.model_validate(binding) for slot, binding in (slot_bindings or {}).items()
+        }
+        for slot, binding in overrides.items():
+            if binding.provider not in self._providers:
+                raise ValueError(f"slot {slot} binds provider {binding.provider} which has no API key")
+        snapshot = build_snapshot(
+            await self._routes.list_documents(),
+            self._providers,
+            writer_overrides={slot: (binding.persona_id, _call_model(binding)) for slot, binding in overrides.items()},
+        )
+        personas = [get_persona(persona_id).persona_id for persona_id in snapshot.slot_personas.values()]
+        if len(set(personas)) != len(personas):
+            raise ValueError("every slot needs a distinct persona")
+        validate_snapshot(snapshot)
+        return snapshot
+
+    async def seed_routes(self, documents: list[Mapping[str, Any]]) -> None:
+        """라우트 설정을 넣는다. 깨진 설정이 DB 에 들어가지 않게 벤더 키와 무관하게 먼저 검사한다."""
+        if self._routes is None:
+            raise ValueError("no model route repository is configured")
+        declared = {candidate["provider"] for document in documents for candidate in document.get("candidates", [])}
+        validate_snapshot(build_snapshot(documents, declared))
+        await self._routes.replace_all(documents)
+
+    async def list_route_documents(self) -> list[dict[str, Any]]:
+        if self._routes is None:
+            raise ValueError("no model route repository is configured")
+        return await self._routes.list_documents()
 
     def build_draft(self, publishing_round: PublishingRound, slot: AgentSlot, token_limit: int) -> PostDraft:
         """확정된 주제로 글 문서를 만든다. ID 는 결정론적이라 다시 만들어도 같은 문서를 가리킨다."""
         attempt = publishing_round.latest_attempt
         if attempt is None or slot not in attempt.locked:
             raise ValueError(f"round {publishing_round.round_id} has no locked topic for slot {slot}")
-        primary_lenses = {
-            bound_slot: get_persona(binding.persona_id).primary_lens
-            for bound_slot, binding in publishing_round.slot_bindings.items()
-        }
         return PostDraft(
             draft_id=publishing_round.draft_id_for(slot),
             round_id=publishing_round.round_id,
             author_slot=slot,
             token_limit=token_limit,
             topic=attempt.locked[slot].proposal,
-            reviewer_assignments=build_review_assignments(slot, primary_lenses),
+            reviewer_assignments=build_lens_assignments(),
         )
 
     async def close_if_complete(self, round_id: str) -> bool:
@@ -190,6 +235,19 @@ class RoundService:
         except ConcurrentUpdateError:
             # 글 코루틴이 방금 저장했다. 다음 스캔의 정리가 다시 거둔다
             logger.info("draft %s changed while aborting; reconcile will retry", draft.draft_id)
+
+
+def _call_model(binding: ModelBinding) -> CallModel:
+    return CallModel(provider=binding.provider, model_id=binding.model_id, max_output_tokens=binding.max_output_tokens)
+
+
+def _binding_of(writer: CallModel, persona_id: str) -> ModelBinding:
+    return ModelBinding(
+        provider=writer.provider,
+        model_id=writer.model_id,
+        persona_id=persona_id,
+        max_output_tokens=writer.max_output_tokens,
+    )
 
 
 def category_options(categories: list[PostCategory]) -> list[CategoryOption]:

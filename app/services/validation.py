@@ -1,4 +1,7 @@
-"""VALIDATING 게이트: LLM 없이 현재 버전을 결정론적으로 검사한다 (설계 04 문서 3절 표)."""
+"""VALIDATING 게이트: LLM 없이 현재 버전을 결정론적으로 검사한다 (설계 04 문서 3절 표).
+
+본문만 보는 검사는 check_markdown 이다. 다듬기가 패치마다 부른다.
+"""
 
 import ast
 import json
@@ -8,13 +11,19 @@ from collections import Counter
 
 from app.models.enums import ArbitrationOutcome, ResolutionStatus, ReviewScope, RevisionCause
 from app.models.post_draft import DraftVersion, PostDraft
-from app.models.sections import ANCHOR_PATTERN, CODE_ANCHOR_PATTERN, REQUIRED_SECTIONS, find_anchors
+from app.models.sections import (
+    ANCHOR_PATTERN,
+    CODE_ANCHOR_PATTERN,
+    find_anchors,
+    markdown_links,
+    required_sections_for,
+)
 from app.models.tiptap import code_language, markdown_to_tiptap, parse_markdown
 
 logger = logging.getLogger(__name__)
 
 _FENCE_LINE = re.compile(r"^\s*(```|~~~)")
-_EXTERNAL_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+_TREE_SITTER_GRAMMARS = {"typescript": "typescript", "ts": "typescript", "tsx": "tsx"}
 
 
 class ValidationGate:
@@ -28,21 +37,25 @@ class ValidationGate:
     def validate(self, draft: PostDraft) -> list[str]:
         version = draft.current_version
         markdown = version.content_markdown
-        anchors = find_anchors(markdown)
-        errors = _check_anchors(anchors)
-        errors += _check_code_blocks(markdown, self._min_code_blocks)
-        errors += _check_length(markdown, self._min_chars, self._max_chars)
-        errors += _check_convertible(markdown)
+        errors = self.check_markdown(markdown, draft.topic.target_level)
         if version.origin_cause == RevisionCause.REVIEW:
             errors += _check_resolutions(draft, version)
         if version.origin_cause != RevisionCause.HUMAN:
-            errors += _check_anchor_persistence(draft, version, set(anchors))
+            errors += _check_anchor_persistence(draft, version, set(find_anchors(markdown)))
         _warn_external_links(draft.draft_id, markdown)
         return errors
 
+    def check_markdown(self, markdown: str, level: int | None) -> list[str]:
+        """본문만 보는 검사. 리뷰 해소와 무관한 순수 함수다."""
+        errors = _check_anchors(find_anchors(markdown), required_sections_for(level))
+        errors += _check_code_blocks(markdown, self._min_code_blocks)
+        errors += _check_length(markdown, self._min_chars, self._max_chars)
+        errors += _check_convertible(markdown)
+        return errors
 
-def _check_anchors(anchors: list[str]) -> list[str]:
-    errors = [f"필수 앵커가 없다: {section_id}" for section_id in REQUIRED_SECTIONS if section_id not in anchors]
+
+def _check_anchors(anchors: list[str], required_sections: list[str]) -> list[str]:
+    errors = [f"필수 앵커가 없다: {section_id}" for section_id in required_sections if section_id not in anchors]
     errors += [f"앵커가 중복된다: {section_id}" for section_id, count in Counter(anchors).items() if count > 1]
     return errors
 
@@ -91,9 +104,26 @@ def _check_syntax(label: str, language: str | None, code: str) -> list[str]:
             ast.parse(code)
         elif language == "json":
             json.loads(code)
+        elif language in _TREE_SITTER_GRAMMARS and _has_syntax_error(_TREE_SITTER_GRAMMARS[language], code):
+            return [f"{label}({language})의 문법 오류: 잘린 조각이면 {language}-snippet 태그를 쓴다"]
     except (SyntaxError, ValueError) as exc:
         return [f"{label}({language})의 문법 오류: {exc}"]
     return []
+
+
+def _has_syntax_error(grammar: str, code: str) -> bool:
+    """tree-sitter 는 오류를 던지지 않고 트리에 표시한다. 문법 검사만 하고 타입·논리 오류는 잡지 못한다.
+
+    문법은 wheel 에 없어 첫 사용 때 받는다. 이미지에 넣어 두지 않은 환경에서 받지 못하면 그 검사만 건너뛴다. 게이트는 네트워크에 기대지 않는다.
+    """
+    try:
+        from tree_sitter_language_pack import get_parser  # 네이티브 모듈은 쓸 때만 읽는다 (코드 그래프 G-24)
+
+        parser = get_parser(grammar)
+    except Exception as exc:  # 다운로드·네이티브 로드 실패의 종류가 여럿이다
+        logger.warning("skip %s syntax check: %s: %s", grammar, type(exc).__name__, exc)
+        return False
+    return parser.parse(code.encode()).root_node.has_error
 
 
 def _check_length(markdown: str, min_chars: int, max_chars: int) -> list[str]:
@@ -141,7 +171,7 @@ def _check_resolutions(draft: PostDraft, version: DraftVersion) -> list[str]:
             if item_id in upheld_reviewer and resolution.status != ResolutionStatus.ACCEPTED:
                 errors.append(f"중재에서 리뷰어가 맞다고 판정된 항목은 수용해야 한다: {item_id}")
         elif item_id in non_blocking_ids:
-            if resolution.status == ResolutionStatus.REJECTED_WITH_REASON:
+            if resolution.status in (ResolutionStatus.REJECTED_WITH_REASON, ResolutionStatus.OUT_OF_SCOPE):
                 errors.append(f"비차단 항목은 ACCEPTED 또는 DEFERRED 만 가능하다: {item_id}")
         else:
             errors.append(f"리뷰에 없는 항목이다: {item_id}")
@@ -166,6 +196,6 @@ def _check_anchor_persistence(draft: PostDraft, version: DraftVersion, anchors: 
 
 
 def _warn_external_links(draft_id: str, markdown: str) -> None:
-    for url in _EXTERNAL_LINK.findall(markdown):
+    for url in markdown_links(markdown):
         if not url.startswith(("http://", "https://")):
             logger.warning("draft %s has a link that is not http(s): %s", draft_id, url)
