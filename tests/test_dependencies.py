@@ -10,12 +10,26 @@ from app.dependencies import (
     build_pipeline_runner,
     build_pipeline_view_service,
     build_publisher,
+    build_round_service,
 )
 from app.services.agent_calls import AgentCallService
 from app.services.draft_decision import DraftDecisionService
 from app.services.pipeline_views import PipelineViewService
 from app.services.publishing import PublishingService
 from tests.fakes import FakeAsyncDatabase
+
+
+def test_build_round_service_gets_main_categories_from_settings():
+    settings = Settings(_env_file=None, agent_main_categories="nestjs, jwt,")
+
+    assert build_round_service(FakeAsyncDatabase(), settings)._main_categories == {"nestjs", "jwt"}
+
+
+def test_default_main_categories_leave_out_mains_without_a_blog_page():
+    values = Settings(_env_file=None).agent_main_category_values
+
+    assert len(values) == 9
+    assert values.isdisjoint({"jest", "cypress", "junit5", "git"})
 
 
 def test_build_llm_registry_includes_only_providers_with_keys():

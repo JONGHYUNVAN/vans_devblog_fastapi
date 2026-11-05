@@ -145,6 +145,7 @@ def test_create_round_400_without_post_be_and_201_with_categories(client, databa
             ),
             route_repository=ModelRouteRepository(database),
             providers=["fake", *FAKE_VENDORS.values()],
+            main_categories=["backend"],
         )
 
     app.dependency_overrides[get_round_service] = with_post_be

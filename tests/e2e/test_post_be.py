@@ -11,6 +11,7 @@ import pytest
 
 from app.clients.publisher.base import PublisherAccount
 from app.clients.publisher.post_be import PostBEPublisher
+from app.core.config import get_settings
 from app.services.round import category_options
 
 pytestmark = [pytest.mark.e2e, pytest.mark.anyio]
@@ -23,11 +24,14 @@ async def test_active_categories_form_main_sub_pairs():
         pytest.skip("POST_BE_URL 이 없다")
 
     categories = await PostBEPublisher(POST_BE_URL, timeout_s=30).list_categories()
-    options = category_options(categories)
+    main_values = get_settings().agent_main_category_values
+    options = category_options(categories, main_values)
 
     assert categories and all(category.is_active for category in categories)
     assert options, "활성 메인 아래 활성 서브 카테고리가 하나는 있어야 라운드를 만들 수 있다"
     assert all(option.main_category_id != option.sub_category_id for option in options)
+    active_mains = {category.value for category in categories if category.parent_id is None}
+    assert main_values <= active_mains, f"AGENT_MAIN_CATEGORIES 에 Post BE 에 없는 값: {main_values - active_mains}"
 
 
 @pytest.mark.parametrize("provider", ["ANTHROPIC", "GOOGLE", "XAI"])

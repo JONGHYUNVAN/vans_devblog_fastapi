@@ -5,7 +5,7 @@
 """
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -41,6 +41,7 @@ class RoundService:
         publisher: Publisher | None = None,
         route_repository: ModelRouteRepository | None = None,
         providers: Iterable[str] = (),
+        main_categories: Iterable[str] = (),
     ) -> None:
         self._rounds = round_repository
         self._drafts = draft_repository
@@ -48,6 +49,7 @@ class RoundService:
         self._publisher = publisher
         self._routes = route_repository
         self._providers = list(providers)  # API 키가 있는 벤더. 라운드 스냅샷에서 키 없는 후보를 뺀다
+        self._main_categories = frozenset(main_categories)  # 블로그에 화면이 있는 메인 카테고리 값 (D-60)
 
     async def get(self, round_id: str) -> PublishingRound | None:
         return await self._rounds.get(round_id)
@@ -67,13 +69,13 @@ class RoundService:
     ) -> PublishingRound:
         """Post BE 활성 카테고리를 읽어 스냅샷을 만들고 라운드를 만든다 (설계 06 문서 3절 라우터 표).
 
-        조회 실패(PublishFailedError)나 활성 서브 카테고리가 없으면 라운드를 만들지 않는다.
+        스냅샷에는 블로그에 화면이 있는 메인 아래 서브만 넣는다(D-60). 조회 실패(PublishFailedError)나 남는 서브가 없으면 라운드를 만들지 않는다.
         """
         if self._publisher is None:
             raise ValueError("no Post BE publisher is configured (POST_BE_URL)")
-        categories = category_options(await self._publisher.list_categories())
+        categories = category_options(await self._publisher.list_categories(), self._main_categories)
         if not categories:
-            raise ValueError("Post BE has no active sub category under an active main category")
+            raise ValueError("Post BE has no active sub category under an allowed active main category")
         return await self.create_round(
             theme_keyword=theme_keyword, slot_bindings=slot_bindings, categories=categories, evidence=evidence
         )
@@ -250,9 +252,13 @@ def _binding_of(writer: CallModel, persona_id: str) -> ModelBinding:
     )
 
 
-def category_options(categories: list[PostCategory]) -> list[CategoryOption]:
-    """평평한 카테고리 목록을 (활성 메인, 활성 서브) 쌍으로 묶는다. 응답 순서를 지킨다."""
-    mains = {category.id: category for category in categories if category.parent_id is None and category.is_active}
+def category_options(categories: list[PostCategory], main_values: Collection[str]) -> list[CategoryOption]:
+    """평평한 카테고리 목록을 (활성 메인, 활성 서브) 쌍으로 묶는다. 메인은 main_values 에 있는 값만 남기고 응답 순서를 지킨다."""
+    mains = {
+        category.id: category
+        for category in categories
+        if category.parent_id is None and category.is_active and category.value in main_values
+    }
     return [
         CategoryOption(
             main_category_id=category.parent_id,

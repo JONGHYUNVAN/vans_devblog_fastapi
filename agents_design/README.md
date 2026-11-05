@@ -32,4 +32,5 @@
 - 2026-11-03: 계층 규칙(CONVENTIONS 1절) 위반을 정리했다. 읽기 전용 `services/pipeline_views.py`(`PipelineViewService` + 엔티티 → 응답 변환 함수)를 두고 라우터·CLI 가 리포지토리 대신 이것을 부른다. `Settings.agent_slot_bindings` 는 원문 dict 이고 검증은 `RoundService.create_round` 가 한다(core 는 models 를 모른다). `schemas/agent_pipeline.py` 의 변환 classmethod 와 diff 계산을 서비스로 옮겼고, `UnconfiguredDraftPublisher` 는 `services/publishing.py` 로, 게이트의 마크다운 파서는 `models/tiptap.parse_markdown` 하나로 합쳤다. 열거형·값 객체의 타입 공유만 예외로 CONVENTIONS 에 적었다.
 - 2026-11-04: 발행 계정을 벤더별로 나눴다(D-45). 글을 쓴 슬롯의 벤더 계정이 게시글 작성자가 되어 블로그에서 어느 AI가 쓴 글인지 보인다. `PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD` 는 `{ANTHROPIC,GOOGLE,XAI}_PUBLISHER_EMAIL`·`_PASSWORD` 로 바뀌었다.
 - 2026-11-05: 품질 개선 0~4단계 코드를 마쳤다(07 문서 D-48~D-59, 로드맵 8단계). 범위 필드·`OUT_OF_SCOPE`·MAJOR 중재, `POST_REVIEW`(다듬기·전체 읽기·수준 평가), Mongo `agent_routes` 호출별 라우트와 라운드 스냅샷(`AGENT_SLOT_BINDINGS` 삭제), effort·잘림 처리, xAI Responses API, 수준 라벨·근거 입력, 렌즈당 모델 하나, 웹 검색 사실 확인, TS 문법 검사, 프롬프트 v3. 단위 테스트는 가짜 LLM 이고 실제 벤더로는 돌리지 않았다. 옛 라운드·글은 같은 코드로 끝까지 돈다.
+- 2026-11-06: 운영 라운드 첫 완주에서 프런트에 화면이 없는 `jest` 메인에 글이 발행돼 블로그 주소가 404 였다. 라운드 스냅샷을 `AGENT_MAIN_CATEGORIES` 로 거른다(D-60).
 - 코드 컨벤션은 이 저장소의 [CONVENTIONS.md](../CONVENTIONS.md)다.

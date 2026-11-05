@@ -222,7 +222,7 @@ class DraftPipelineService:
 
 | 메서드 | 경로 | 동작 |
 |---|---|---|
-| `POST` | `/api/v1/agents/rounds/` | 라운드 생성·시작. 먼저 Post BE 활성 카테고리(`activeOnly=true`)를 읽어 `categories` 스냅샷을 만들고(실패하면 라운드를 만들지 않는다), 라운드를 `TOPIC_SELECTION`으로 만든다. 다른 `TOPIC_SELECTION` 라운드가 있으면 409. 바디 `RoundCreate(theme_keyword?, bindings?)` |
+| `POST` | `/api/v1/agents/rounds/` | 라운드 생성·시작. 먼저 Post BE 활성 카테고리(`activeOnly=true`)를 읽어 `AGENT_MAIN_CATEGORIES` 에 든 메인만 남긴 `categories` 스냅샷을 만들고(실패하거나 남는 서브가 없으면 라운드를 만들지 않는다, 07 문서 D-60), 라운드를 `TOPIC_SELECTION`으로 만든다. 다른 `TOPIC_SELECTION` 라운드가 있으면 409. 바디 `RoundCreate(theme_keyword?, bindings?)` |
 | `GET` | `/api/v1/agents/rounds/` | 목록(상태 필터) |
 | `GET` | `/api/v1/agents/rounds/{round_id}/` | 라운드 + 글 3편 요약. `external_post_id`는 `PUBLISHED`가 아니면 의도에 남은 회수 대상 id다 |
 | `POST` | `/api/v1/agents/rounds/{round_id}/abort/` | 중단. 라운드 `ABORTED`를 먼저 쓰고 글·레지스트리를 정리한다(04 문서 1절) |
@@ -298,6 +298,7 @@ class Settings(BaseSettings):
     # 운영
     publish_requires_approval: bool = True
     publish_post_level: bool = False      # Post BE 에 level 필드를 넣어 배포한 뒤에 켠다
+    agent_main_categories: str = "nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm"  # 블로그에 화면이 있는 메인 (D-60)
     prompt_version: str = "v3"
     llm_concurrency_per_provider: int = 2
 ```

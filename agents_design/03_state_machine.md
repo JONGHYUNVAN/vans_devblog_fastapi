@@ -124,7 +124,7 @@ stateDiagram-v2
 
 | 현재 | 이벤트 | 가드 | 다음 |
 |---|---|---|---|
-| (문서 없음) | 라운드 생성 | 슬롯 바인딩 3개 유효, 렌즈 매트릭스 유효, 카테고리 스냅샷 읽기 성공, 다른 `TOPIC_SELECTION` 라운드 없음 | `TOPIC_SELECTION`. 다른 라운드가 있으면 insert 가 부분 unique 인덱스(02 문서 6절)에 걸려 409이고 문서가 남지 않는다 |
+| (문서 없음) | 라운드 생성 | 슬롯 바인딩 3개 유효, 렌즈 매트릭스 유효, 카테고리 스냅샷 읽기 성공(`AGENT_MAIN_CATEGORIES` 로 거른 뒤 서브가 하나 이상), 다른 `TOPIC_SELECTION` 라운드 없음 | `TOPIC_SELECTION`. 다른 라운드가 있으면 insert 가 부분 unique 인덱스(02 문서 6절)에 걸려 409이고 문서가 남지 않는다 |
 | `TOPIC_SELECTION` | 제안 3세트 수집 → 배정 성공 | 중복 없음 | `IN_PROGRESS` (3개 `PostDraft` → `TOPIC_LOCKED`) |
 | `TOPIC_SELECTION` | 배정 실패 | `attempt_number < MAX_TOPIC_ATTEMPTS` | `TOPIC_SELECTION` (충돌 슬롯만 재제안) |
 | `TOPIC_SELECTION` | 배정 실패 | `attempt_number == MAX_TOPIC_ATTEMPTS` | `ABORTED` (`TOPIC_ATTEMPTS_EXHAUSTED`). 라운드 안 주제 겹침을 허용하는 강제 배정은 하지 않는다 |
@@ -164,6 +164,7 @@ stateDiagram-v2
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `PUBLISH_POST_LEVEL` | false | 평가 수준을 `CreatePostDto.level` 로 보낸다. Post BE 가 DTO 에 없는 필드를 거부하므로 그쪽 배포 뒤에 켠다 |
+| `AGENT_MAIN_CATEGORIES` | `nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm` | 주제 후보로 줄 메인 카테고리 값. 프런트 `POST_THEMES` 에 없는 메인은 글이 404 라 뺀다(07 문서 D-60) |
 | `MAX_ITERATIONS` | 2 | 리뷰 반영 수정 횟수. v1 위에 v2·v3. 게이트 재시도와 사람 재수정은 세지 않는다 |
 | `MAX_TOPIC_ATTEMPTS` | 2 | 초기 포함 총 제안 횟수. `attempt_number`는 1부터. 2번 시도가 실패하면 `ABORTED` |
 | `MAX_LLM_RETRIES` | 3 | 한 단계 호출이 모두 실패할 때의 호출 수. 실패를 센 뒤 3이면 글 `FAILED`, 주제 선정이면 라운드 `ABORTED` |

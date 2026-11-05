@@ -130,7 +130,7 @@ PublishingRound (Aggregate Root, 라운드 수준)
  ├─ round_id, round_seq, status, theme_keyword?, slot_bindings{slot → ModelBinding}
  ├─ routing?: RoutingSnapshot               호출별 모델 후보, 슬롯 페르소나, 수준 기준표. 생성 때 스냅샷. 응답에 내보내지 않는다. 라우팅 전 라운드는 없다
  ├─ evidence?                               실제 프로젝트 근거(git 이력, code-graph context, 측정 기록)
- ├─ categories: CategoryOption[]            라운드 생성 때 Post BE 에서 읽은 카테고리 스냅샷. 주제 제안 입력
+ ├─ categories: CategoryOption[]            라운드 생성 때 Post BE 에서 읽은 카테고리 스냅샷. `AGENT_MAIN_CATEGORIES` 에 든 메인 아래 서브만 넣는다(07 문서 D-60). 주제 제안 입력
  ├─ draft_ids                               길이 0 (주제 선정 중) 또는 3 (확정 후)
  ├─ topic_attempts: TopicAttempt[]          주제 제안·재제안 이력 (배리어 단계 전용)
  └─ abort_reason?: RoundAbortReason
@@ -239,7 +239,7 @@ class TopicProposal(BaseModel):
 
 
 class CategoryOption(BaseModel):
-    """Post BE 서브 카테고리 하나와 그 메인 카테고리. 라운드 생성 때 GET /api/v1/categories 로 만든다."""
+    """Post BE 서브 카테고리 하나와 그 메인 카테고리. 라운드 생성 때 GET /api/v1/categories 로 만들고 메인은 AGENT_MAIN_CATEGORIES 로 거른다."""
 
     main_category_id: str               # parentId 가 null 인 Category
     main_label: str

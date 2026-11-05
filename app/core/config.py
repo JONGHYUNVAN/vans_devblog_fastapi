@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     publish_requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다
     # 평가 수준을 CreatePostDto.level 로 보낸다. Post BE 는 DTO 에 없는 필드를 400 으로 거부하므로 그쪽 배포 뒤에 켠다
     publish_post_level: bool = False
+    # 주제 후보로 줄 메인 카테고리 값. vans_story POST_THEMES 에 없는 메인은 글이 발행돼도 블로그 주소가 404 다 (설계 07 문서 D-60)
+    agent_main_categories: str = "nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm"
     draft_min_chars: int = 4000  # 본문 길이 범위 (설계 07 문서 Q-08)
     draft_max_chars: int = 20000
     review_timeout_s: int = 300
@@ -100,6 +102,10 @@ class Settings(BaseSettings):
         origins = [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
         origins += [f"https://{h.strip()}" for h in self.frontend_hosts.split(",") if h.strip()]
         return origins
+
+    @property
+    def agent_main_category_values(self) -> frozenset[str]:
+        return frozenset(value.strip() for value in self.agent_main_categories.split(",") if value.strip())
 
     @property
     def kis_configured(self) -> bool:

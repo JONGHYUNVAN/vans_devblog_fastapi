@@ -329,6 +329,7 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
         publisher=build_publisher(settings),
         route_repository=ModelRouteRepository(database),
         providers=available_providers(settings),
+        main_categories=settings.agent_main_category_values,
     )
 
 

@@ -190,9 +190,13 @@ CATEGORIES = [
 
 
 def test_category_options_pairs_active_subs_under_active_mains_in_order():
-    assert [(option.main_label, option.sub_category_id) for option in category_options(CATEGORIES)] == [
-        ("Backend", "s1")
-    ]
+    options = category_options(CATEGORIES, {"backend", "old"})
+
+    assert [(option.main_label, option.sub_category_id) for option in options] == [("Backend", "s1")]
+
+
+def test_category_options_leaves_out_mains_without_a_blog_page():
+    assert category_options(CATEGORIES, {"nestjs"}) == []
 
 
 async def test_start_round_snapshots_post_be_categories():
@@ -205,6 +209,7 @@ async def test_start_round_snapshots_post_be_categories():
         publisher=FakePublisher(CATEGORIES),
         route_repository=harness.routes,
         providers=["fake", *FAKE_VENDORS.values()],
+        main_categories=["backend"],
     )
 
     publishing_round = await service.start_round(theme_keyword="mongodb", slot_bindings=BINDINGS)
@@ -221,9 +226,19 @@ async def test_start_round_does_not_create_round_when_categories_fail_or_are_emp
     with pytest.raises(PublishFailedError):
         await failing.start_round(theme_keyword=None, slot_bindings=BINDINGS)
 
-    empty = RoundService(harness.rounds, harness.drafts, harness.topics, publisher=FakePublisher([CATEGORIES[0]]))
+    empty = RoundService(
+        harness.rounds,
+        harness.drafts,
+        harness.topics,
+        publisher=FakePublisher([CATEGORIES[0]]),
+        main_categories=["backend"],
+    )
     with pytest.raises(ValueError):
         await empty.start_round(theme_keyword=None, slot_bindings=BINDINGS)
+
+    no_blog_page = RoundService(harness.rounds, harness.drafts, harness.topics, publisher=FakePublisher(CATEGORIES))
+    with pytest.raises(ValueError):
+        await no_blog_page.start_round(theme_keyword=None, slot_bindings=BINDINGS)
 
     without_publisher = RoundService(harness.rounds, harness.drafts, harness.topics)
     with pytest.raises(ValueError):
