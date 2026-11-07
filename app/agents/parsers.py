@@ -139,6 +139,8 @@ def final_read_check(markdown: str, section_ids: Iterable[str]) -> Callable[[Fin
 
 
 def level_assessment_check(markdown: str) -> Callable[[AssessLevelOutput], None]:
+    """수준 평가: 근거 인용이 본문에 그대로 있어야 한다. 목표 수준을 모른 채 본문으로만 판정하게 하기 위해서다(D-54)."""
+
     def check(output: AssessLevelOutput) -> None:
         _check_quotes((evidence.quote for evidence in output.evidence), markdown)
 
@@ -146,6 +148,7 @@ def level_assessment_check(markdown: str) -> Callable[[AssessLevelOutput], None]
 
 
 def fact_output_check(section_ids: Iterable[str], lenses: Iterable[ReviewLens]) -> Callable[[FactCheckOutput], None]:
+    """FULL 사실 확인 변환: 지적의 앵커·렌즈와 주장의 앵커가 본문에 있어야 한다."""
     known_sections, known_lenses = set(section_ids), set(lenses)
 
     def check(output: FactCheckOutput) -> None:
@@ -158,6 +161,7 @@ def fact_output_check(section_ids: Iterable[str], lenses: Iterable[ReviewLens]) 
 def fact_spot_check_output_check(
     section_ids: Iterable[str], expected_item_ids: Iterable[str], lenses: Iterable[ReviewLens]
 ) -> Callable[[FactSpotCheckOutput], None]:
+    """SPOT_CHECK 사실 확인 변환: SPOT_CHECK 검사에 주장의 앵커 검사를 더한다."""
     known_sections = set(section_ids)
     base = spot_check_output_check(known_sections, expected_item_ids, lenses)
 

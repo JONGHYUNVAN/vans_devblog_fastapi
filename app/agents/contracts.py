@@ -31,6 +31,8 @@ SUMMARY_MAX_CHARS = 150  # 발행 때 Post BE description
 
 
 class StructureRules(BaseModel):
+    """작성·수정 입력의 글 구조 규칙(05 문서 3절). 실행 때 값은 라운드 버전의 조절 값이고 여기 기본값은 계약의 모양이다."""
+
     required_sections: list[str] = Field(default_factory=lambda: list(REQUIRED_SECTIONS))
     anchor_format: str = "<!-- sec:{id} -->"
     min_chars: int
@@ -48,6 +50,8 @@ class StructureRules(BaseModel):
 
 
 class TonePreservationRule(BaseModel):
+    """리뷰어가 지적해도 되는 것과 안 되는 것(05 문서 4절). 목록은 라운드 버전의 조절 값이다."""
+
     may_flag: list[str] = Field(
         default_factory=lambda: [
             "Factual errors or specification mismatches",
@@ -72,11 +76,15 @@ class TonePreservationRule(BaseModel):
 
 
 class AvoidTopic(BaseModel):
+    """주제 제안의 회피 목록 항목: 레지스트리의 발행 주제와 이번 라운드에서 이미 잠긴 주제."""
+
     title: str
     keywords: list[str]
 
 
 class ProposeTopicInput(BaseModel):
+    """PROPOSE_TOPIC 입력(05 문서 2.1절). persona.writer_bias 가 템플릿의 $writer_bias 로 들어간다."""
+
     persona: PersonaProfile
     theme_keyword: str | None
     avoid_topics: list[AvoidTopic]
@@ -88,6 +96,8 @@ class ProposeTopicInput(BaseModel):
 
 
 class ProposeTopicOutput(BaseModel):
+    """순위를 매긴 제안 셋. 카테고리 쌍·범위·수준 필드는 파서(topic_proposal_check)가 검사한다."""
+
     proposals: list[TopicProposal] = Field(min_length=3, max_length=3)  # 1순위부터
 
 
@@ -104,12 +114,16 @@ class WriteDraftInput(BaseModel):
 
 
 class DraftOutput(BaseModel):
+    """작성·수정 호출의 본문 계약. title·summary 길이 상한은 Post BE CreatePostDto 의 것이다."""
+
     title: str = Field(min_length=1, max_length=TITLE_MAX_CHARS)
     content_markdown: str  # 앵커 포함. 04 문서 8절 변환표의 문법만 쓴다
     summary: str = Field(min_length=1, max_length=SUMMARY_MAX_CHARS)
 
 
 class ReviewForAuthor(BaseModel):
+    """수정 입력에 넣는 리뷰 하나. 리뷰어는 라벨로만 보이고 모델명은 숨긴다."""
+
     reviewer_label: str  # "리뷰어 1". 모델명은 숨긴다
     lens: ReviewLens
     items: list[ReviewItem]  # 차단 항목과, FULL 리뷰였으면 비차단 항목. severity 로 구분한다
@@ -118,6 +132,8 @@ class ReviewForAuthor(BaseModel):
 
 
 class ArbitrationForAuthor(BaseModel):
+    """수정 입력에 넣는 중재 판정. must_accept(UPHOLD_REVIEWER)면 다음 버전에서 기각할 수 없다(D-48)."""
+
     item_id: str
     outcome: ArbitrationOutcome
     reasoning: str
@@ -125,6 +141,8 @@ class ArbitrationForAuthor(BaseModel):
 
 
 class ReviseDraftInput(BaseModel):
+    """REVISE_DRAFT 입력(05 문서 2.3절). previous 는 직전 제출 버전, reviews 는 마지막 리뷰 완료 버전의 미결 차단 항목 기준이다."""
+
     topic: TopicProposal
     structure_rules: StructureRules
     previous: DraftOutput  # 직전 제출 버전. 게이트에 떨어진 본문도 여기 들어간다
@@ -138,6 +156,8 @@ class ReviseDraftInput(BaseModel):
 
 
 class RevisionOutput(BaseModel):
+    """수정 호출의 계약. 차단 항목의 해소는 게이트가 open_blocking_items 와 정확히 대조한다(D-35)."""
+
     title: str = Field(min_length=1, max_length=TITLE_MAX_CHARS)
     content_markdown: str
     summary: str = Field(min_length=1, max_length=SUMMARY_MAX_CHARS)
@@ -162,6 +182,7 @@ class TopicForReviewer(BaseModel):
 
     @classmethod
     def from_topic(cls, topic: TopicProposal) -> Self:
+        """확정 주제에서 블라인드 필드만 옮긴다."""
         return cls(
             title=topic.title,
             audience=topic.audience,
@@ -186,6 +207,7 @@ class ReviewItemForReviewer(BaseModel):
 
     @classmethod
     def from_item(cls, item: ReviewItem) -> Self:
+        """저장된 지적에서 슬롯·출처 필드를 뺀다."""
         return cls(
             item_id=item.item_id,
             section_id=item.section_id,
@@ -197,6 +219,8 @@ class ReviewItemForReviewer(BaseModel):
 
 
 class ReviewInput(BaseModel):
+    """FULL 리뷰 입력(05 문서 2.4절). 저자·모델·페르소나 정보가 없다(블라인드, D-14)."""
+
     scope: Literal["FULL"] = "FULL"
     lens: ReviewLens
     secondary_lens: ReviewLens | None
@@ -207,6 +231,8 @@ class ReviewInput(BaseModel):
 
 
 class ReviewItemOutput(BaseModel):
+    """리뷰어가 낸 지적 하나. section_id 는 `sec:` 접두를 떼어 정규화한다(D-46)."""
+
     section_id: str  # 본문 앵커 중 하나
     lens: ReviewLens  # 배정된 lens 또는 secondary_lens
     severity: IssueSeverity
@@ -220,6 +246,8 @@ class ReviewItemOutput(BaseModel):
 
 
 class ReviewOutput(BaseModel):
+    """FULL 리뷰 계약. verdict 는 기록만 하고 판정은 severity 집계로 한다(D-03)."""
+
     verdict: ReviewVerdict  # reported_verdict 로 저장. 판정에는 쓰지 않는다
     items: list[ReviewItemOutput]
     checklist: VerificationChecklist  # 비어 있으면 스키마 위반
@@ -227,6 +255,8 @@ class ReviewOutput(BaseModel):
 
 
 class SpotCheckInput(BaseModel):
+    """SPOT_CHECK 입력(05 문서 2.5절). 본인 미결 항목의 해소 여부와 신규 CRITICAL 만 본다(D-09)."""
+
     scope: Literal["SPOT_CHECK"] = "SPOT_CHECK"
     lens: ReviewLens
     secondary_lens: ReviewLens | None
@@ -239,6 +269,8 @@ class SpotCheckInput(BaseModel):
 
 
 class SpotCheckOutput(BaseModel):
+    """SPOT_CHECK 계약. item_checks 는 my_previous_items 와 정확히 일치해야 한다(파서가 검사)."""
+
     item_checks: list[ItemCheck]  # my_previous_items 전부에 대해 하나씩
     new_critical_items: list[ReviewItemOutput]  # CRITICAL 만 남긴다. 다른 심각도는 파서가 버리고 로그를 남긴다
     checklist: VerificationChecklist
@@ -248,6 +280,8 @@ class SpotCheckOutput(BaseModel):
 
 
 class ArbitrateInput(BaseModel):
+    """중재 입력(05 문서 2.6절): 지적 하나, 전후 섹션, 글의 범위, 분쟁 종류. 블라인드를 유지한다."""
+
     item: ReviewItemForReviewer  # 평가 렌즈는 item.lens 하나만 쓴다
     section_before: str
     section_after: str
@@ -269,6 +303,8 @@ class ArbitrateSearchInput(BaseModel):
 
 
 class ArbitrateOutput(BaseModel):
+    """중재 판정. UPHOLD_AUTHOR 는 항목 종결, UPHOLD_REVIEWER 는 다음 버전에서 수용 필수(D-10·D-48)."""
+
     outcome: ArbitrationOutcome
     reasoning: str = Field(max_length=800)
 
@@ -303,11 +339,15 @@ class FactCheckInput(BaseModel):
 
 
 class CitationRef(BaseModel):
+    """검색 호출이 실제로 쓴 출처. 변환 호출이 지어낸 URL 을 거르는 기준이다(D-56)."""
+
     url: str
     title: str = ""
 
 
 class FactTransformInput(BaseModel):
+    """변환 호출 입력: 검색 호출의 글과 출처를 계약 JSON 으로 옮긴다. 검색과 구조화 출력을 한 호출에 묶지 못하는 벤더가 있어 둘로 나눈다."""
+
     scope: Literal["FULL", "SPOT_CHECK"]
     lens: ReviewLens
     section_ids: list[str]
@@ -317,6 +357,8 @@ class FactTransformInput(BaseModel):
 
 
 class FactClaimOutput(BaseModel):
+    """변환 호출이 뽑은 주장 하나. 심각도는 코드가 정하므로 여기 없다(D-56)."""
+
     section_id: str
     claim_type: ClaimType
     claim: str
@@ -337,6 +379,8 @@ class FactCheckOutput(ReviewOutput):
 
 
 class FactSpotCheckOutput(SpotCheckOutput):
+    """SPOT_CHECK 의 사실 확인 계약. 바뀐 섹션의 새 주장만 claims 에 든다."""
+
     claims: list[FactClaimOutput]
 
 
@@ -344,12 +388,16 @@ class FactSpotCheckOutput(SpotCheckOutput):
 
 
 class FinalReadInput(BaseModel):
+    """전체 읽기 입력(D-49). 제목·주제·본문뿐이고 리뷰 이력은 주지 않는다."""
+
     title: str
     topic: TopicForReviewer
     content_markdown: str
 
 
 class FinalReadFindingOutput(BaseModel):
+    """전체 읽기 지적 하나. 앵커와 본문 인용이 필수라 코드가 본문에 있는지 대조한다(D-50)."""
+
     kind: FinalReadKind
     section_id: str
     quote: str = Field(min_length=1)
@@ -362,6 +410,8 @@ class FinalReadFindingOutput(BaseModel):
 
 
 class FinalReadOutput(BaseModel):
+    """전체 읽기 계약. 차단 여부는 모델의 판정이 아니라 종류(kind)로 코드가 정한다."""
+
     findings: list[FinalReadFindingOutput]
     overall: str = Field(max_length=1000)
 
@@ -378,11 +428,15 @@ class AssessLevelInput(BaseModel):
 
 
 class LevelEvidenceOutput(BaseModel):
+    """수준 판정의 근거: 기준 항목과 본문 인용."""
+
     criterion: str
     quote: str = Field(min_length=1)
 
 
 class AssessLevelOutput(BaseModel):
+    """수준 판정 계약(D-54). 라벨만 남기고 글을 막지 않는다."""
+
     level: PostLevel
     evidence: list[LevelEvidenceOutput] = Field(min_length=1)
     reasoning: str = Field(max_length=1000)
@@ -392,20 +446,28 @@ class AssessLevelOutput(BaseModel):
 
 
 class ParagraphForPolish(BaseModel):
+    """다듬기 입력의 문단 하나. index 는 최상위 문단 순서다."""
+
     index: int
     text: str
 
 
 class PolishToneInput(BaseModel):
+    """문체 다듬기 입력(D-58). 문단 목록만 주고 전체 재작성을 받지 않는다."""
+
     paragraphs: list[ParagraphForPolish]  # v4: tone_markers 없음. 줄바꿈 다듬기(POLISH_FORMAT)는 뺐다
 
 
 class ParagraphPatch(BaseModel):
+    """다듬기 패치 하나. index 가 가리키는 문단을 text 로 바꾼다."""
+
     index: int
     text: str
 
 
 class PolishOutput(BaseModel):
+    """다듬기 계약. 패치마다 안전장치와 게이트를 통과한 것만 적용된다."""
+
     patches: list[ParagraphPatch]
 
 
@@ -413,11 +475,15 @@ class PolishOutput(BaseModel):
 
 
 class DomainOption(BaseModel):
+    """용어 뜻의 영역 선택지(08 문서 DOMAINS 표)."""
+
     slug: str
     label: str
 
 
 class KnownSense(BaseModel):
+    """추출 입력에 보이는 기존 뜻 하나."""
+
     sense_key: str
     domains: list[str]
     definition: str
@@ -426,6 +492,8 @@ class KnownSense(BaseModel):
 
 
 class KnownHeadword(BaseModel):
+    """추출 입력에 보이는 기존 표제어와 그 뜻들. same_as 는 이 key 중 하나만 가리킬 수 있다(D-65)."""
+
     key: str
     term_ko: str
     term_en: str | None = None
@@ -450,12 +518,16 @@ class GlossaryInput(BaseModel):
 
 
 class SenseProposal(BaseModel):
+    """새 뜻 제안. 기존 정의가 이 글에서 틀린 말이 될 때만 낸다(08 문서 2.3절)."""
+
     domains: list[str] = Field(min_length=1, max_length=3)  # allowed_domains 의 슬러그만. 첫째가 주 영역
     definition: str = Field(min_length=1, max_length=240)  # 2문장 이하, "~다"
     distinguisher: str = Field(default="", max_length=80)  # 한 줄. 표제어에 다른 뜻이 있을 때 채운다
 
 
 class GlossaryCandidate(BaseModel):
+    """추출 후보 하나. 표면형·앵커·전제 지식·중복은 코드가 항목 단위로 검사해 버린다(D-65)."""
+
     term_ko: str = ""
     term_en: str | None = None
     surface: str = Field(min_length=1)  # 본문에 있는 그대로. 조사 포함. 코드 밖. 한 줄
@@ -472,4 +544,6 @@ class GlossaryCandidate(BaseModel):
 
 
 class GlossaryOutput(BaseModel):
+    """용어 추출 계약. 스키마 위반만 재시도하고 나머지는 코드가 항목 단위로 버린다."""
+
     candidates: list[GlossaryCandidate] = Field(max_length=24)  # 글당 상한(max_terms)은 코드가 자른다

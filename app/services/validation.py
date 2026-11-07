@@ -42,6 +42,7 @@ class ValidationGate:
 
     @classmethod
     def from_parameters(cls, parameters: Parameters) -> "ValidationGate":
+        """라운드 버전의 조절 값으로 게이트를 만든다. 글마다 라운드가 다를 수 있어 걸음마다 부른다."""
         return cls(
             min_chars=parameters.draft_min_chars,
             max_chars=parameters.draft_max_chars,
@@ -50,11 +51,18 @@ class ValidationGate:
         )
 
     def validate(self, draft: PostDraft) -> list[str]:
+        """현재 버전의 실패 사유 목록. 비어 있으면 통과다. 상태 전이는 호출자가 한다.
+
+        본문 검사(앵커·코드 블록·길이·변환 가능) 뒤에, 리뷰 반영본이면 해소 대조, 사람 재수정이 아니면 앵커 보존을 본다. 외부 링크는 막지 않고 경고만 남긴다.
+        """
         version = draft.current_version
         markdown = version.content_markdown
+        # 1) 본문만 보는 검사. LLM 앞의 결정론적 관문이라 실패하면 REVISING(GATE) 로 돌아가고 iteration 은 오르지 않는다(D-11)
         errors = self.check_markdown(markdown, draft.topic.target_level)
+        # 2) 리뷰 반영본만 해소 대조. 초안·게이트 재작성·사람 재수정은 대조할 리뷰가 없다
         if version.origin_cause == RevisionCause.REVIEW:
             errors += _check_resolutions(draft, version)
+        # 3) 사람 재수정은 리뷰 없이 발행 대기로 가므로 앵커 보존을 묻지 않는다. 그 밖에는 미결 지적이 가리킬 자리가 남아야 한다
         if version.origin_cause != RevisionCause.HUMAN:
             errors += _check_anchor_persistence(draft, version, set(find_anchors(markdown)))
         _warn_external_links(draft.draft_id, markdown)
@@ -78,6 +86,7 @@ def _check_anchors(anchors: list[str], required_sections: list[str]) -> list[str
 def _check_code_blocks(markdown: str, min_code_blocks: int) -> list[str]:
     errors: list[str] = []
     lines = markdown.split("\n")
+    # 펜스 수가 홀수면 닫히지 않은 코드 블록이다. markdown-it 은 이것을 조용히 본문으로 읽으므로 파서보다 먼저 센다
     if sum(1 for line in lines if _FENCE_LINE.match(line)) % 2:
         errors.append("코드 펜스의 열림·닫힘 짝이 맞지 않는다")
     fences = [token for token in parse_markdown(markdown) if token.type == "fence"]
@@ -92,6 +101,7 @@ def _check_code_blocks(markdown: str, min_code_blocks: int) -> list[str]:
             errors.append(f"{label}에 언어 태그가 없다")
         if not fence.content.strip():
             errors.append(f"{label}이 비어 있다")
+        # code-N 앵커가 코드 블록 바로 위에 있어야 리뷰 지적이 코드 블록을 가리킬 수 있다(04 문서 3절)
         anchor_line = _previous_nonblank(lines, start_line)
         anchor = ANCHOR_PATTERN.search(lines[anchor_line]) if anchor_line is not None else None
         if anchor is None or not CODE_ANCHOR_PATTERN.match(anchor.group(1)):
@@ -114,6 +124,7 @@ def _previous_nonblank(lines: list[str], index: int) -> int | None:
 
 
 def _check_syntax(label: str, language: str | None, code: str) -> list[str]:
+    # 문법만 본다. 코드 블록은 실행되지 않으니 타입·논리는 리뷰어 몫이고, 잘린 조각은 -snippet 태그로 검사를 피한다
     try:
         if language == "python":
             ast.parse(code)
@@ -151,6 +162,7 @@ def _check_length(markdown: str, min_chars: int, max_chars: int) -> list[str]:
 
 
 def _check_convertible(markdown: str) -> list[str]:
+    # 발행 때 Tiptap JSON 으로 변환한다. 승인 뒤에 변환이 실패하면 사람이 다시 봐야 하므로 게이트에서 미리 돌려 본다
     try:
         markdown_to_tiptap(markdown)
     except ValueError as exc:

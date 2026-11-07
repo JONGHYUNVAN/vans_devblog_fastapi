@@ -7,12 +7,16 @@ PostLevel = Literal[100, 200, 300, 400]  # 글의 전문성 수준 (models/level
 
 
 class AgentSlot(StrEnum):
+    """라운드의 세 글 자리(A·B·C). 슬롯마다 페르소나와 작성 모델이 붙고(ModelBinding) 글 id 는 `{round_id}:{slot}` 이다."""
+
     A = "A"
     B = "B"
     C = "C"
 
 
 class RoundStatus(StrEnum):
+    """라운드 상태 (03 문서 3절 전이표). TOPIC_SELECTION 은 한 번에 하나만 있고, IN_PROGRESS 부터 글 3편이 독립적으로 돈다."""
+
     TOPIC_SELECTION = "TOPIC_SELECTION"  # 생성 즉시. 주제 제안·중복 판별 진행 중 (배리어). 한 번에 한 라운드만
     IN_PROGRESS = "IN_PROGRESS"  # 주제 확정, 글 3편이 독립적으로 진행
     COMPLETED = "COMPLETED"  # 3편 모두 PUBLISHED 또는 REJECTED 로 종결
@@ -20,6 +24,8 @@ class RoundStatus(StrEnum):
 
 
 class PostStatus(StrEnum):
+    """글 상태 (03 문서 전이표). 전이는 PostDraft 메서드만 한다. ESCALATED·FAILED·종결에서는 코루틴이 돌지 않고 사람 결정만 상태를 바꾼다."""
+
     TOPIC_LOCKED = "TOPIC_LOCKED"  # 글 문서가 생기는 첫 상태. 주제 제안 중에는 글 문서가 없다
     DRAFTING = "DRAFTING"  # 작성자 호출 진행 중 (v1 또는 수정본)
     VALIDATING = "VALIDATING"  # 결정론적 게이트 (LLM 호출 없음)
@@ -36,17 +42,23 @@ class PostStatus(StrEnum):
 
 
 class ReviewScope(StrEnum):
+    """리뷰 범위. 리뷰를 마친 이전 버전이 없으면 FULL, 있으면 SPOT_CHECK(본인 미결 항목과 신규 CRITICAL 만)다(D-21)."""
+
     FULL = "FULL"
     SPOT_CHECK = "SPOT_CHECK"
     # 중재는 PeerReview 가 아니다. Arbitration 엔티티로 남긴다.
 
 
 class ReviewVerdict(StrEnum):
+    """리뷰어가 적어 낸 판정. 기록만 하고 흐름은 severity 집계(derived_verdict)로 정한다(D-03)."""
+
     APPROVE = "APPROVE"
     REQUEST_CHANGES = "REQUEST_CHANGES"
 
 
 class IssueSeverity(StrEnum):
+    """지적의 심각도. CRITICAL·MAJOR 는 발행을 막고 수정 입력의 차단 집합을 이룬다(04 문서 5절)."""
+
     CRITICAL = "CRITICAL"  # 기술적 오류, 코드 버그, 사실 오류. 발행 차단
     MAJOR = "MAJOR"  # 논리 비약, 구조 결함, 필수 배경 누락. 발행 차단
     MINOR = "MINOR"  # 표현, 문맥, 가독성 개선. 차단하지 않음
@@ -54,10 +66,13 @@ class IssueSeverity(StrEnum):
 
     @property
     def is_blocking(self) -> bool:
+        """발행을 막는 등급인지. 차단 집합·게이트의 해소 대조·교착 판정이 이 기준을 쓴다."""
         return self in (IssueSeverity.CRITICAL, IssueSeverity.MAJOR)
 
 
 class ResolutionStatus(StrEnum):
+    """수정본이 지적 하나에 내린 처리. 차단 항목은 DEFERRED 가 안 되고 기각은 사유가 필수다(게이트가 대조한다, 04 문서 3절)."""
+
     ACCEPTED = "ACCEPTED"
     REJECTED_WITH_REASON = "REJECTED_WITH_REASON"
     DEFERRED = "DEFERRED"  # MINOR·NITPICK 에만 허용. "이번 버전에서 다루지 않음"
@@ -67,11 +82,15 @@ class ResolutionStatus(StrEnum):
 
 
 class ArbitrationOutcome(StrEnum):
+    """교착 항목의 중재 판정(D-10). UPHOLD_REVIEWER 는 다음 버전에서 수용 필수, UPHOLD_AUTHOR 는 항목 종결이다(D-48)."""
+
     UPHOLD_REVIEWER = "UPHOLD_REVIEWER"  # 리뷰어가 맞다. 작성자가 수정해야 한다
     UPHOLD_AUTHOR = "UPHOLD_AUTHOR"  # 작성자 기각이 타당하다. 해당 항목 종결
 
 
 class ReviewLens(StrEnum):
+    """세 리뷰 관점(D-19). 글마다 렌즈마다 리뷰어 하나가 붙고, 세 페르소나의 주 렌즈는 서로 달라야 한다(R-10)."""
+
     LOGIC_READABILITY = "LOGIC_READABILITY"  # 논리 전개, 코드 정합성, 가독성
     FACT_STRUCTURE = "FACT_STRUCTURE"  # 기술 스펙 사실 확인, 버전, 누락된 배경·엣지 케이스
     CRITICAL_PRACTICAL = "CRITICAL_PRACTICAL"  # 반론, 실무 효용, 클리셰 제거
@@ -87,6 +106,8 @@ class RevisionCause(StrEnum):
 
 
 class EscalationReason(StrEnum):
+    """ESCALATED 로 보낸 이유. 사람이 고를 수 있는 결정(EscalationDecisionKind)을 가른다: CONFIRM_PUBLISHED 는 PUBLISH_UNCERTAIN 에만."""
+
     MAX_ITERATIONS_REACHED = "MAX_ITERATIONS_REACHED"
     PUBLISH_FAILED = "PUBLISH_FAILED"
     PUBLISH_UNCERTAIN = "PUBLISH_UNCERTAIN"  # 발행 호출 결과를 모름. 중복 게시를 막으려고 자동 재시도하지 않는다
@@ -115,6 +136,8 @@ class FailureCode(StrEnum):
 
 
 class RoundAbortReason(StrEnum):
+    """라운드 중단 사유. 중단된 라운드의 글은 REJECTED 가 되고 주제는 RELEASED 다(03 문서 30행, 04 문서 1절 표)."""
+
     MANUAL = "MANUAL"
     TOPIC_ATTEMPTS_EXHAUSTED = "TOPIC_ATTEMPTS_EXHAUSTED"
     LLM_FAILED = "LLM_FAILED"
@@ -122,12 +145,16 @@ class RoundAbortReason(StrEnum):
 
 
 class TopicRegistryStatus(StrEnum):
+    """주제 레지스트리 항목의 상태(04 문서 2절). 회피 목록·중복 판별은 RESERVED·PUBLISHED 만 보고, RELEASED 는 다시 고를 수 있다."""
+
     RESERVED = "RESERVED"  # 세 주제가 모두 확정된 뒤에만 등록
     PUBLISHED = "PUBLISHED"
     RELEASED = "RELEASED"  # 폐기·라운드 중단·주제 단계 실패
 
 
 class CallKind(StrEnum):
+    """LLM 호출 종류. 영수증(agent_calls.kind)과 라우트 id 의 앞부분이 이 값이다. POLISH_FORMAT 은 v4 에서 부르지 않지만 옛 영수증 때문에 남긴다."""
+
     PROPOSE_TOPIC = "PROPOSE_TOPIC"
     WRITE_DRAFT = "WRITE_DRAFT"
     REVISE_DRAFT = "REVISE_DRAFT"
@@ -185,6 +212,7 @@ class FinalReadKind(StrEnum):
 
     @property
     def is_blocking(self) -> bool:
+        """OBSERVATION 만 차단하지 않는다. 라운드 버전의 final_read.blocking_kinds 가 있으면 record_final_read 는 그쪽을 쓴다."""
         return self != FinalReadKind.OBSERVATION
 
 
@@ -199,6 +227,8 @@ class ClaimType(StrEnum):
 
 
 class ClaimStatus(StrEnum):
+    """사실 확인 주장의 판정. 기본은 REFUTED → CRITICAL 지적, UNVERIFIABLE → MINOR 지적(막지 않는다), SUPPORTED 는 지적이 아니다(claim_items)."""
+
     SUPPORTED = "SUPPORTED"
     REFUTED = "REFUTED"
     UNVERIFIABLE = "UNVERIFIABLE"

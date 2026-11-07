@@ -81,14 +81,17 @@ def open_clients(settings: Settings) -> Iterator[tuple[Elasticsearch, MongoClien
 
 
 def get_es(request: Request) -> Elasticsearch:
+    """요청 앱 상태의 ES 클라이언트(lifespan 이 만든다)."""
     return request.app.state.es
 
 
 def get_mongo_client(request: Request) -> MongoClient:
+    """요청 앱 상태의 동기 Mongo 클라이언트(검색·동기화·코드 그래프)."""
     return request.app.state.mongo_client
 
 
 def get_kis_stream(request: Request) -> KISStreamManager:
+    """요청 앱 상태의 KIS WebSocket 매니저."""
     return request.app.state.kis_stream
 
 
@@ -132,6 +135,7 @@ def get_round_service(
     database: Annotated[AsyncDatabase, Depends(get_async_database)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RoundService:
+    """라우터용 RoundService. 조립은 build_round_service 와 같다."""
     return build_round_service(database, settings)
 
 
@@ -139,6 +143,7 @@ def get_draft_decision_service(
     database: Annotated[AsyncDatabase, Depends(get_async_database)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> DraftDecisionService:
+    """라우터용 DraftDecisionService(사람 결정)."""
     return build_draft_decision_service(database, settings)
 
 
@@ -146,6 +151,7 @@ def get_pipeline_view_service(
     database: Annotated[AsyncDatabase, Depends(get_async_database)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> PipelineViewService:
+    """라우터용 PipelineViewService(읽기 전용)."""
     return build_pipeline_view_service(database, settings)
 
 
@@ -153,6 +159,7 @@ def get_health_service(
     es: Annotated[Elasticsearch, Depends(get_es)],
     mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
 ) -> HealthService:
+    """헬스체크 서비스. 연결 확인 함수를 부분 적용해 넘긴다."""
     return HealthService(
         is_es_reachable=partial(is_es_reachable, es),
         is_mongo_reachable=partial(is_mongo_reachable, mongo_client),
@@ -163,6 +170,7 @@ def get_search_service(
     es: Annotated[Elasticsearch, Depends(get_es)],
     background_tasks: BackgroundTasks,
 ) -> SearchService:
+    """검색 서비스. 인기 검색어 기록은 응답 뒤 백그라운드 태스크로 돈다."""
     return SearchService(
         post_index_repository=PostIndexRepository(es),
         popular_search_repository=PopularSearchRepository(es),
@@ -171,6 +179,7 @@ def get_search_service(
 
 
 def get_indexing_service(es: Annotated[Elasticsearch, Depends(get_es)]) -> IndexingService:
+    """색인 서비스(내부 API 가 쓴다)."""
     return IndexingService(post_index_repository=PostIndexRepository(es))
 
 
@@ -179,6 +188,7 @@ def get_sync_service(
     mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SyncService:
+    """동기화 서비스. 라우터와 CLI sync-posts 가 같이 쓴다."""
     return SyncService(
         post_repository=PostRepository(mongo_client[settings.mongodb_db_name]),
         post_index_repository=PostIndexRepository(es),
@@ -188,6 +198,7 @@ def get_sync_service(
 
 
 def get_index_setup_service(es: Elasticsearch) -> IndexSetupService:
+    """인기 검색어 인덱스 설정 서비스. lifespan 과 CLI setup-popular 가 쓴다."""
     return IndexSetupService(popular_search_repository=PopularSearchRepository(es))
 
 
@@ -197,6 +208,7 @@ def get_code_graph_service(
     settings: Annotated[Settings, Depends(get_settings)],
     background_tasks: BackgroundTasks,
 ) -> CodeGraphService:
+    """라우터용 CodeGraphService. 분석은 백그라운드 태스크로 돌리고 진행 상태는 앱 상태의 tracker 에 남는다."""
     return build_code_graph_service(
         mongo_client,
         settings,
@@ -234,6 +246,7 @@ def get_service_graph_service(
     mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServiceGraphService:
+    """라우터용 ServiceGraphService. 이 앱의 OpenAPI 는 HTTP 없이 app.openapi 로 받는다(G-13)."""
     return build_service_graph_service(mongo_client, settings, self_openapi=request.app.openapi)
 
 
@@ -350,10 +363,12 @@ def build_glossary_service(database: AsyncDatabase, settings: Settings) -> Gloss
 
 
 def build_glossary_view_service(database: AsyncDatabase, settings: Settings) -> GlossaryViewService:
+    """용어 사전 공개 읽기 서비스(08 문서 2.6절). 라우터와 CLI 가 같이 쓴다."""
     return GlossaryViewService(repository=GlossaryRepository(database), post_ref_repository=PostRefRepository(database))
 
 
 def build_provenance_service(database: AsyncDatabase, settings: Settings) -> ProvenanceService:
+    """제작 기록 공개 조회·단건 보충 서비스(08 문서 3절)."""
     return ProvenanceService(
         repository=PostProvenanceRepository(database),
         draft_repository=PostDraftRepository(database),
@@ -366,6 +381,7 @@ def get_glossary_view_service(
     database: Annotated[AsyncDatabase, Depends(get_async_database)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> GlossaryViewService:
+    """라우터용 GlossaryViewService."""
     return build_glossary_view_service(database, settings)
 
 
@@ -373,6 +389,7 @@ def get_provenance_service(
     database: Annotated[AsyncDatabase, Depends(get_async_database)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ProvenanceService:
+    """라우터용 ProvenanceService."""
     return build_provenance_service(database, settings)
 
 
@@ -390,6 +407,10 @@ def build_draft_decision_service(database: AsyncDatabase, settings: Settings) ->
 
 
 def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundService:
+    """라우터·CLI·러너가 같은 조립을 쓴다. 라운드 생성은 파이프라인 버전 서비스에서 최신 버전을 읽어 고정한다(09 문서 D-73).
+
+    publisher 가 None(POST_BE_URL 없음)이면 start_round 가 ValueError 로 거절한다.
+    """
     return RoundService(
         PublishingRoundRepository(database),
         PostDraftRepository(database),
@@ -477,4 +498,5 @@ def get_kis_service(
     kis_stream: Annotated[KISStreamManager, Depends(get_kis_stream)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> KISService:
+    """KIS 실시간 시세 서비스. 키가 없으면 degraded 응답이다."""
     return KISService(kis_stream=kis_stream, is_configured=settings.kis_configured)

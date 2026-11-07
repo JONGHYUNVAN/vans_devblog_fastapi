@@ -19,11 +19,15 @@ class PostDraftRepository:
         self._drafts = database[AGENT_DRAFTS_COLLECTION]
 
     async def ensure_indexes(self) -> None:
+        """round_id(라운드의 글 3편), status(러너 스캔), (status, updated_at)(오래 안 건드린 순 목록). lifespan 과 `agents run` 이 부른다."""
+        # _id 가 결정론적 "{round_id}:{slot}" 이라 중복 방지용 unique 인덱스는 따로 없다(add_if_missing 이 _id 충돌로 판단한다).
+        # 아래는 목록 조회 셋(라운드의 글, 상태별, 상태+오래된 순)이 쓰는 인덱스뿐이다
         await self._drafts.create_index("round_id")
         await self._drafts.create_index("status")
         await self._drafts.create_index([("status", 1), ("updated_at", 1)])
 
     async def get(self, draft_id: str) -> PostDraft | None:
+        """글 하나. 없으면 None."""
         doc = await self._drafts.find_one({"_id": draft_id})
         return PostDraft.model_validate(doc) if doc else None
 

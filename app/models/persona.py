@@ -10,6 +10,8 @@ from app.models.enums import ReviewLens
 
 
 class PersonaProfile(BaseModel):
+    """슬롯 하나의 페르소나: 주제 제안의 탐색 도메인과 기본 리뷰 렌즈. 어떤 모델이 맡는지는 ModelBinding 이 정한다(D-02)."""
+
     persona_id: str
     display_name: str  # 한국어 영역 라벨. 프롬프트·발행 본문에는 넣지 않는다
     writer_bias: str  # propose_topic 의 탐색 도메인(영어). $writer_bias 로 치환된다

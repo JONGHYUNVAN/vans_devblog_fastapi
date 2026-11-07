@@ -77,6 +77,8 @@ class TonePreservationParameters(BaseModel):
 
 
 class ReviewParameters(BaseModel):
+    """리뷰어 입력의 조절 값. 지금은 톤 보존 목록뿐이다."""
+
     tone_preservation: TonePreservationParameters = Field(default_factory=TonePreservationParameters)
 
 
@@ -155,6 +157,8 @@ class PublishNoteParameters(BaseModel):
 
 
 class PublishParameters(BaseModel):
+    """발행 조절 값: 승인 토글과 머리말 문구. 토글은 라운드가 고정한 버전에서 읽으므로 환경 변수로는 바꾸지 않는다(D-73)."""
+
     requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다 (D-17)
     note: PublishNoteParameters = Field(default_factory=PublishNoteParameters)
 
@@ -245,10 +249,12 @@ class PipelineVersion(PipelineVersionBody):
     source: PipelineVersionSource = "import"
 
     def body(self) -> PipelineVersionBody:
+        """메타(id·부모·해시·메모)를 뺀 본문. edit-* 가 최신 버전을 복사해 자식 버전을 만들 때 쓴다."""
         return PipelineVersionBody.model_validate(self.model_dump(include=BODY_FIELDS))
 
 
 def version_id_of(seq: int) -> str:
+    """순번 → 버전 id. `v1`·`v2`… (Q-36). 프롬프트 디렉터리 이름과 겹치므로 영수증은 pipeline_version 필드를 따로 쓴다."""
     return f"v{seq}"
 
 

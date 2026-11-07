@@ -50,6 +50,8 @@ def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding], personas: Pers
         routes[propose_route(persona_id)] = [models[slot]]
         routes[write_route(persona_id)] = [models[slot]]
         routes[revise_route(persona_id)] = [models[slot]]
+    # 리뷰 라우트는 그 렌즈를 주 렌즈로 가진 슬롯의 모델을 앞에 두고 전원을 뒤에 둔다. 선택기(select_reviewers)가 작성 벤더와
+    # 앞선 리뷰 벤더를 피한 첫 후보를 고르므로 이 순서가 곧 라우팅 전의 "주 렌즈 리뷰어 우선" 동작이다
     for lens in ReviewLens:
         owners = [
             slot
@@ -65,16 +67,19 @@ def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding], personas: Pers
         ROUTE_FACT_TRANSFORM,
     ):
         routes[route_id] = everyone
+    # relaxed: 슬롯 바인딩 셋만으로는 벤더가 셋 미만일 수 있다. 독립 후보가 없으면 첫 후보로 물러서야 옛 라운드가 멈추지 않는다
     return RoutingSnapshot(
         routes=routes, slot_personas={slot: binding.persona_id for slot, binding in slot_bindings.items()}, relaxed=True
     )
 
 
 def snapshot_of(publishing_round: PublishingRound, personas: Personas = None) -> RoutingSnapshot:
+    """라운드의 유효 스냅샷. 라우팅 전 라운드는 슬롯 바인딩으로 같은 동작의 스냅샷을 만든다."""
     return publishing_round.routing or legacy_snapshot(publishing_round.slot_bindings, personas)
 
 
 def proposer_of(publishing_round: PublishingRound, slot: AgentSlot, personas: Personas = None) -> CallModel:
+    """슬롯의 주제 제안 모델."""
     snapshot = snapshot_of(publishing_round, personas)
     return select_proposer(snapshot, snapshot.slot_personas[slot])
 
@@ -90,10 +95,12 @@ class DraftRoutes:
 
     @property
     def writer(self) -> CallModel:
+        """작성 모델(v1). 이 벤더가 회피의 기준이다."""
         return self._writer
 
     @property
     def reviser(self) -> CallModel:
+        """수정 모델: 작성 벤더 안에서 고른다. 사람 재수정도 같다(D-52)."""
         return select_reviser(self._snapshot, self._persona_id, self._writer.provider)
 
     def reviewer(self, lens: ReviewLens) -> CallModel:
@@ -101,22 +108,27 @@ class DraftRoutes:
         return select_reviewers(self._snapshot, self._writer.provider, self._lenses)[lens]
 
     def arbiter(self, reviewer_lens: ReviewLens) -> CallModel:
+        """교착 항목의 중재 모델: 작성 벤더와 그 렌즈의 리뷰 벤더 밖."""
         return select_arbiter(self._snapshot, self._writer.provider, self.reviewer(reviewer_lens).provider)
 
     @property
     def final_reader(self) -> CallModel:
+        """전체 읽기 모델: 작성 벤더 밖."""
         return select_independent(self._snapshot, ROUTE_FINAL_READ, self._writer.provider)
 
     @property
     def level_assessor(self) -> CallModel:
+        """수준 평가 모델: 작성 벤더 밖."""
         return select_independent(self._snapshot, ROUTE_ASSESS_LEVEL, self._writer.provider)
 
     @property
     def tone_polisher(self) -> CallModel:
+        """문체 다듬기 모델: 작성 벤더 밖."""
         return select_independent(self._snapshot, ROUTE_POLISH_TONE, self._writer.provider)
 
     @property
     def fact_transformer(self) -> CallModel:
+        """사실 확인 변환 모델: 벤더 제약이 없다(저가 모델)."""
         return select_any(self._snapshot, ROUTE_FACT_TRANSFORM)
 
     @property

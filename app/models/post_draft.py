@@ -66,6 +66,7 @@ class ReviewAssignment(BaseModel):
 
     @property
     def lenses(self) -> set[ReviewLens]:
+        """이 리뷰어가 맡은 렌즈 집합(주 + 보조). 지적의 lens 는 여기 들어야 한다."""
         return {self.primary_lens} | ({self.secondary_lens} if self.secondary_lens else set())
 
 
@@ -92,6 +93,8 @@ class ReviewItem(BaseModel):
 
 
 class ItemResolution(BaseModel):
+    """수정본이 지적 하나에 내린 처리. 기각(REJECTED_WITH_REASON·OUT_OF_SCOPE)에 사유가 없으면 ValueError. 차단 집합과의 대조는 게이트가 한다."""
+
     item_id: str
     status: ResolutionStatus
     reason: str | None = None  # REJECTED_WITH_REASON·OUT_OF_SCOPE 이면 필수
@@ -150,6 +153,8 @@ class FactClaim(BaseModel):
 
 
 class PeerReview(BaseModel):
+    """리뷰 한 건(FULL 또는 SPOT_CHECK). 지적은 이 리뷰의 id·렌즈에 속해야 하고 범위에 맞지 않는 필드(FULL 의 item_checks 등)는 ValueError."""
+
     review_id: str
     target_version: int
     reviewer_slot: AgentSlot | None = None  # 옛 글만. 리뷰어는 lens 로 가린다
@@ -194,6 +199,8 @@ class PeerReview(BaseModel):
 
 
 class Arbitration(BaseModel):
+    """교착 항목 하나의 중재 판정. 같은 버전·항목에 하나뿐이고, 판정은 다음 버전의 해소를 구속한다(D-48)."""
+
     arbitration_id: str
     target_version: int
     item_id: str  # 교착된 ReviewItem
@@ -205,6 +212,8 @@ class Arbitration(BaseModel):
 
 
 class DraftVersion(BaseModel):
+    """제출된 본문 한 벌. 게이트 실패본도 남아 버전 번호는 호출 순서다. origin_cause 가 이 버전을 만든 원인(초안·리뷰·사람·다듬기)이다."""
+
     version_number: int = Field(ge=1)
     title: str
     summary: str
@@ -221,10 +230,13 @@ class DraftVersion(BaseModel):
     model_id: str | None = None  # 이 버전을 쓴 모델. 다듬은 버전은 다듬기 기록(PolishRecord)에 있다
 
     def resolution_for(self, item_id: str) -> ItemResolution | None:
+        """이 버전이 지적 하나에 내린 처리. 없으면 None."""
         return next((resolution for resolution in self.resolutions if resolution.item_id == item_id), None)
 
 
 class PublicationIntent(BaseModel):
+    """발행 호출 직전에 남기는 의도(04 문서 8절 6단계). failed_at 이 None 인 의도는 결과를 모르는 호출이라 다시 부르지 않는다."""
+
     final_version: int
     requested_at: datetime
     attempt: int = Field(ge=1)  # 이번 호출 번호. 저장 시점의 publish_attempts + 1
@@ -235,6 +247,8 @@ class PublicationIntent(BaseModel):
 
 
 class Publication(BaseModel):
+    """발행 성공 기록. 발행 응답 또는 사람의 CONFIRM_PUBLISHED 에서 만든다. derived_at 은 파생 문서를 다 쓴 뒤 따로 채운다."""
+
     published_at: datetime
     final_version: int
     external_post_id: str  # Post BE 게시글 id. 발행 응답 또는 CONFIRM_PUBLISHED 결정에서 온다
@@ -246,6 +260,8 @@ class Publication(BaseModel):
 
 
 class FailureRecord(BaseModel):
+    """FAILED 로 멈춘 이유와 직전 상태. 재개(retry_from_failed)가 돌아갈 자리다."""
+
     from_status: PostStatus
     code: FailureCode
     message: str
@@ -253,6 +269,8 @@ class FailureRecord(BaseModel):
 
 
 class FinalReadFinding(BaseModel):
+    """전체 읽기 지적 하나. 앵커와 인용은 코드가 본문에 있는지 대조한 뒤의 값이다(D-50)."""
+
     kind: FinalReadKind
     section_id: str  # 본문에 있는 앵커
     quote: str  # 본문·코드에서 그대로 옮긴 구절
@@ -269,10 +287,13 @@ class FinalRead(BaseModel):
 
     @property
     def is_blocking(self) -> bool:
+        """차단 종류의 지적이 하나라도 있는지. 조절 값이 종류를 바꾸면 record_final_read 가 그쪽을 쓴다."""
         return any(finding.kind.is_blocking for finding in self.findings)
 
 
 class LevelEvidence(BaseModel):
+    """수준 판정의 근거 하나: 기준 항목과 본문 인용."""
+
     criterion: str
     quote: str
 
@@ -289,6 +310,8 @@ class LevelAssessment(BaseModel):
 
 
 class DiscardedPatch(BaseModel):
+    """버린 다듬기 패치 하나와 그 이유. 사람이 다듬기 품질을 볼 때 쓴다."""
+
     source: str  # regex | format | tone
     index: int
     reason: str
@@ -384,10 +407,12 @@ class PostDraft(BaseModel):
 
     @property
     def is_terminal(self) -> bool:
+        """PUBLISHED·REJECTED 인지. 라운드 완료 판정과 레지스트리 따라 쓰기의 기준이다."""
         return self.status in _TERMINAL
 
     @property
     def current_version(self) -> DraftVersion:
+        """마지막으로 제출된 버전(게이트 실패본 포함). 아직 없으면 ValueError."""
         if not self.versions:
             raise ValueError(f"draft {self.draft_id} has no version yet")
         return self.versions[-1]
@@ -420,6 +445,7 @@ class PostDraft(BaseModel):
         return self.publication_intent is not None and self.publication_intent.failed_at is None
 
     def awaits_approval(self, requires_approval: bool) -> bool:
+        """승인 토글이 켜진 라운드에서 승인을 기다리는 중인지. 러너는 이 글에 코루틴을 띄우지 않는다."""
         return self.status == PostStatus.READY_TO_PUBLISH and requires_approval and self.approved_by is None
 
     @property
@@ -430,6 +456,7 @@ class PostDraft(BaseModel):
         return self.publication_intent.external_post_id if self.publication_intent is not None else None
 
     def assignment_of(self, lens: ReviewLens) -> ReviewAssignment:
+        """렌즈를 맡은 리뷰어 배정. 없으면 ValueError(배정은 세 렌즈를 모두 덮으므로 정상 글에서는 나지 않는다)."""
         for assignment in self.reviewer_assignments:
             if assignment.primary_lens == lens:
                 return assignment
@@ -443,6 +470,7 @@ class PostDraft(BaseModel):
         raise ValueError(f"review {item.source_review_id} is not in draft {self.draft_id}")
 
     def reviews_of(self, version_number: int) -> list[PeerReview]:
+        """그 버전을 대상으로 한 리뷰 전부(FULL·SPOT_CHECK 포함)."""
         return [review for review in self.reviews if review.target_version == version_number]
 
     def find_item(self, item_id: str) -> ReviewItem:
@@ -514,6 +542,7 @@ class PostDraft(BaseModel):
         return [lens for lens in self.required_reviewers() if lens not in responded]
 
     def is_review_complete(self) -> bool:
+        """필수 리뷰어가 모두 응답했는지. 평가(apply_evaluation)는 이때만 할 수 있다."""
         return not self.pending_reviewers()
 
     def deadlocked_items(self) -> list[ReviewItem]:
@@ -555,6 +584,7 @@ class PostDraft(BaseModel):
         return [item for item in self.deadlocked_items() if item.item_id not in arbitrated]
 
     def arbitration_complete(self) -> bool:
+        """교착 항목마다 이번 버전 중재가 있는지. 평가는 이때만 할 수 있다."""
         return not self.pending_arbitration_items()
 
     # ── 전이 ──────────────────────────────────────────────────────────
@@ -794,6 +824,7 @@ class PostDraft(BaseModel):
             self._advance_post_review(PostReviewStage.ASSESS_LEVEL)
 
     def record_level_assessment(self, assessment: LevelAssessment) -> None:
+        """수준 평가를 기록하고 GLOSSARY 단계로 넘어간다. 라벨일 뿐 글을 막지 않는다(D-54)."""
         self._require_stage(PostReviewStage.ASSESS_LEVEL)
         self.level_assessment = assessment
         self._advance_post_review(PostReviewStage.GLOSSARY)

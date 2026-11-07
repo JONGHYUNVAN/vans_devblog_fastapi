@@ -57,10 +57,12 @@ class PipelineRunner:
         return list(self._tasks)
 
     def start(self) -> None:
+        """스캔 루프 태스크를 띄운다. 이미 돌고 있으면 아무것도 하지 않는다."""
         if self._loop_task is None:
             self._loop_task = asyncio.create_task(self._loop(), name="pipeline-runner")
 
     async def stop(self) -> None:
+        """루프와 글·라운드 코루틴을 전부 cancel 하고, 발행 호출의 결과 반영(drain)까지 기다린 뒤 표를 비운다. 끊긴 호출은 다음 기동 때 다시 한다."""
         tasks = [task for task in [self._loop_task, *self._tasks.values()] if task is not None]
         for task in tasks:
             task.cancel()

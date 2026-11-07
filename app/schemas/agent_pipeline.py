@@ -48,6 +48,8 @@ from app.models.topic import CategoryOption, TopicProposal
 
 
 class RoundCreate(BaseModel):
+    """POST rounds/ 본문. 카테고리 스냅샷은 서버가 Post BE 에서 읽고 파이프라인 버전은 최신이 고정된다(다른 버전은 CLI --pipeline-version 만, Q-42)."""
+
     theme_keyword: str | None = None
     bindings: dict[AgentSlot, ModelBinding] | None = Field(
         None, description="슬롯의 페르소나와 작성 모델을 이 라운드만 바꾼다(A/B). 없으면 agent_routes 를 쓴다"
@@ -56,6 +58,8 @@ class RoundCreate(BaseModel):
 
 
 class EscalationDecision(BaseModel):
+    """POST drafts/{id}/escalation/ 본문. REVISE 에 지시문, CONFIRM_PUBLISHED 에 게시글 id 가 없으면 422."""
+
     decision: EscalationDecisionKind
     decided_by: str = Field(min_length=1)
     instruction: str | None = Field(None, description="REVISE 에 필수")
@@ -71,14 +75,20 @@ class EscalationDecision(BaseModel):
 
 
 class DraftApproval(BaseModel):
+    """POST drafts/{id}/approve/ 본문. 승인자 이름은 글과 Publication 의 approved_by 에 남는다."""
+
     approved_by: str = Field(min_length=1)
 
 
 class DraftRetry(BaseModel):
+    """POST drafts/{id}/retry/ 본문. token_limit 이 현재 사용량보다 큰지는 서비스가 검사한다(400)."""
+
     token_limit: int | None = Field(None, gt=0, description="새 소프트 상한. 현재 사용량보다 커야 한다")
 
 
 class DraftDiscard(BaseModel):
+    """POST drafts/{id}/discard/ 본문. FAILED 글 하나를 폐기한다."""
+
     decided_by: str = Field(min_length=1)
 
 
@@ -86,6 +96,8 @@ class DraftDiscard(BaseModel):
 
 
 class RoundPublic(BaseModel):
+    """라운드 요약. 목록·생성 응답이다. 글은 id 만 준다."""
+
     round_id: str
     round_seq: int
     status: RoundStatus
@@ -121,6 +133,8 @@ class DraftPublic(BaseModel):
 
 
 class RoundDetail(RoundPublic):
+    """라운드 상세: 요약 + 카테고리 스냅샷·마지막 주제 시도·글 3편 요약."""
+
     categories: list[CategoryOption]
     latest_attempt: TopicAttempt | None
     drafts: list[DraftPublic]
@@ -244,6 +258,8 @@ class DraftProgress(BaseModel):
 
 
 class RoundProgress(BaseModel):
+    """`agents status`·`start-round --wait` 응답. 라운드 상태와 글별 진행 한 줄."""
+
     round_id: str
     status: RoundStatus
     abort_reason: RoundAbortReason | None

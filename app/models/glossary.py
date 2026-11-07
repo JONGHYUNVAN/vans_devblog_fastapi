@@ -1,7 +1,10 @@
-"""용어 사전 도메인: 표제어·뜻·글→뜻 매핑과 추출 기록 (설계 08 문서 2.1절).
+"""용어 사전 도메인: 표제어·뜻·글→뜻 매핑과 추출 기록 (설계 08 문서 2.1절, 07 문서 D-63).
 
-사전의 단위는 뜻이다. 표제어는 표기와 별칭을 묶고, 뜻 키는 단어도 영역도 담지 않는 순번이다.
-같은 단어의 다른 의미는 다른 뜻 키, 다른 단어(별칭·번역·음차)의 같은 의미는 같은 뜻 키, 영역이 다른 글의 같은 의미도 같은 뜻 키다.
+사전의 단위는 뜻이다. 툴팁이 "이 글에서 쓰인 뜻"과 "같은 표제어의 다른 뜻"을 함께 보이려면 의미 자체가 식별자여야 해서,
+뜻 키는 단어도 영역도 담지 않는 순번이고 영역은 뜻의 속성(domains)이다("트랜잭션"은 DB 글에서나 백엔드 글에서나 같은 뜻이다,
+2026-11-07 사용자 결정). 같은 단어의 다른 의미는 다른 뜻 키, 다른 단어(별칭·번역·음차)의 같은 의미는 같은 뜻 키다.
+추출(services/glossary.py)이 PROPOSED 로 만들고 사람이 CLI 로 승인하며, 읽기 API(services/glossary_views.py)는 뜻과
+표제어가 모두 APPROVED 인 것만 보인다. 저장은 상태와 무관하게 하므로 "승인 전 표시 금지"는 읽는 쪽의 책임이다.
 """
 
 from datetime import UTC, datetime
@@ -34,23 +37,30 @@ def _now() -> datetime:
 
 
 def domain_label(slug: str) -> str:
+    """영역 슬러그의 표시 이름. 모르는 슬러그는 그대로 돌려줘 옛 데이터가 응답을 깨지 않게 한다."""
     return DOMAINS.get(slug, slug)
 
 
 class ProposalSource(BaseModel):
-    """어느 글의 어느 호출이 제안했는지."""
+    """어느 글의 어느 호출이 제안했는지. `agents glossary pending <draft_id>` 와 approve_all 이 글 단위로 거르는 근거다."""
 
     draft_id: str
     call_id: str
 
 
 class AliasProposal(BaseModel):
+    """승인 전 별칭 제안. same_as 로 맞춘 표기가 표제어의 조회 키에 없을 때 생기고, 승인되면 aliases 로 옮겨 간다."""
+
     alias: str
     source: ProposalSource
 
 
 class GlossaryHeadword(BaseModel):
-    """glossary_headwords 문서. 표기와 별칭. 뜻은 품지 않는다."""
+    """glossary_headwords 문서. 표기와 별칭을 묶고 뜻은 품지 않는다.
+
+    headword_key 는 식별자라 사람이 term_en 을 고쳐도 바뀌지 않고 lookup_keys 만 다시 계산된다(08 문서 2.1절 불변식).
+    한 조회 키는 표제어 하나에만 속한다: 리포지토리의 unique 다중키 인덱스가 강제하고 저장 때 DuplicateKeyError 로 드러난다.
+    """
 
     model_config = ConfigDict(validate_by_name=True)
 
@@ -71,11 +81,16 @@ class GlossaryHeadword(BaseModel):
 
     @property
     def is_visible(self) -> bool:
+        """읽기 API 가 보여도 되는 상태인지. 항목은 뜻과 표제어 둘 다 참이어야 보인다."""
         return self.status == GlossaryStatus.APPROVED
 
 
 class GlossarySense(BaseModel):
-    """glossary_senses 문서. 사전의 단위."""
+    """glossary_senses 문서. 사전의 단위다.
+
+    뜻 하나는 의미 하나다. 영역이 다른 글이 같은 정의로 쓰면 같은 뜻이고 domains 에 영역을 더한다. 표제어에 APPROVED 뜻이
+    둘 이상이면 모든 뜻에 distinguisher 가 있어야 한다(승인 때 검사). post_ids 는 발행 따라 쓰기가 $addToSet 으로 더한다.
+    """
 
     model_config = ConfigDict(validate_by_name=True)
 
@@ -95,13 +110,17 @@ class GlossarySense(BaseModel):
 
     @property
     def is_visible(self) -> bool:
+        """읽기 API 가 보여도 되는 상태인지. REJECTED·PROPOSED 뜻은 글이 가리켜도 보이지 않는다."""
         return self.status == GlossaryStatus.APPROVED
 
 
+# 뜻이 어떻게 정해졌는지. EXACT·SAME_AS·NEW 는 등록 확인 ①②④(08 문서 2.2절), HUMAN 은 CLI resolve 다. 지표(D-65)용이라 동작에는 안 쓴다
 ItemResolutionKind = Literal["EXACT", "SAME_AS", "NEW", "HUMAN"]
 
 
 class PostGlossaryItem(BaseModel):
+    """글 하나에서 뜻 하나를 가리키는 항목. 글 안에서 sense_key 도 surface 도 중복이 없다(추출 코드와 resolve 가 지킨다)."""
+
     sense_key: str
     surface: str  # 본문에 실제로 나온 표면형. 프런트가 정확 일치로 첫 등장을 감싼다
     section_id: str
@@ -122,12 +141,17 @@ class PendingTerm(BaseModel):
 
 
 class DiscardedTerm(BaseModel):
+    """추출이 버린 후보와 사유. 되살리는 길은 없고(보류는 PendingTerm) 프롬프트 튜닝 지표로만 남긴다."""
+
     surface: str
     reason: str
 
 
 class GlossaryRecord(BaseModel):
-    """PostDraft.glossary. 추출 단계의 결과. 호출이 실패해도 남는다 (PolishRecord 와 같은 역할)."""
+    """PostDraft.glossary. 추출 단계의 결과. 호출이 실패해도 남는다 (PolishRecord 와 같은 역할).
+
+    post_review_stage 와 한 번에 저장돼 재개 때 추출을 되풀이하지 않는다(D-49). 발행 뒤 build_post_glossary 가 게시글 id 로 옮긴다.
+    """
 
     target_version: int
     call_id: str | None = None
@@ -140,7 +164,10 @@ class GlossaryRecord(BaseModel):
 
 
 class PostGlossary(BaseModel):
-    """post_glossary 문서. 발행 뒤 GlossaryRecord 를 게시글 id 로 옮긴 것. 사람의 resolve·drop 은 여기에만 쓴다."""
+    """post_glossary 문서. 발행 뒤 GlossaryRecord 를 게시글 id 로 옮긴 것. 사람의 resolve·drop 은 여기에만 쓴다.
+
+    _id 가 Post BE 게시글 id 인 것은 프런트가 글 id 하나로 읽기 위해서다. discarded 는 옮기지 않는다(글 문서에 남는다).
+    """
 
     model_config = ConfigDict(validate_by_name=True)
 

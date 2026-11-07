@@ -46,6 +46,11 @@ class NoPipelineVersionError(ValueError):
 
 
 class PipelineVersionService:
+    """버전 읽기(캐시)·생성·내보내기/들여오기·edit-*. 라운드 생성·러너·결정·조회·CLI 가 같이 쓴다.
+
+    생성은 검증 → 최신과 해시 비교 → 순번 발급 → insert 순서다. 검증을 통과하지 못한 본문은 저장되지 않으므로 최신은 늘 유효하다.
+    """
+
     def __init__(self, repository: PipelineVersionRepository, *, created_by: str = "cli") -> None:
         self._repo = repository
         self._created_by = created_by
@@ -54,6 +59,7 @@ class PipelineVersionService:
     # ---------- 읽기 ----------
 
     async def get(self, version_id: str) -> PipelineVersion:
+        """버전 하나. 없으면 NotFoundError. 문서가 불변이라 한 번 읽으면 프로세스 안에 캐시한다."""
         cached = self._cache.get(version_id)
         if cached is not None:
             return cached
@@ -64,9 +70,11 @@ class PipelineVersionService:
         return version
 
     async def latest(self) -> PipelineVersion | None:
+        """순번이 가장 큰 버전(활성, D-72). 하나도 없으면 None. 새 버전이 들어올 수 있어 캐시하지 않는다."""
         return await self._repo.latest()
 
     async def require_latest(self) -> PipelineVersion:
+        """최신 버전. 없으면 NoPipelineVersionError(라운드 생성은 400, 러너는 로그를 남기고 건너뛴다)."""
         latest = await self.latest()
         if latest is None:
             raise NoPipelineVersionError("no pipeline version exists; run `agents pipeline bootstrap` first")
@@ -84,6 +92,7 @@ class PipelineVersionService:
             ) from exc
 
     async def parameters_for(self, publishing_round: PublishingRound) -> Parameters:
+        """라운드가 고정한 버전의 조절 값. 버전이 없으면 NoPipelineVersionError."""
         return (await self.for_round(publishing_round)).parameters
 
     async def parameters_or_default(self, publishing_round: PublishingRound) -> Parameters:
@@ -94,6 +103,7 @@ class PipelineVersionService:
             return Parameters()
 
     async def list_versions(self) -> list[PipelineVersion]:
+        """모든 버전(순번 순). 조회 명령이 없으므로 테스트와 검증 도구가 쓴다."""
         return await self._repo.list_all()
 
     # ---------- 생성 ----------
@@ -112,6 +122,7 @@ class PipelineVersionService:
 
         더 옛 버전과 같은 본문은 되돌리기이므로 허용하고 로그로 알린다. 부모는 지정이 없으면 최신이다.
         """
+        # 1) 검증. 오류가 하나라도 있으면 아무것도 쓰지 않는다: 최신 버전은 늘 유효해야 라운드 생성이 믿고 쓴다
         findings = validate_version(body)
         errors = errors_of(findings)
         if errors:
@@ -119,6 +130,7 @@ class PipelineVersionService:
         for finding in findings:
             if finding.level == "warning":
                 logger.warning("pipeline version warning %s", finding)
+        # 2) 해시. 최신과 같으면 아무것도 바꾸지 않는 버전이라 거절(R-11). 더 옛 버전과 같으면 되돌리기라 허용한다
         content_hash = content_hash_of(body)
         latest = await self._repo.latest()
         if latest is not None and latest.content_hash == content_hash:
@@ -128,6 +140,7 @@ class PipelineVersionService:
             logger.warning(
                 "new pipeline version has the same content as %s", ", ".join(each.version_id for each in same)
             )
+        # 3) 순번은 검증·해시 비교 뒤에 발급한다. 먼저 발급하면 거절된 시도마다 빈 번호가 남는다
         seq = await self._repo.next_seq()
         version = PipelineVersion(
             **body.model_dump(include=BODY_FIELDS),
@@ -141,6 +154,7 @@ class PipelineVersionService:
             created_by=created_by or self._created_by,
             source=source,
         )
+        # 4) insert 뒤 캐시. 문서는 불변이라 방금 넣은 것을 그대로 캐시해도 된다
         await self._repo.add(version)
         self._cache[version.version_id] = version
         return version
@@ -154,6 +168,7 @@ class PipelineVersionService:
         created_by: str | None = None,
     ) -> PipelineVersion:
         """첫 버전 v1. 지금 agent_routes·저장소 프롬프트·코드 상수를 그대로 옮긴다. 이미 버전이 있으면 거절한다(1a 전용)."""
+        # bootstrap 은 코드 상수를 옮기는 1회 작업이다. 버전이 있는데 다시 돌리면 운영에서 고친 값을 코드 기본값으로 되돌리게 된다
         latest = await self._repo.latest()
         if latest is not None:
             raise ValueError(
@@ -168,6 +183,7 @@ class PipelineVersionService:
         self, directory: str | Path, *, note: str = "", label: str | None = None, created_by: str | None = None
     ) -> PipelineVersion:
         """내보내기 디렉터리(5절 형식)를 읽어 새 버전으로 넣는다. meta 의 id·해시는 무시하고 다시 계산한다."""
+        # meta 의 id·해시는 읽지 않는다. 내보낸 파일을 고쳐 들여오면 새 버전이고, 그대로 들여오면 되돌리기다(둘 다 새 순번)
         body = read_directory(directory)
         return await self.create(body, source="import", note=note, label=label, created_by=created_by)
 
@@ -177,6 +193,7 @@ class PipelineVersionService:
         """최신 버전을 부모로 템플릿 하나만 바꾼 자식 버전."""
         latest = await self.require_latest()
         body = latest.body()
+        # 가족 dict 를 복사한 뒤 바꾼다. 캐시된 최신 버전의 prompts 를 건드리지 않는다는 보장을 body() 의 구현에 맡기지 않기 위해서다
         body.prompts = {key: dict(value) for key, value in body.prompts.items()}
         body.prompts.setdefault(family, {})[name] = text
         return await self.create(
@@ -188,6 +205,7 @@ class PipelineVersionService:
     ) -> PipelineVersion:
         """조절 값만 바꾼 자식 버전. 키는 점 경로(publish.requires_approval), 값은 JSON 으로 읽은 것이다."""
         latest = await self.require_latest()
+        # dict 로 풀어 점 경로를 따라 바꾸고 다시 model_validate 한다. 없는 키는 오타이므로 거절하고, 타입 오류는 pydantic 이 잡는다
         parameters = latest.parameters.model_dump()
         for path, value in assignments.items():
             target = parameters
@@ -265,6 +283,7 @@ def export_version(
     base = Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
+    # 프롬프트는 pipeline.json 에 넣지 않고 .md 파일로 쓴다. git diff 로 문구 변경을 읽을 수 있어야 해서다(09 문서 5절)
     payload: dict[str, Any] = {"meta": dict(meta or {})}
     payload.update(version.model_dump(mode="json", include=BODY_FIELDS - {"prompts"}, exclude_none=True))
     pipeline_file = base / PIPELINE_FILE
@@ -294,10 +313,12 @@ def read_directory(directory: str | Path) -> PipelineVersionBody:
 
 
 def describe(findings: list[Finding]) -> list[str]:
+    """검증 결과를 CLI 가 찍을 문자열 목록으로 바꾼다."""
     return [str(finding) for finding in findings]
 
 
 def meta_of(version: PipelineVersion) -> dict[str, Any]:
+    """CLI 출력과 내보내기 pipeline.json 의 meta: id·부모·해시·라벨·메모·시각·출처. 들여올 때는 무시된다."""
     return {
         "version_id": version.version_id,
         "parent_version_id": version.parent_version_id,

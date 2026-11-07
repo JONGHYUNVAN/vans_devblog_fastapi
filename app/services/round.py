@@ -63,6 +63,7 @@ class RoundService:
         self._main_categories = frozenset(main_categories)  # 블로그에 화면이 있는 메인 카테고리 값 (D-60)
 
     async def get(self, round_id: str) -> PublishingRound | None:
+        """라운드 하나. 없으면 None."""
         return await self._rounds.get(round_id)
 
     async def list_rounds(self, status: RoundStatus | None = None) -> list[PublishingRound]:
@@ -111,8 +112,11 @@ class RoundService:
         pipeline_version_id 는 최신이 아닌 버전으로 돌릴 때(차기 프롬프트 시험, Q-42) 준다. 버전이 하나도 없으면 ValueError(400).
         다른 라운드가 주제 선정 중이면 InvalidTransitionError(409) 이고 문서는 남지 않는다. 카테고리 스냅샷은 호출자가 읽어 넘긴다.
         """
+        # 1) 버전을 먼저 고른다(기본 최신). 이 라운드의 글은 끝까지 이 버전의 라우트·프롬프트·조절 값으로 돈다(D-73)
         version = await self._pipeline_version(pipeline_version_id)
+        # 2) 버전의 routes 에서 유효 스냅샷을 뜬다. 여기서 실패하면 라운드 문서가 남지 않는다
         routing = self._routing_snapshot(version, slot_bindings)
+        # 3) 슬롯 바인딩은 스냅샷에서 거꾸로 만든다(옛 필드. 러너·조회가 아직 읽는다)
         bindings = {
             slot: _binding_of(select_writer(routing, persona_id), persona_id)
             for slot, persona_id in routing.slot_personas.items()
@@ -135,6 +139,7 @@ class RoundService:
         return publishing_round
 
     async def _pipeline_version(self, pipeline_version_id: str | None) -> PipelineVersion:
+        # 지정이 없으면 최신(활성, D-72). 지정은 차기 프롬프트 시험용이다(Q-42). 없는 id 는 NotFoundError 그대로 올린다
         if self._versions is None:
             raise ValueError("no pipeline version service is configured")
         if pipeline_version_id is None:
@@ -143,22 +148,26 @@ class RoundService:
 
     def _routing_snapshot(self, version: PipelineVersion, slot_bindings: Mapping[str, Any] | None) -> RoutingSnapshot:
         """버전의 routes 에서 키 없는 벤더 후보를 빼고 A/B 를 얹은 유효 스냅샷. 끝까지 고를 수 있고 템플릿이 다 있어야 한다."""
+        # 1) A/B 오버라이드. 키 없는 벤더로 바꾸면 그 슬롯의 글이 첫 호출에서 죽으므로 여기서 거절한다
         overrides = {
             AgentSlot(slot): ModelBinding.model_validate(binding) for slot, binding in (slot_bindings or {}).items()
         }
         for slot, binding in overrides.items():
             if binding.provider not in self._providers:
                 raise ValueError(f"slot {slot} binds provider {binding.provider} which has no API key")
+        # 2) 버전의 routes → 스냅샷. 키 없는 벤더의 후보는 빠지고 오버라이드는 작성 라우트의 첫 후보가 된다
         snapshot = build_snapshot(
             version.route_documents(),
             self._providers,
             writer_overrides={slot: (binding.persona_id, _call_model(binding)) for slot, binding in overrides.items()},
         )
+        # 3) 페르소나는 버전 문서의 것으로 푼다(모르는 id 는 KeyError). 두 슬롯이 같은 페르소나면 주제가 겹친다
         personas = [
             get_persona(persona_id, version.personas).persona_id for persona_id in snapshot.slot_personas.values()
         ]
         if len(set(personas)) != len(personas):
             raise ValueError("every slot needs a distinct persona")
+        # 4) 키가 빠진 뒤에도 끝까지 고를 수 있는지(R-04), 모든 후보 가족의 템플릿이 있는지(R-05). 글 중간에 멈추지 않게 지금 본다
         validate_snapshot(snapshot)
         validate_prompts(snapshot, version.prompts)
         return snapshot
@@ -175,6 +184,7 @@ class RoundService:
         await self._routes.replace_all(documents)
 
     async def list_route_documents(self) -> list[dict[str, Any]]:
+        """옛 agent_routes 문서 전부. `agents pipeline bootstrap --routes mongo` 와 `agents routes` 가 읽는다."""
         if self._routes is None:
             raise ValueError("no model route repository is configured")
         return await self._routes.list_documents()

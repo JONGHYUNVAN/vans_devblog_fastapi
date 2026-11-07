@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 class DraftDecisionService:
+    """사람 결정을 글에 적용하고 저장한다. 라우터(agent_rounds)와 CLI(approve·resolve·retry·discard·label-level)가 같이 쓴다.
+
+    결정은 코루틴이 돌지 않는 상태(승인 대기·ESCALATED·FAILED)에만 적용된다. 돌고 있는 글에 쓰면 호출 결과 반영과 같은 문서를 두고 경쟁하기 때문이다(04 문서 1절). 전제 상태가 아니면 InvalidTransitionError(409), 입력 오류는 InvalidRequestError(400), 없는 글은 NotFoundError(404).
+    """
+
     def __init__(
         self,
         *,
@@ -52,6 +57,7 @@ class DraftDecisionService:
             publishing_round = await self._rounds.get(draft.round_id)
             if publishing_round is None:
                 raise NotFoundError(f"round {draft.round_id} does not exist")
+            # 토글은 라운드가 고정한 버전의 값이다. 최신 버전이 토글을 껐어도 켜진 버전으로 만든 라운드는 승인을 요구한다(D-73)
             parameters = await self._versions.parameters_for(publishing_round)
             draft.record_approval(approved_by, parameters.publish.requires_approval)
 
@@ -110,6 +116,8 @@ class DraftDecisionService:
         return await self._apply(draft_id, mutate)
 
     async def _apply(self, draft_id: str, mutate: Callable[[PostDraft], Awaitable[None]]) -> PostDraft:
+        # 읽기 → 도메인 전이 → revision 조건 저장. 결정 대상 글에는 러너가 태스크를 띄우지 않으므로 호출 결과 반영과는 겹치지 않지만,
+        # 라운드 중단(reconcile)과는 겹칠 수 있다. 충돌이면 다시 읽어 전제 상태가 여전히 맞을 때만 재적용된다(아니면 mutate 가 409)
         while True:
             draft = await self._drafts.get(draft_id)
             if draft is None:
@@ -141,6 +149,8 @@ class DraftDecisionService:
         await self._rounds.close_if_complete(draft.round_id)
 
     async def _confirmed_publication(self, draft: PostDraft, external_post_id: str) -> Publication:
+        # 사람이 블로그에서 찾은 게시글이라 Post BE 를 다시 부르지 않는다. 노트는 발행 때와 같은 규칙으로 다시 만들어 기록만 남긴다.
+        # 버전이 없어도 결정은 막지 않으므로 parameters_or_default 다
         intent = draft.publication_intent
         version = draft.publishable_version
         if intent is None and version is None:

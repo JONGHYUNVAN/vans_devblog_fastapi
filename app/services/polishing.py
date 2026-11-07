@@ -46,6 +46,7 @@ class _Document:
 
     @classmethod
     def parse(cls, markdown: str) -> "_Document":
+        """마크다운을 최상위 문단과 그 사이 조각으로 쪼갠다. 코드 블록·목록·제목은 문단이 아니라 사이 조각에 남아 패치 대상이 아니다."""
         lines = markdown.split("\n")
         pieces: list[str] = []
         positions: list[int] = []
@@ -61,9 +62,11 @@ class _Document:
         return cls(pieces, positions)
 
     def text(self) -> str:
+        """조각을 다시 이어 본문으로. 패치가 없으면 원문과 같다."""
         return "\n".join(self.pieces)
 
     def paragraphs(self) -> list[ParagraphForPolish]:
+        """모델에 보낼 문단 목록. index 는 문단 순번이고 패치의 index 가 이것을 가리킨다."""
         return [
             ParagraphForPolish(index=index, text=self.pieces[position])
             for index, position in enumerate(self.paragraph_positions)
@@ -131,6 +134,8 @@ def _fix_phrases(text: str, fixes: Iterable[tuple[re.Pattern[str], str]] = _PHRA
 
 
 class PolishingService:
+    """POST_REVIEW 의 다듬기 단계. 호출 서비스만 들고, 게이트·정규식·허용폭은 걸음마다 라운드 버전의 조절 값으로 만든다."""
+
     def __init__(self, *, agent_call_service: AgentCallService) -> None:
         self._calls = agent_call_service
 

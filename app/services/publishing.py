@@ -159,6 +159,10 @@ class PublishingService:
         self._in_flight: set[asyncio.Task[None]] = set()  # 호출부터 결과 반영까지. cancel 되지 않게 shield 한다
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        """READY_TO_PUBLISH 글 하나를 발행한다(04 문서 8절). 결과 불명이면 호출 없이 ESCALATED(PUBLISH_UNCERTAIN), 작성 벤더의 계정이 없으면 의도 저장 전에 ValueError.
+
+        호출과 결과 반영은 shield 된 태스크라 글 코루틴이 cancel 돼도 끝까지 간다. 승인 토글·시도 상한·머리말 문구는 라운드 버전에서 읽는다.
+        """
         parameters = await self._versions.parameters_for(publishing_round)
         requires_approval = parameters.publish.requires_approval
         if draft.has_uncertain_publication:
@@ -271,9 +275,11 @@ class UnconfiguredDraftPublisher:
     """
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        """항상 ValueError. 발행 설정이 없는 배포에서 발행 단계에 닿은 글을 FAILED(INTERNAL_ERROR) 로 멈춘다."""
         raise ValueError("Post BE publishing is not configured (POST_BE_URL)")
 
     async def drain(self) -> None:
+        """기다릴 호출이 없다."""
         return None
 
 

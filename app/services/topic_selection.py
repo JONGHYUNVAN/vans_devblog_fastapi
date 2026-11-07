@@ -54,6 +54,10 @@ class TopicSelectionService:
         self._versions = version_service
 
     async def drive(self, round_id: str) -> None:
+        """라운드가 TOPIC_SELECTION 인 동안 한 걸음(제안 → 배정 → 확정)씩 진행하고 매번 저장한다.
+
+        라운드 중단과 겹친 저장 충돌은 결과를 버리고 다시 읽는다. 버전이 없으면 로그를 남기고 끝낸다(다음 스캔이 다시 띄운다).
+        """
         while True:
             publishing_round = await self._rounds.get(round_id)
             if publishing_round is None or publishing_round.status != RoundStatus.TOPIC_SELECTION:

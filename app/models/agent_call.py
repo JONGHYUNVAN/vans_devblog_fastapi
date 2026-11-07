@@ -1,4 +1,9 @@
-"""LLM 호출 1회의 영수증 (설계 02 문서 2절, 07 문서 D-18·D-26)."""
+"""LLM 호출 1회의 영수증 (설계 02 문서 2절, 07 문서 D-18·D-26).
+
+AgentCallService 가 시도마다 한 건씩 insert 한다. 메시지·원문 출력을 그대로 남기는 이유는 재생(agents replay)·프롬프트 비교·
+제작 기록(08 문서)이 이 문서만으로 가능해야 해서다. prompt_template_version 은 1a 이전 영수증의 프롬프트 디렉터리 이름(v3·v4)이고,
+1a 부터는 pipeline_version(버전 문서 id)을 적는다. 두 이름 공간이 겹치므로(v4 디렉터리 ≠ 버전 v4) 필드를 합치지 않는다(09 문서 D-73).
+"""
 
 from datetime import datetime
 from typing import Literal
@@ -10,15 +15,20 @@ from app.models.model_binding import CallModel
 
 
 class TokenUsage(BaseModel):
+    """호출 한 번의 토큰 사용량. 글 예산은 모든 시도(실패 포함)의 합이다(D-20)."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
+        """입력·출력 합. 소프트 예산과 비교하는 값이다."""
         return self.prompt_tokens + self.completion_tokens
 
 
 class ChatMessage(BaseModel):
+    """벤더에 보낸 메시지 하나. 영수증에는 실제로 보낸 그대로 남는다."""
+
     role: Literal["system", "user", "assistant"]
     content: str
 

@@ -47,6 +47,7 @@ class PipelineViewService:
         self._versions = version_service
 
     async def list_rounds(self, status: RoundStatus | None = None) -> list[RoundPublic]:
+        """라운드 요약 목록. status 가 있으면 그 상태만."""
         return [build_round_public(each) for each in await self._rounds.list_rounds(status)]
 
     async def get_round_detail(self, round_id: str) -> RoundDetail:
@@ -85,9 +86,11 @@ class PipelineViewService:
         )
 
     async def get_draft_history(self, draft_id: str) -> DraftHistory:
+        """글 전체 이력(도메인 문서 그대로). 없으면 NotFoundError."""
         return build_draft_history(await self._draft(draft_id))
 
     async def get_escalation_summary(self, draft_id: str) -> EscalationSummary:
+        """사람용 격리 요약(최종 본문·diff·미결 차단·기각 항목). ESCALATED 가 아니어도 읽을 수 있다."""
         return build_escalation_summary(await self._draft(draft_id))
 
     async def list_calls(self, *, draft_id: str | None = None, round_id: str | None = None) -> list[CallPublic]:
@@ -128,6 +131,7 @@ class PipelineViewService:
 
 
 def build_round_public(publishing_round: PublishingRound) -> RoundPublic:
+    """라운드 → 요약 응답. 글은 id 목록만 넣는다(글 문서는 따로 읽는다)."""
     return RoundPublic(
         round_id=publishing_round.round_id,
         round_seq=publishing_round.round_seq,
@@ -144,6 +148,7 @@ def build_round_public(publishing_round: PublishingRound) -> RoundPublic:
 
 
 def build_round_detail(publishing_round: PublishingRound, drafts: list[PostDraft]) -> RoundDetail:
+    """라운드 + 글 목록 → 상세 응답. 요약 필드를 그대로 잇고 카테고리·주제 시도·글 요약을 더한다."""
     return RoundDetail(
         **build_round_public(publishing_round).model_dump(),
         categories=publishing_round.categories,

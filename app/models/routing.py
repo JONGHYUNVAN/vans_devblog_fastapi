@@ -30,18 +30,22 @@ _DEFAULT_MAX_OUTPUT = 64_000  # 비스트리밍 호출로 받는 상한. 그 이
 
 
 def propose_route(persona_id: str) -> str:
+    """주제 제안 라우트 id `PROPOSE_TOPIC:{persona}`."""
     return f"PROPOSE_TOPIC:{persona_id}"
 
 
 def write_route(persona_id: str) -> str:
+    """작성 라우트 id `WRITE_DRAFT:{persona}`."""
     return f"WRITE_DRAFT:{persona_id}"
 
 
 def revise_route(persona_id: str) -> str:
+    """수정 라우트 id `REVISE_DRAFT:{persona}`."""
     return f"REVISE_DRAFT:{persona_id}"
 
 
 def review_route(lens: ReviewLens) -> str:
+    """리뷰 라우트 id `REVIEW:{lens}`. 렌즈마다 모델 하나다(D-55)."""
     return f"REVIEW:{lens}"
 
 
@@ -109,6 +113,7 @@ class RoutingSnapshot(BaseModel):
     relaxed: bool = False
 
     def candidates(self, route_id: str) -> list[CallModel]:
+        """라우트의 후보 목록. 비어 있으면(라우트가 없거나 키 없는 벤더뿐) ValueError. 선택 라우트는 has_route 로 먼저 본다."""
         if not self.routes.get(route_id):
             raise ValueError(f"route {route_id} has no candidate")
         return self.routes[route_id]
@@ -132,10 +137,12 @@ def _required(snapshot: RoutingSnapshot, model: CallModel | None, route_id: str,
 
 
 def select_proposer(snapshot: RoutingSnapshot, persona_id: str) -> CallModel:
+    """주제 제안 모델: 페르소나 라우트의 첫 후보. 벤더 제약이 없다."""
     return snapshot.candidates(propose_route(persona_id))[0]
 
 
 def select_writer(snapshot: RoutingSnapshot, persona_id: str) -> CallModel:
+    """작성 모델: 페르소나 라우트의 첫 후보. 이 벤더가 리뷰·중재·독립 호출의 회피 기준이 된다(D-52)."""
     return snapshot.candidates(write_route(persona_id))[0]
 
 
@@ -166,6 +173,7 @@ def select_reviewers(
 
 
 def select_arbiter(snapshot: RoutingSnapshot, writer_vendor: str, reviewer_vendor: str) -> CallModel:
+    """중재 모델: 작성 벤더와 그 지적을 낸 리뷰 벤더 밖의 첫 후보(D-52). 없으면 ValueError(relaxed 스냅샷은 첫 후보)."""
     model = _first_avoiding(snapshot, ROUTE_ARBITRATE, {writer_vendor, reviewer_vendor})
     return _required(snapshot, model, ROUTE_ARBITRATE, f"outside {writer_vendor} and {reviewer_vendor}")
 

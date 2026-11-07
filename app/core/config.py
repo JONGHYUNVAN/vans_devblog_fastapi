@@ -1,4 +1,9 @@
-"""환경변수 설정. 이름은 Django 서비스와 같게 유지해 CloudType 환경변수를 그대로 옮길 수 있게 한다."""
+"""환경변수 설정. 이름은 Django 서비스와 같게 유지해 CloudType 환경변수를 그대로 옮길 수 있게 한다.
+
+여기에는 환경마다 실제로 다른 값(비밀·주소·타임아웃·동시성)만 둔다. 파이프라인의 동작을 정하는 값(반복 상한·길이·승인 토글·
+프롬프트·용어)은 Mongo 의 파이프라인 버전 문서로 옮겼다(09 문서 2.4절, 이행 1a): 라운드가 생성 때 버전을 고정하므로 환경 변수로
+바꾸면 진행 중인 글과 새 글이 다른 규칙으로 돌게 되기 때문이다. 남은 publish_post_level·agent_main_categories 는 1c 에서 지운다(D-82·D-83).
+"""
 
 from functools import lru_cache
 from urllib.parse import urlparse
@@ -8,6 +13,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """환경 변수 설정(.env). 비밀·주소·시간·동시성처럼 환경마다 실제로 다른 값만 둔다.
+
+    파이프라인의 반복 상한·길이·승인 토글·프롬프트·용어 값은 Mongo 의 파이프라인 버전 문서다(09 문서 2.4절). 라운드가 버전을 고정하므로 환경 변수로 바꾸면 안 된다.
+    """
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Elasticsearch
@@ -75,6 +85,7 @@ class Settings(BaseSettings):
 
     @property
     def elasticsearch_url(self) -> str:
+        """ES 접속 URL. 호스트만 설정하고 https 를 고정한다(CloudType 변수 호환)."""
         return f"https://{self.elasticsearch_host}"
 
     @property
@@ -88,19 +99,23 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
+        """CORS 허용 출처: CORS_ALLOWED_ORIGINS 와 FRONTEND_HOSTS(https 접두)를 합친다."""
         origins = [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
         origins += [f"https://{h.strip()}" for h in self.frontend_hosts.split(",") if h.strip()]
         return origins
 
     @property
     def agent_main_category_values(self) -> frozenset[str]:
+        """AGENT_MAIN_CATEGORIES 를 집합으로. 빈 항목은 뺀다. 1c 에서 없어진다(D-82)."""
         return frozenset(value.strip() for value in self.agent_main_categories.split(",") if value.strip())
 
     @property
     def kis_configured(self) -> bool:
+        """KIS 키가 있는지. 없으면 KIS 엔드포인트가 degraded 응답을 낸다."""
         return bool(self.kis_app_key)
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """설정 싱글턴. lru_cache 라 테스트는 Settings(_env_file=None) 을 직접 만들거나 dependency_overrides 로 바꾼다."""
     return Settings()

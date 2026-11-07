@@ -75,6 +75,7 @@ def persona_of(
 
 
 def level_criteria_of(publishing_round: PublishingRound) -> LevelCriteria:
+    """라운드 스냅샷의 수준 기준표. 라우팅 전 라운드는 코드 기본값이다(D-54)."""
     return publishing_round.routing.level_criteria if publishing_round.routing else DEFAULT_LEVEL_CRITERIA
 
 
@@ -271,6 +272,7 @@ def build_fact_check_input(
 def build_fact_transform_input(
     draft: PostDraft, lens: ReviewLens, verification_text: str, citations: list[CitationRef]
 ) -> FactTransformInput:
+    """검색 호출의 글과 출처 → 변환 호출 입력. expected_item_ids 로 SPOT_CHECK 의 item_checks 대상을 알린다(D-56)."""
     return FactTransformInput(
         scope=draft.current_review_scope.value,
         lens=lens,
@@ -325,6 +327,10 @@ def build_arbitrate_input(draft: PostDraft, item: ReviewItem, search_evidence: s
 
 
 def build_arbitrate_search_input(draft: PostDraft, item: ReviewItem) -> ArbitrateSearchInput:
+    """사실 확인 지적의 분쟁에서 중재자가 판정 전에 검색할 입력. 수정 뒤 섹션과 기각 사유만 준다.
+
+    항목이 사유 없이 기각됐으면 ValueError(교착 정의에 어긋난다).
+    """
     current = draft.current_version
     resolution = current.resolution_for(item.item_id)
     if resolution is None or not resolution.reason:
@@ -337,6 +343,7 @@ def build_arbitrate_search_input(draft: PostDraft, item: ReviewItem) -> Arbitrat
 
 
 def build_final_read_input(draft: PostDraft) -> FinalReadInput:
+    """전체 읽기 입력: 제목·주제(블라인드)·현재 본문. 리뷰 이력과 외부 사실은 주지 않는다(D-49·D-50)."""
     version = draft.current_version
     return FinalReadInput(
         title=version.title, topic=TopicForReviewer.from_topic(draft.topic), content_markdown=version.content_markdown
@@ -393,12 +400,15 @@ def render_messages(model: BaseModel, prompts: PromptSet, call_model: CallModel)
     prompts 는 라운드 버전 문서의 것이다(09 문서 D-73). 치환은 propose_topic 의 $writer_bias 뿐이다.
     입력에 persona 가 없는 작성·수정 호출에서 v3 이전 템플릿의 $display_name 은 빈 글이 된다.
     """
+    # 1) 입력 모델의 타입이 템플릿 이름을, 호출 모델이 가족을 정한다. 가족에 없으면 common 이다
     template = Template(resolve_template(prompts, _TEMPLATE_BY_INPUT[type(model)], prompt_family(call_model)))
+    # 2) safe_substitute: 템플릿의 JSON 예시에 든 $ 가 KeyError 를 내지 않게. 모르는 이름은 그대로 남는다(R-08 이 시드 때 잡는다)
     persona = getattr(model, "persona", None)
     system = template.safe_substitute(
         display_name=persona.display_name if persona else "",
         writer_bias=persona.writer_bias if persona else "",
     )
+    # 3) 사용자 메시지는 입력 JSON 그대로. 영수증에 이 두 메시지가 남아 replay·compare-prompts 가 같은 입력을 다시 보낼 수 있다
     return [
         ChatMessage(role="system", content=system),
         ChatMessage(role="user", content="입력(JSON):\n" + model.model_dump_json(indent=2)),

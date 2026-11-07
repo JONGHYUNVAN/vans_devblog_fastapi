@@ -93,7 +93,9 @@ class DraftPublisher(Protocol):
     돌아오면 글은 PUBLISHED, READY_TO_PUBLISH(결과 확정 실패, 재호출 대상) 또는 ESCALATED 다. 6단계 PublishingService 가 구현한다.
     """
 
-    async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None: ...
+    async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+        """글 하나를 발행한다. 돌아오면 글은 PUBLISHED·READY_TO_PUBLISH(재호출 대상)·ESCALATED 중 하나이고 저장까지 끝나 있다."""
+        ...
 
     async def drain(self) -> None:
         """진행 중인 발행 호출·결과 반영이 끝나기를 기다린다. 종료 때 러너가 부른다(04 문서 8절 4단계)."""
@@ -179,6 +181,7 @@ class DraftPipelineService:
 
     async def _step(self, draft: PostDraft, publishing_round: PublishingRound, version: PipelineVersion) -> PostDraft:
         """현재 상태에서 한 걸음. LLM 호출을 직접 await 하고 결과를 반영해 한 번 저장한다."""
+        # version 은 drive 가 라운드에서 푼 것이다. 걸음마다 다시 읽지 않으므로 한 걸음 안에서 조절 값·프롬프트가 바뀌지 않는다
         parameters = version.parameters
         match draft.status:
             case PostStatus.TOPIC_LOCKED | PostStatus.REVISING:
@@ -198,6 +201,7 @@ class DraftPipelineService:
                 return draft  # 발행은 의도·결과를 스스로 저장한다
             case _:
                 raise ValueError(f"draft {draft.draft_id} is {draft.status}, nothing to drive")
+        # 저장은 걸음 끝에 한 번. 호출 결과와 상태 전이가 한 쓰기에 들어가야 재시작 때 같은 호출을 두 번 하지 않는다(D-11)
         await self._drafts.save(draft)
         return draft
 

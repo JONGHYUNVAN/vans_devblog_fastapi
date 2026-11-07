@@ -137,4 +137,5 @@ app.include_router(code_graph.router)
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
+    """루트는 Swagger 문서(/docs)로 보낸다. 스키마에는 넣지 않는다."""
     return RedirectResponse("/docs")

@@ -1,4 +1,9 @@
-"""라운드 집합 루트 PublishingRound 와 주제 선정 이력, 라운드 상태 전이 (설계 02 문서 2절, 03 문서 3절)."""
+"""라운드 집합 루트 PublishingRound 와 주제 선정 이력, 라운드 상태 전이 (설계 02 문서 2절, 03 문서 3절).
+
+라운드는 글 3편의 묶음이다. 생성 때 라우팅 스냅샷과 파이프라인 버전 id 를 고정해(D-73) 진행 중에 모델·프롬프트가 바뀌지 않는다.
+상태 전이는 이 모델의 메서드로만 하고(InvalidTransitionError), 저장은 서비스가 optimistic lock 으로 한다. 주제 선정 이력은
+시도(attempt) 배열이라 재시작해도 빠진 슬롯만 다시 제안받는다(04 문서 2절). pipeline_version_id 가 None 인 옛 라운드는 최신 버전으로 돈다.
+"""
 
 from datetime import UTC, datetime
 from typing import Literal
@@ -13,6 +18,8 @@ from app.models.topic import CategoryOption, TopicProposal
 
 
 class TopicConflict(BaseModel):
+    """제안 하나가 잠긴 주제·다른 슬롯의 제안·레지스트리와 겹쳤다는 기록. 재제안 피드백의 근거다."""
+
     slot: AgentSlot
     proposal_index: int
     other_slot: AgentSlot | None  # 레지스트리와 겹치면 None
@@ -23,6 +30,8 @@ class TopicConflict(BaseModel):
 
 
 class LockedTopic(BaseModel):
+    """슬롯에 확정된 주제의 스냅샷. 제안 배열이 다음 시도에서 바뀌어도 선택이 보존된다."""
+
     slot: AgentSlot
     source_attempt: int
     proposal_index: int
@@ -30,6 +39,8 @@ class LockedTopic(BaseModel):
 
 
 class TopicAttempt(BaseModel):
+    """주제 제안 시도 하나의 이력(제안·잠금·충돌). 재시작하면 빠진 슬롯만 다시 부르는 근거다(04 문서 2절)."""
+
     attempt_number: int = Field(ge=1)  # 1..MAX_TOPIC_ATTEMPTS
     proposals: dict[AgentSlot, list[TopicProposal]] = Field(default_factory=dict)  # 이번 시도에서 제안한 슬롯만
     locked: dict[AgentSlot, LockedTopic] = Field(default_factory=dict)  # 이전 시도의 선택도 스냅샷으로 유지
@@ -37,6 +48,7 @@ class TopicAttempt(BaseModel):
 
     @property
     def is_fully_locked(self) -> bool:
+        """세 슬롯이 모두 잠겼는지. 참이면 확정(commit)만 남았다."""
         return set(self.locked) == set(AgentSlot)
 
 
@@ -78,10 +90,12 @@ class PublishingRound(BaseModel):
 
     @property
     def is_terminal(self) -> bool:
+        """COMPLETED·ABORTED 면 참. 중단·완료 전이의 가드다."""
         return self.status in (RoundStatus.COMPLETED, RoundStatus.ABORTED)
 
     @property
     def latest_attempt(self) -> TopicAttempt | None:
+        """진행 중인(마지막) 시도. 아직 없으면 None."""
         return self.topic_attempts[-1] if self.topic_attempts else None
 
     def draft_id_for(self, slot: AgentSlot) -> str:

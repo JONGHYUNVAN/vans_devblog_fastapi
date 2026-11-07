@@ -1,4 +1,10 @@
-"""운영 명령. 사용법: python -m cli --help (Django 관리 명령 sync_posts_to_elasticsearch·setup_popular_searches 대체)."""
+"""운영 명령. 사용법: python -m cli --help (Django 관리 명령 sync_posts_to_elasticsearch·setup_popular_searches 대체).
+
+검색(sync-posts·setup-popular), 코드 그래프(code-graph), 에이전트 파이프라인(agents …) 명령이 한 진입점에 있다. 연결은
+dependencies.open_clients·open_async_database 로 직접 열고 라우터와 같은 build_*·get_* 로 서비스를 조립한다(같은 조립, 다른 진입점).
+`agents pipeline …` 은 버전 문서의 넣기 쪽 명령만 둔다(09 문서 5절, Q-40): 조회·되돌리기 명령은 없고 되돌리기는 옛 내보내기의 import 다.
+하위 Typer 는 모두 등록한 뒤 맨 끝에서 cli() 를 부른다. 등록보다 먼저 부르면 뒤에 add_typer 한 그룹이 "No such command" 다.
+"""
 
 import asyncio
 import json
@@ -59,6 +65,7 @@ cli.add_typer(code_graph, name="code-graph")
 
 @cli.callback()
 def configure_logging() -> None:
+    """모든 명령 앞에 로깅을 켠다. ES 클라이언트의 요청 로그는 WARNING 이상만 남긴다."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     logging.getLogger("elasticsearch").setLevel(logging.WARNING)
     logging.getLogger("elastic_transport").setLevel(logging.WARNING)
@@ -654,11 +661,13 @@ def pipeline_bootstrap(
     """첫 버전 v1 을 만든다(이행 1a). 지금 라우트·저장소 프롬프트·코드 상수를 그대로 옮긴다. 이미 버전이 있으면 거절한다."""
 
     async def _bootstrap(service: PipelineVersionService, database, settings):
+        # 1) 라우트 출처. 운영은 옛 agent_routes(mongo)이고 파일은 새 환경·테스트용이다(routes.example.json 형식)
         documents = (
             await build_round_service(database, settings).list_route_documents()
             if routes == "mongo"
             else json.loads(Path(routes).read_text(encoding="utf-8"))
         )
+        # 2) dry-run 은 본문을 만들어 해시·검증 결과만 찍는다. 운영 투입 전에 해시를 pipeline/baseline 과 견주는 용도다
         if dry_run:
             body = build_baseline_version(prompts_dir, documents)
             findings = validate_version(body)
@@ -672,6 +681,7 @@ def pipeline_bootstrap(
                 }
             )
             return _echo_findings(findings)
+        # 3) 실제 시드. 이미 버전이 있으면 서비스가 ValueError 로 거절한다(종료 코드 1)
         version = await service.bootstrap(route_documents=documents, prompts_dir=prompts_dir, note=note)
         _echo(meta_of(version))
         return False
@@ -699,6 +709,7 @@ def pipeline_validate(
             version = await service.get(target)
             typer.echo(f"{version.version_id}: {version.content_hash}")
             failed |= _echo_findings(validate_version(version.body(), expected_hash=version.content_hash))
+        # --all-referenced: 배포 전 점검(R-12). 최신 버전과 진행 중 라운드가 고정한 버전이 지금 코드의 규칙으로도 유효한지 본다
         if all_referenced:
             seen: set[str] = set()
             latest = await service.latest()
@@ -780,6 +791,7 @@ def pipeline_edit_param(
         if not separator:
             typer.echo(f"{assignment}: key=value 꼴이어야 한다", err=True)
             raise typer.Exit(1)
+        # 값은 JSON 으로 먼저 읽는다(false·3·0.5·["a"]). JSON 이 아니면 문자열이다(structure.language=ko 처럼 따옴표 없이 쓰게)
         try:
             parsed[key] = json.loads(raw)
         except json.JSONDecodeError:

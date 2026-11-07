@@ -41,6 +41,7 @@ def normalize_section_id(section_id: str) -> str:
 
 
 def section_anchor(section_id: str) -> str:
+    """섹션 id → 본문 앵커 문자열. 빌더와 테스트가 같은 모양을 만들도록 한 곳에 둔다."""
     return f"<!-- sec:{section_id} -->"
 
 

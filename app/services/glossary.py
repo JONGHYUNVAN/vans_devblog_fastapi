@@ -1,8 +1,11 @@
-"""용어 사전: 추출 단계, 등록 확인·뜻 선택, 승인·별칭·병합·무결성 (설계 08 문서 2.2~2.5절).
+"""용어 사전: 추출 단계, 등록 확인·뜻 선택, 승인·별칭·병합·무결성 (설계 08 문서 2.2~2.5절, D-64·D-65).
 
-추출은 POST_REVIEW 의 GLOSSARY 단계에서 글 코루틴이 부른다. 실패해도 글을 멈추지 않는다(다듬기와 같은 정책, D-64).
+추출은 POST_REVIEW 의 넷째 단계 GLOSSARY 에서 글 코루틴(DraftPipelineService)이 부른다. 다듬기·전체 읽기·수준 판정 뒤라
+surface 가 발행본과 같고, 발행 전이라 _step 한 걸음으로 끝난다. 실패해도 글을 멈추지 않는다(다듬기와 같은 정책, D-64).
 등록 확인은 코드가 먼저 한다: 정규화 키 정확 일치 → AI 의 same_as(목록 안만) → 비슷한 표제어(사람 참고) → 새 표제어(PROPOSED).
 코드 판정이 AI 판정보다 우선한다(D-65). 새 표제어·별칭·뜻은 사람 승인 뒤에만 표시된다. 승인은 전역이다.
+불변식(08 문서 2.1절)을 지키는 곳이 여기다: lookup_keys 는 저장 전에 다시 계산하고, 둘째 뜻 승인은 모든 뜻의 구분 문구를 요구하며,
+글 하나 안에서 surface 와 sense_key 는 중복이 없다. 운영 Mongo 를 배포된 러너와 나눠 쓰므로 CLI 경로도 같은 규칙을 탄다.
 """
 
 import logging
@@ -72,6 +75,11 @@ class GlossaryService:
         version_service: PipelineVersionService | None = None,
         now: Callable[[], datetime] = _now,
     ) -> None:
+        """리포지토리와 설정은 필수, 나머지는 쓰는 경로에 따라 선택이다.
+
+        agent_call_service 가 없으면 추출은 "no LLM client" 로 건너뛴다. draft·round 리포지토리와 version_service 는
+        보충(backfill)·list_missing 에 필수라 없으면 ValueError 고, pending·show 는 있을 때만 발행 전 글 문서까지 본다.
+        """
         self._repo = repository
         self._settings = settings
         self._calls = agent_call_service
@@ -84,7 +92,9 @@ class GlossaryService:
 
     async def extract(self, draft: PostDraft, publishing_round: PublishingRound, version: PipelineVersion) -> None:
         """POST_REVIEW(GLOSSARY) 한 걸음. 돌아오면 글은 READY_TO_PUBLISH 다. 호출·라우트가 없으면 건너뛴 기록만 남는다."""
+        # 대상은 현재 버전(다듬기까지 끝난 발행본)이다. 여기서 찾은 surface 가 프런트가 감쌀 글자와 같아야 한다
         record = await self._run(draft, draft.current_version, publishing_round, version)
+        # 기록과 단계 전진을 한 객체에 두어 글 코루틴이 한 번에 저장한다. 재개 때 추출을 되풀이하지 않는다(D-49)
         draft.finish_glossary(record)
 
     async def backfill(self, draft_id: str) -> GlossaryRecord:
@@ -97,13 +107,16 @@ class GlossaryService:
         publishing_round = await self._rounds.get(draft.round_id)
         if publishing_round is None:
             raise NotFoundError(f"round {draft.round_id} does not exist")
+        # 발행된 버전으로 돌린다. current_version 은 사람 재수정으로 발행본보다 뒤일 수 있어 surface 가 블로그 본문과 어긋난다
         version = _published_version(draft)
         if version is None:
             raise InvalidRequestError(f"draft {draft_id} has no version that passed validation")
+        # 라운드가 고정한 파이프라인 버전(프롬프트·용어 조절 값)을 쓴다. 지금 활성 버전이 아니다(09 문서, 라운드 단위 고정)
         pipeline_version = await self._versions.for_round(publishing_round)
         record = await self._run(draft, version, publishing_round, pipeline_version)
         draft.glossary = record
         await self._drafts.save(draft)
+        # 발행된 글이면 post_glossary 와 뜻의 글 목록까지 바로 덮어쓴다(따라 쓰기는 이미 지나갔다). 사람의 resolve·drop 은 사라진다
         if draft.status == PostStatus.PUBLISHED and draft.publication is not None:
             template_version, pipeline_version_id = await self._template_version(record)
             post_glossary = build_post_glossary(draft, record, template_version, pipeline_version_id)
@@ -141,17 +154,20 @@ class GlossaryService:
         publishing_round: PublishingRound,
         pipeline_version: PipelineVersion,
     ) -> GlossaryRecord:
+        """추출 호출 한 번과 그 뒤 등록 확인. 어떤 경우에도 GlossaryRecord 를 돌려주고 예외를 내지 않는다(건너뛴 사유는 skipped)."""
         parameters = pipeline_version.parameters.glossary
         record = GlossaryRecord(target_version=version.version_number, extracted_at=self._now())
+        # GLOSSARY 는 선택 라우트다(D-64). 배포된 라우트 문서에 아직 없거나 이 기능 전에 만든 라운드면 호출 없이 지나간다
         model = DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor
         if model is None:
             record.skipped = "no GLOSSARY route"
             return record
-        if self._calls is None:
+        if self._calls is None:  # CLI 조회 경로처럼 LLM 호출 서비스 없이 만든 구성
             record.skipped = "no LLM client"
             return record
+        # 기존 표제어·뜻 목록을 입력에 넣어 AI 가 same_as·sense_key 로 맞추게 한다. 상한을 넘으면 많이 쓰인 것부터 남긴다
         known, by_key = await self._known_headwords(parameters.full_list_max)
-        record.known_headwords_sent = len(known)
+        record.known_headwords_sent = len(known)  # 목록이 잘렸는지 지표로 본다 (Q-20)
         messages = render_messages(
             build_glossary_input(
                 draft,
@@ -164,6 +180,7 @@ class GlossaryService:
             pipeline_version.prompts,
             model,
         )
+        # 영수증(agent_calls)은 AgentCallService 가 남긴다. 실패해도 영수증은 남아 제작 기록에 실패 시도로 보인다
         try:
             result = await self._calls.call(
                 kind=CallKind.GLOSSARY,
@@ -182,11 +199,13 @@ class GlossaryService:
             return record
         record.call_id = result.call_id
         source = ProposalSource(draft_id=draft.draft_id, call_id=result.call_id)
+        # 후보 검사·등록 확인·뜻 선택은 DB 가 필요해 파서가 아니라 여기서 한다(D-65). 파서는 모양만 본다
         await self._resolve(result.output, draft, version, record, source, by_key, parameters)
         return record
 
     async def _known_headwords(self, full_list_max: int) -> tuple[list[KnownHeadword], dict[str, GlossaryHeadword]]:
         """추출 입력의 표제어 목록. 상한을 넘으면 글이 많이 가리키는 표제어부터 남긴다 (08 문서 Q-20, 2단계 호출 전까지의 임시 규칙)."""
+        # PROPOSED 도 보낸다: 승인 전이라도 같은 표제어를 다른 글이 또 만들지 않게. 표시 여부는 읽기 API 가 가른다
         headwords = await self._repo.list_headwords(_KNOWN_STATUSES)
         senses = await self._repo.list_senses(statuses=_KNOWN_STATUSES)
         by_headword: dict[str, list[GlossarySense]] = {}
@@ -232,13 +251,18 @@ class GlossaryService:
         parameters: GlossaryParameters,
     ) -> None:
         """후보마다 등록 확인(①~④)과 뜻 선택을 한다. 버리는 사유는 record.discarded 에 남긴다."""
+        # 코드 펜스·인라인 코드를 가린 본문에서만 surface 를 찾는다. 코드 안 식별자를 용어로 잡지 않기 위해서다(2.1절 불변식)
         prose = _mask_code(version.content_markdown)
+        # 앵커는 프런트가 섹션으로 잇는 값이라 없는 앵커를 가리키는 후보는 버린다. 전제 지식에 든 용어는 독자가 안다고 본 것이라 설명하지 않는다
         section_ids = set(find_anchors(version.content_markdown))
         prerequisites = draft.topic.prerequisites.casefold()
+        # ③ 비슷한 표제어 후보의 모집단. 새 표제어를 만들 때마다 더해 같은 글 안의 후보끼리도 서로 보인다
         all_keys = [each.headword_key for each in await self._repo.list_headwords()]
         seen_surfaces: set[str] = set()
         seen_senses: set[str] = set()
+        # 파서는 24개까지 받고 조절 값(max_terms)으로 여기서 자른다. 앞쪽이 더 중요한 후보라는 프롬프트 규칙에 기댄다
         for candidate in output.candidates[: parameters.max_terms]:
+            # 1) 후보 자체의 검사: 표면형 모양·본문 존재·앵커·전제 지식·표면형 중복. DB 없이 판단할 수 있는 것
             reason = self._discard_reason(
                 candidate, prose, section_ids, prerequisites, seen_surfaces, parameters.surface_max_chars
             )
@@ -246,11 +270,13 @@ class GlossaryService:
                 record.discarded.append(DiscardedTerm(surface=candidate.surface, reason=reason))
                 continue
             seen_surfaces.add(candidate.surface)
+            # 2) 등록 확인 ①②④: 어느 표제어인지. None 은 동시 추출 충돌 뒤에도 못 찾은 경우라 버린다
             resolved = await self._resolve_headword(candidate, known_by_key, source, all_keys)
             if resolved is None:
                 record.discarded.append(DiscardedTerm(surface=candidate.surface, reason="표제어 충돌"))
                 continue
             headword, resolution = resolved
+            # 3) 뜻 선택: 그 표제어의 어느 뜻인지. REJECTED 뜻은 후보에서 뺀다(AI 가 그 키를 줘도 무시)
             senses = [
                 sense
                 for sense in await self._repo.list_senses(headword.headword_key)
@@ -259,6 +285,7 @@ class GlossaryService:
             sense_key, resolution, pending_reason, sense_candidates = await self._resolve_sense(
                 candidate, headword, senses, resolution, source
             )
+            # 뜻을 못 고르면 보류로 남겨 사람이 resolve 한다. 표제어 제안은 그대로 둔다(2.2절 "뜻 선택")
             if sense_key is None:
                 record.pending.append(
                     PendingTerm(
@@ -273,6 +300,7 @@ class GlossaryService:
                     )
                 )
                 continue
+            # 같은 뜻을 두 표면형이 가리키면 첫 등장만 남긴다(글 안에서 sense_key 유일). 프런트는 첫 등장만 감싼다
             if sense_key in seen_senses:
                 record.discarded.append(DiscardedTerm(surface=candidate.surface, reason="뜻 중복"))
                 continue
@@ -295,18 +323,20 @@ class GlossaryService:
         seen_surfaces: set[str],
         surface_max_chars: int,
     ) -> str | None:
+        """후보를 버릴 사유. 없으면 None. 사유 문자열은 record.discarded 에 그대로 남아 프롬프트 튜닝 지표가 된다."""
         term_ko, term_en = candidate.term_ko.strip(), (candidate.term_en or "").strip()
         if not term_ko and not term_en:
             return "표기 없음"
         surface = candidate.surface
         if "\n" in surface or len(surface) > surface_max_chars:
-            return "표면형 형식"
+            return "표면형 형식"  # 줄바꿈이 있거나 너무 길면 프런트의 정확 일치 감싸기가 실패한다
         if surface in seen_surfaces:
             return "표면형 중복"
         if surface not in prose:
-            return "본문에 없음"
+            return "본문에 없음"  # 코드 밖 본문에 글자 그대로 없으면 AI 가 표면형을 다듬은 것이다. 프런트도 못 찾으므로 버린다
         if candidate.section_id not in section_ids:
             return "앵커 없음"
+        # 전제 지식 대조는 조사가 붙지 않은 term_ko·term_en 으로 한다. surface 는 "트랜잭션을" 처럼 조사가 붙는다
         if prerequisites and any(term and term.casefold() in prerequisites for term in (term_ko, term_en)):
             return "전제 지식"
         return None
@@ -318,19 +348,29 @@ class GlossaryService:
         source: ProposalSource,
         all_keys: list[str],
     ) -> tuple[GlossaryHeadword, ItemResolutionKind] | None:
-        """등록 확인 ①~④ (08 문서 2.2절). 정확 일치가 AI 의 same_as 를 이긴다."""
+        """등록 확인 ①~④ (08 문서 2.2절). 정확 일치가 AI 의 same_as 를 이긴다.
+
+        None 은 새로 넣지도 다시 찾지도 못한 경우(동시 추출 충돌 뒤 조회 실패)다. 호출자가 "표제어 충돌" 로 버린다.
+        """
+        # surface 는 조사가 붙어 있어 조회에 쓰지 않는다. 키는 term_en 우선으로, 표제어 키 규칙(headword_key_of)과 같다
         term_ko, term_en = candidate.term_ko.strip(), (candidate.term_en or "").strip() or None
         en_key = normalize_key(term_en) if term_en else ""
         ko_key = normalize_key(term_ko) if term_ko else ""
+        # ① 정확 일치. AI 의 same_as 가 다른 키를 가리켜도 코드가 이긴다(D-65). 사람이 승인한 표기·별칭이 AI 추측보다 믿을 만하다
         found = await self._find_by_lookup(en_key, ko_key)
         if found is not None:
             return found, "EXACT"
+        # ② AI 의 same_as. 입력 목록에 있던 키만 믿는다(목록 밖 키는 지어낸 것일 수 있다).
+        #    맞춘 표기가 그 표제어의 조회 키에 없으면 별칭으로 제안만 하고, 승인 전에는 ①에 쓰지 않는다
         if candidate.same_as is not None and candidate.same_as in known_by_key:
             headword = await self._repo.get_headword(candidate.same_as)
             if headword is not None:
                 headword = await self._follow_merge(headword)
                 await self._propose_aliases(headword, ((term_ko, ko_key), (term_en, en_key)), source)
                 return headword, "SAME_AS"
+        # ③ 비슷한 표제어는 사람 참고용으로 새 표제어에 남긴다. 사전이 full_list_max 이하라 AI 가 이미 전체 목록을 봤으므로
+        #    여기서 다시 판정하지 않는다(사전이 더 커지면 2단계 호출 GLOSSARY_MATCH, Q-20)
+        # ④ 새 표제어. PROPOSED 라 승인 전에는 표시되지 않는다
         key = en_key or ko_key
         headword = GlossaryHeadword(
             headword_key=key,
@@ -353,6 +393,7 @@ class GlossaryService:
         return (found, "EXACT") if found is not None else None
 
     async def _find_by_lookup(self, *keys: str) -> GlossaryHeadword | None:
+        """여러 키 중 처음 맞는 표제어. MERGED 면 흡수한 표제어로 따라간다."""
         for key in keys:
             if not key:
                 continue
@@ -362,6 +403,7 @@ class GlossaryService:
         return None
 
     async def _follow_merge(self, headword: GlossaryHeadword) -> GlossaryHeadword:
+        """병합 사슬을 끝까지 따라간다. 끊긴 사슬(대상 없음)은 check 가 찾으므로 여기서는 멈추고 마지막 것을 돌려준다."""
         while headword.status == GlossaryStatus.MERGED and headword.merged_into:
             target = await self._repo.get_headword(headword.merged_into)
             if target is None:
@@ -395,14 +437,18 @@ class GlossaryService:
     ) -> tuple[str | None, ItemResolutionKind, str | None, list[str]]:
         """뜻 선택 (08 문서 2.2절 표). (뜻 키, resolution, 보류 사유, 후보 뜻 키)."""
         sense_keys = {sense.sense_key for sense in senses}
+        # AI 가 준 sense_key 는 정해진 표제어의 뜻일 때만 믿는다. 다른 표제어의 뜻이면 무시하고 아래 규칙을 탄다
         if candidate.sense_key in sense_keys:
             return candidate.sense_key, resolution, None, []
         if candidate.new_sense is not None:
             proposal = candidate.new_sense
             definition = proposal.definition.strip()
+            # 같은 표제어에 같은 정의가 이미 있으면(같은 글의 두 후보가 둘 다 제안한 경우) 하나만 남긴다
             same = next((sense for sense in senses if sense.definition.strip() == definition), None)
             if same is not None:
                 return same.sense_key, resolution, None, []
+            # "영역만 다른" 제안은 코드가 가릴 수 없다. PROPOSED 로만 두고 pending·show 가 기존 뜻을 나란히 보여
+            # 사람이 승인 대신 merge-sense 로 합친다. 모르는 영역 슬러그는 버리고 남는 것이 없으면 other (domains 불변식)
             domains = [slug for slug in dict.fromkeys(proposal.domains) if slug in DOMAINS] or [OTHER_DOMAIN]
             sense = GlossarySense(
                 sense_key=await self._repo.next_sense_key(),
@@ -418,10 +464,11 @@ class GlossaryService:
             await self._repo.add_sense(sense)
             return sense.sense_key, "NEW", None, []
         if len(senses) == 1:
-            return senses[0].sense_key, resolution, None, []
+            return senses[0].sense_key, resolution, None, []  # 뜻이 하나뿐이면 AI 가 안 골라도 그것이다
         if not senses:
             reason = "새 표제어인데 뜻 제안 없음" if resolution == "NEW" else "표제어에 뜻이 없음"
             return None, resolution, reason, []
+        # 뜻이 둘 이상인데 AI 가 안 골랐다. 사람이 고르도록 보류하고, 후보는 AI 가 준 것 중 이 표제어의 뜻만 남긴다
         return None, resolution, "뜻 미정", [key for key in candidate.sense_candidates if key in sense_keys]
 
     # ── 조회·승인 (CLI) ───────────────────────────────────────────────
@@ -435,6 +482,7 @@ class GlossaryService:
                 raise NotFoundError(f"post {post_id} has no glossary")
 
         def mine(source: ProposalSource | None) -> bool:
+            """글 단위로 거를 때 이 제안이 그 글의 것인지. 사람이 CLI 로 만든 것(source 없음)은 글 필터에 걸리지 않는다."""
             return draft_id is None or (source is not None and source.draft_id == draft_id)
 
         headwords = [
@@ -458,6 +506,7 @@ class GlossaryService:
             for each in await self._repo.list_post_glossaries()
             if each.pending and (draft_id is None or each.draft_id == draft_id)
         ]
+        # 아직 발행되지 않아 post_glossary 가 없는 글의 보류는 글 문서(PostDraft.glossary)에만 있다. 거기서 보충한다
         if (
             draft_id is not None
             and self._drafts is not None
@@ -480,7 +529,7 @@ class GlossaryService:
         }
 
     async def show(self, post_or_draft_id: str) -> dict[str, Any]:
-        """그 글의 항목(표시 여부 포함)·보류·버린 것."""
+        """그 글의 항목(표시 여부 포함)·보류·버린 것. 게시글 id → 글 id → 발행 전 글 문서 순으로 찾고, 어디에도 없으면 NotFoundError."""
         post_glossary = await self._repo.get_post_glossary(post_or_draft_id)
         if post_glossary is None:
             post_glossary = await self._repo.get_post_glossary_by_draft(post_or_draft_id)
@@ -523,9 +572,14 @@ class GlossaryService:
     async def approve_headword(
         self, headword_key: str, *, approved_by: str, term_ko: str | None = None, term_en: str | None = None
     ) -> GlossaryHeadword:
+        """표제어 승인. term_ko·term_en 을 고쳐 승인할 수 있다. 없으면 NotFoundError, MERGED 면 InvalidRequestError.
+
+        고친 표기가 다른 표제어의 조회 키와 겹치면 저장이 DuplicateKeyError 로 실패한다(unique 인덱스).
+        """
         headword = await self._headword(headword_key)
         if headword.status == GlossaryStatus.MERGED:
             raise InvalidRequestError(f"headword {headword_key} was merged into {headword.merged_into}")
+        # 키는 식별자라 바꾸지 않는다(뜻이 표제어 키로, 발행 글이 뜻 키로 가리킨다). 표기를 고치면 조회 키만 따라간다
         if term_ko is not None:
             headword.term_ko = term_ko.strip()
         if term_en is not None:
@@ -538,6 +592,7 @@ class GlossaryService:
         return headword
 
     async def reject_headword(self, headword_key: str) -> GlossaryHeadword:
+        """표제어 거절. 뜻은 건드리지 않는다: 표제어가 REJECTED 면 읽기 API 가 그 뜻을 보이지 않는다. 조회 키는 남아 재제안을 막는다."""
         headword = await self._headword(headword_key)
         headword.status = GlossaryStatus.REJECTED
         headword.updated_at = self._now()
@@ -568,6 +623,7 @@ class GlossaryService:
                 raise InvalidRequestError(f"unknown domains {unknown}; allowed: {', '.join(DOMAINS)}")
             sense.domains = list(dict.fromkeys(domains)) or [OTHER_DOMAIN]
         headword = await self._headword(sense.headword_key)
+        # 둘째 뜻을 승인하려면 이 뜻과 이미 승인된 모든 뜻에 구분 문구가 있어야 한다(2.1절 불변식). 툴팁이 영역 라벨 옆에 보인다
         siblings = [
             each
             for each in await self._repo.list_senses(headword.headword_key, [GlossaryStatus.APPROVED])
@@ -582,6 +638,7 @@ class GlossaryService:
             raise InvalidRequestError(
                 f"approved senses {lacking} need a distinguisher before a second sense is approved"
             )
+        # 표제어가 아직 PROPOSED 면 함께 승인한다. 뜻만 승인되고 표제어가 남으면 아무것도 보이지 않아 사람이 헷갈린다
         if headword.status == GlossaryStatus.PROPOSED:
             await self.approve_headword(headword.headword_key, approved_by=approved_by)
         elif headword.status != GlossaryStatus.APPROVED:
@@ -593,6 +650,7 @@ class GlossaryService:
         return sense
 
     async def reject_sense(self, sense_key: str) -> GlossarySense:
+        """뜻 거절(APPROVED 철회 포함). 글 항목은 남고 읽기 API 가 그 항목을 건너뛴다. 뜻 키는 지우지 않는다(옛 기록이 적고 있다)."""
         sense = await self._sense(sense_key)
         sense.status = GlossaryStatus.REJECTED
         sense.updated_at = self._now()
@@ -637,10 +695,12 @@ class GlossaryService:
         key = normalize_key(alias)
         if not key:
             raise InvalidRequestError("alias is empty")
+        # 다른 표제어가 가진 키면 여기서 먼저 거절한다. unique 인덱스가 어차피 막지만 사유를 사람이 읽을 수 있게 한다
         owner = await self._repo.find_headword_by_lookup(key)
         if owner is not None and owner.headword_key != headword.headword_key:
             raise InvalidRequestError(f"alias {alias!r} already belongs to headword {owner.headword_key}")
         headword.proposed_aliases = [each for each in headword.proposed_aliases if each.alias != alias]
+        # 표기(term_ko·term_en)와 같은 키면 aliases 에 넣지 않는다. lookup_keys 가 이미 품고 있어 중복 표기만 는다
         if alias not in headword.aliases and key not in headword.lookup_keys:
             headword.aliases.append(alias)
         headword.lookup_keys = _lookup_keys(headword)
@@ -649,6 +709,7 @@ class GlossaryService:
         return headword
 
     async def remove_alias(self, headword_key: str, alias: str) -> GlossaryHeadword:
+        """별칭 삭제(제안·승인 둘 다). lookup_keys 를 다시 계산해 그 표기를 다른 표제어가 가져갈 수 있게 한다. 없으면 NotFoundError."""
         headword = await self._headword(headword_key)
         headword.aliases = [each for each in headword.aliases if each != alias]
         headword.proposed_aliases = [each for each in headword.proposed_aliases if each.alias != alias]
@@ -752,6 +813,7 @@ class GlossaryService:
         source = await self._sense(from_key)
         target = await self._sense(into_key)
         for post_glossary in await self._repo.list_post_glossaries_by_sense(from_key):
+            # 글이 두 뜻을 다 가리키면 from 쪽 항목을 지우고(글 안 sense_key 유일), 아니면 from 을 into 로 바꾼다
             if any(item.sense_key == into_key for item in post_glossary.items):
                 post_glossary.items = [item for item in post_glossary.items if item.sense_key != from_key]
             else:
@@ -763,6 +825,7 @@ class GlossaryService:
         target.post_ids = list(dict.fromkeys([*target.post_ids, *source.post_ids]))
         target.updated_at = self._now()
         await self._repo.save_sense(target)
+        # from 은 지우지 않고 REJECTED 로 둔다. 글 문서(PostDraft.glossary)와 영수증이 그 키를 적고 있다
         source.status = GlossaryStatus.REJECTED
         source.updated_at = self._now()
         await self._repo.save_sense(source)
@@ -826,6 +889,7 @@ def _lookup_keys(headword: GlossaryHeadword) -> list[str]:
 
 
 def _published_version(draft: PostDraft) -> DraftVersion | None:
+    """발행된 버전, 발행 전이면 발행 가능한 버전. 보충(backfill)의 추출 대상이다."""
     if draft.publication is not None:
         return next((v for v in draft.versions if v.version_number == draft.publication.final_version), None)
     return draft.publishable_version

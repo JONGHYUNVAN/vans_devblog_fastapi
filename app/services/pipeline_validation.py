@@ -38,6 +38,8 @@ _PLACEHOLDER = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 @dataclass(frozen=True)
 class Finding:
+    """규칙 하나의 발견. error 는 시드를 막고 warning 은 찍기만 한다."""
+
     rule: str
     level: Level
     message: str
@@ -60,10 +62,12 @@ def validate_version(body: PipelineVersionBody, *, expected_hash: str | None = N
 
 
 def errors_of(findings: list[Finding]) -> list[Finding]:
+    """오류만 거른다. 비어 있으면 그 본문은 저장해도 된다."""
     return [finding for finding in findings if finding.level == "error"]
 
 
 def _r10_slots_and_personas(body: PipelineVersionBody) -> list[Finding]:
+    """세 슬롯이 서로 다른 페르소나를 가리키고, 그 페르소나들의 주 렌즈가 모두 다르다(D-19). 렌즈가 겹치면 리뷰어 배정이 안 된다."""
     findings: list[Finding] = []
     missing = [slot.value for slot in AgentSlot if slot not in body.slots]
     if missing:
@@ -122,7 +126,9 @@ def _r05_templates(body: PipelineVersionBody) -> list[Finding]:
 
 
 def _r08_template_contents(body: PipelineVersionBody) -> list[Finding]:
+    """템플릿 본문 검사: JSON 요구(검색 템플릿 제외), 치환되지 않는 $자리표시자, propose_topic 의 $writer_bias, 필수 구절(경고)."""
     findings: list[Finding] = []
+    # 코드 기본 구절에 데이터의 prompt_lint 를 더한다(Q-38). 데이터가 기본을 지울 수는 없다: 지우고 싶은 구절은 코드에서 뺀다
     lint = {name: list(phrases) for name, phrases in DEFAULT_PROMPT_LINT.items()}
     for name, phrases in body.parameters.prompt_lint.items():
         lint[name] = lint.get(name, []) + [phrase for phrase in phrases if phrase not in lint.get(name, [])]
@@ -148,6 +154,7 @@ def _r08_template_contents(body: PipelineVersionBody) -> list[Finding]:
 
 
 def _r09_parameters(body: PipelineVersionBody) -> list[Finding]:
+    """조절 값의 범위. pydantic 은 타입만 보므로 상한·하한·서로 간의 관계(min < max, 선택 섹션 ⊂ 필수 섹션, 정규식 컴파일)는 여기서 본다."""
     findings: list[Finding] = []
     parameters = body.parameters
 
