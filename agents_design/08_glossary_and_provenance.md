@@ -268,7 +268,7 @@ DraftPipelineService._post_review:
 ### 2.3 호출 계약 `GLOSSARY`
 
 - 라우트: `agent_routes` 에 `{"_id": "GLOSSARY", "candidates": [{"provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000}]}`(`routes.example.json` 에 있다). 선택은 `select_optional`(벤더 제약 없음, 없으면 `None`). `validate_snapshot` 은 있을 때만 확인한다. 배포된 Mongo 에는 `agents seed-routes` 로 넣기 전까지 없다.
-- 템플릿: `app/agents/prompts/v4/haiku/glossary.md`(`fact_transform.md` 와 같은 자리)와 **같은 파일을 `v3/glossary.md`(평면)에도 둔다**. 로더는 활성 버전 디렉터리만 보므로 기본 `prompt_version` 이 v3 인 동안에도 찾아야 한다. v3 에 새 이름을 더하는 것은 기존 호출의 문구를 바꾸지 않는 추가다(D-69, Q-25 해소). `TEMPLATE_NAMES` 에 `glossary`, `_TEMPLATES_BY_ROUTE["GLOSSARY"] = ("glossary",)`. 영어 지시문·한국어 결과물(v4 규칙). 가짜 LLM 은 문구 "glossary extractor"로 종류를 가린다.
+- 템플릿: `app/agents/prompts/v4/haiku/glossary.md`(`fact_transform.md` 와 같은 자리)와 **같은 파일을 `v3/glossary.md`(평면)에도 둔다**. 로더는 활성 버전 디렉터리만 보므로 `PROMPT_VERSION=v3` 로 되돌려도 찾아야 하고, 가짜 벤더(가족 디렉터리 없음) 테스트는 평면 디렉터리를 쓴다. v3 에 새 이름을 더하는 것은 기존 호출의 문구를 바꾸지 않는 추가다(D-69, Q-25 해소). `TEMPLATE_NAMES` 에 `glossary`, `_TEMPLATES_BY_ROUTE["GLOSSARY"] = ("glossary",)`. 영어 지시문·한국어 결과물(v4 규칙). 가짜 LLM 은 문구 "glossary extractor"로 종류를 가린다.
 - 타임아웃은 `review_timeout_s`. 예산 검사는 글 호출과 같다.
 - 입력 축소: 승인·제안 표제어 수가 `GLOSSARY_FULL_LIST_MAX` 이하면 전체를 보낸다. 넘으면 2단계 호출로 나눈다. 1차 `GLOSSARY`(목록 없이 후보만 추출) → 코드 ①③ → 2차 `GLOSSARY_MATCH`(후보마다 비슷한 표제어 5~10개와 그 뜻만 보여 `same_as`·`sense_key` 판정). 2차 호출은 사전이 커진 뒤의 일이고 계약은 아래와 같은 모델을 쓴다(Q-20).
 
@@ -506,6 +506,8 @@ class GlossaryTermList(BaseModel):
 | i18n | `post.glossary.title`, `post.glossary.count`, `post.provenance.*` 를 `messages/{ko,en}/post.json` 에. 정의 자체는 한국어만이다(Q-27) |
 | 실패 정책 | 사전·기록 조회가 실패하거나 느리면 글만 그린다. 주석 달기에서 예외가 나면 원본 JSON 으로 그린다(try/catch, 경고 로그) |
 
+구현(2026-11-07, 미커밋, 브라우저 확인 전): 서버 조회는 `src/lib/api/searchApi.ts`(`fetchSearchApi`, 4초 타임아웃, 404·오류·타임아웃 → `null`)와 `src/lib/glossary/postGlossary.ts`·`src/lib/agents/postProvenance.ts`(`serverActions.ts` 라는 이름은 Next.js Server Action 으로 읽혀 피했다). 타입은 `src/types/glossary.ts`·`provenance.ts`. 주석 달기 `src/lib/glossary/annotate.ts`(이미 감싼 텍스트는 다시 감싸지 않는다), 키 기반 훅 `src/lib/glossary/useGlossaryTerm.ts` + 컨텍스트 `src/lib/glossary/glossaryContext.ts`, 프로바이더 `src/components/features/post/viewer/GlossaryProvider.tsx`, 노드 `GlossaryTerm.tsx`. BFF 는 네 라우트에 id·키·page·size 검사(잘못되면 400)를 뒀고, `PostDetail` 은 Post BE 응답에 `_id` 만 믿을 수 있어 검증된 경로 매개변수를 `postId` prop 으로 받는다. 툴팁 패널은 `.prose` 안이라 `p`·`ul`·`strong` 대신 `div`·`span` 과 `opacity-70` 으로 그린다. vitest 41건(annotate·headword·searchApi·TermTooltip 탭 토글·GlossaryTerm 스키마·BFF 라우트·메시지 키) 추가, `tsc` 와 변경 파일 eslint·prettier 통과. 저장소 전체 `npm run lint` 는 이 작업과 무관한 기존 실패(`.claude/worktrees/` 와 WIP 게임 파일)가 있다.
+
 대안으로 ProseMirror 장식(`Decoration.inline`) 플러그인이 있다. 문서를 바꾸지 않고 마크를 자동으로 보존하지만, 장식은 DOM 문자열이라 React 툴팁을 직접 못 쓰고 이벤트 위임과 패널 분리가 필요하다. `TermTooltip` 을 그대로 쓰라는 요구와 탭 토글을 React 안에서 처리하는 쪽이 단순해 인라인 노드를 골랐다(D-66).
 
 ### 2.9 ES 자리
@@ -699,7 +701,7 @@ Post BE 는 바꾸지 않는다. FastAPI 를 먼저 끝내고 vans_story 를 잇
 | G-3 | 발행 따라 쓰기(`DerivedRecordsWriter`), `Publication.derived_at`, `reconcile` 확장, `CONFIRM_PUBLISHED` 경로 | 발행 성공 뒤 `post_glossary`·`post_provenance`·`post_ids` 존재. 발행 반영 뒤 끊고 다시 스캔하면 정리가 마저 씀. 되풀이해도 문서 하나. 완료(2026-11-07) |
 | G-4 | CLI `agents glossary …`(2.5절), `agents provenance …` | `pending → approve-sense → show` 흐름 테스트. 구분 문구 불변식. `extract --missing` 이 사람 경로 글을 채움. 완료(2026-11-07) |
 | G-5 | 읽기 API 3개 + 제작 기록 API, 골든 4개 | `dependency_overrides` 없이 `FakeAsyncDatabase` 로 실제 서비스가 돌고 골든과 값까지 같음. 미승인 항목이 응답에 없음. 사람 글은 404. 완료(2026-11-07) |
-| G-6 | vans_story: BFF 라우트 4개, `serverActions`, `annotateGlossary`, `GlossaryTerm` 노드, `useGlossaryTerm` 훅, `TermTooltip` 의 `tapToggle`·`content`, `PostGlossary`·`PostProvenance` 블록, i18n | 로컬에서 파이프라인 글은 첫 등장 툴팁(호버·포커스·탭. 이 글의 뜻과 영역, 다른 영역의 뜻)과 두 블록이 보이고, 사람 글은 아무것도 달라지지 않음. 조회 실패 시 글만 그려짐. 기존 `TermTooltip` 사용처 변화 없음 |
+| G-6 | vans_story: BFF 라우트 4개, `serverActions`, `annotateGlossary`, `GlossaryTerm` 노드, `useGlossaryTerm` 훅, `TermTooltip` 의 `tapToggle`·`content`, `PostGlossary`·`PostProvenance` 블록, i18n | 로컬에서 파이프라인 글은 첫 등장 툴팁(호버·포커스·탭. 이 글의 뜻과 영역, 다른 영역의 뜻)과 두 블록이 보이고, 사람 글은 아무것도 달라지지 않음. 조회 실패 시 글만 그려짐. 기존 `TermTooltip` 사용처 변화 없음. 코드·vitest·tsc 완료(2026-11-07, 2.8절 "구현"). 브라우저에서의 확인은 아직 |
 | G-7 | 운영: 라운드 1회 뒤 `agents glossary pending` 검토·승인, `extract --missing` 으로 기존 글 채우기, 첫 스캔의 제작 기록 자동 생성 확인 | 사용자가 블로그에서 확인. 승인율·보류율을 `agents metrics` 에 더한다 |
 | G-8 | 표기 표준 입력(2.7절, 다음 프롬프트 버전) | 발행본의 `avoid` 표기 횟수가 줄어듦 |
 | G-9 | 2단계: `/glossary` 페이지, `GLOSSARY_MATCH` 2단계 호출, ES 색인, 관리 API | 각각 Q-28·Q-20·Q-26·Q-10 결정 뒤 |
@@ -738,7 +740,7 @@ Post BE 는 바꾸지 않는다. FastAPI 를 먼저 끝내고 vans_story 를 잇
 | D-66 | 첫 등장 표면형만 감싸고, 툴팁은 이 글에서 쓰인 뜻을 영역 라벨과 함께 맨 위에, 같은 표제어의 다른 승인된 뜻을 그 아래 보인다. 툴팁 컴포넌트는 뜻 키 기반이다: 글 페이지는 글 단위 응답으로 내용을 미리 받고, 없을 때만 표제어 키로 조회한다. vans_story 는 보일 때 TipTap JSON 에 인라인 노드 `glossaryTerm` 을 넣어 React 노드 뷰가 `TermTooltip`(탭 토글·`content` 추가)을 그린다. 주석 달린 JSON 은 저장하지 않는다. 글 끝 "용어" 블록은 전부를 접은 채 보인다 | 뜻 하나만 보일 거면 각주로 족하다. 툴팁의 값은 이 글의 뜻이 어느 영역의 것이고 다른 곳에서는 어떻게 쓰이는지를 함께 보이는 데 있다(2026-11-07 사용자 결정). 글 페이지에서 호버 때 조회하면 첫 호버가 늦고 모바일 탭에서 더 티가 나므로 미리 받고, 키 기반 훅이라 다른 페이지에서도 같은 컴포넌트를 쓴다. `TermTooltip` 재사용과 탭 토글을 React 안에서 끝내려면 노드 뷰가 단순하다. 저장하면 에디터 스키마가 오염된다 | 글이 가리킨 뜻 하나만 표시, 호버 때마다 키로 조회(첫 호버 지연), ProseMirror 장식 플러그인 + 이벤트 위임(마크 보존은 쉽지만 React 툴팁을 못 쓴다), 서버에서 HTML 생성 |
 | D-67 | 제작 기록은 발행 때 영수증에서 만드는 자족적 글 단위 문서 `post_provenance` 다. 순수 함수로 만들고 정리가 빠진 글을 마저 만들며, 보충·재생성 명령이 있다. 머리말 노트는 그대로 두고 이 블록이 전체(실패한 시도, 전체 읽기·수준 평가·용어 추출 포함)를 보인다 | 영수증은 정리될 수 있고, 글마다 수십 건을 모으는 조회를 매번 하지 않는다. 결정론적이라 다시 만들 수 있다. 머리말은 본문에 영향을 준 모델만 적는 요약이라 역할이 다르다 | 영수증을 매번 조회해 응답, 머리말을 늘려 본문에 넣기(본문이 길어지고 수정이 불가능하다) |
 | D-68 | 작성자 표기 표준은 승인된 표제어에서 파생한 `terminology` 입력(라운드 스냅샷)을 주제 제안·작성·수정·다듬기 프롬프트에 넣는 것이다. 템플릿 문구는 새 프롬프트 버전에 넣는다 | 음차는 주제 제안에서 생겨 끝까지 퍼지므로 첫 호출부터 막아야 한다. 배포된 버전 디렉터리는 고치지 않는다 | 다듬기 정규식 치환만(라틴 토큰 보존 규칙에 걸린다), 리뷰 지적(표현은 MINOR 라 막지 못한다) |
-| D-69 | `glossary.md` 템플릿은 `prompts/v4/haiku/glossary.md` 와 `prompts/v3/glossary.md`(평면)에 같은 파일로 둔다 | 로더는 활성 버전 디렉터리만 보므로 기본 `prompt_version` 이 v3 인 동안에도 찾아야 한다. 배포된 버전 디렉터리에 새 이름을 더하는 것은 기존 호출의 문구를 바꾸지 않는 추가다(Q-25 해소) | v4 전환 뒤 도입, GLOSSARY 만 고정 버전 |
+| D-69 | `glossary.md` 템플릿은 `prompts/v4/haiku/glossary.md` 와 `prompts/v3/glossary.md`(평면)에 같은 파일로 둔다 | 로더는 활성 버전 디렉터리만 보므로 `PROMPT_VERSION=v3` 로 되돌려도 찾아야 하고, 가짜 벤더(가족 디렉터리 없음) 테스트는 평면 디렉터리를 쓴다. 배포된 버전 디렉터리에 새 이름을 더하는 것은 기존 호출의 문구를 바꾸지 않는 추가다(Q-25 해소) | v4 전환 뒤 도입, GLOSSARY 만 고정 버전 |
 
 ## 9. 문서 반영 목록 (구현 때)
 
