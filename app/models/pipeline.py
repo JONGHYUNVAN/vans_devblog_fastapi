@@ -173,6 +173,25 @@ class GlossaryParameters(BaseModel):
     terminology_max: int = 150  # 작성자 표기 표준 입력 상한 (아직 프롬프트에 넣지 않는다)
 
 
+class StyleParameters(BaseModel):
+    """문체 게이트의 임계값 (D-85, 2026-11-08).
+
+    어미를 프롬프트로 고정하지 않는다. 생성된 본문의 서술문 어미 분포를 재서, 소수 어미(합쇼체·해요체)가 임계를 넘거나
+    명령형·청유형이 있으면 예시 문장을 들어 수정 루프로 보낸다. 정규식으로 바꾸지 않고 모델이 고친다.
+    """
+
+    minority_register_ratio: float = 0.1  # 소수 어미 문장 수 / 어미를 가린 서술문 수. 이 비율 이상이면 혼용
+    minority_register_min: int = 3  # 비율과 함께 최소 문장 수. 짧은 글에서 한두 문장으로 오탐하지 않는다
+    forbid_imperatives: bool = True  # 설명글에 명령형·청유형(~하십시오, ~하세요, ~하라, ~하자)을 두지 않는다
+
+
+class CodeCommentParameters(BaseModel):
+    """코드 블록 주석 게이트 (D-85). 독자가 복사하는 부분이라 본문 설명과 별개로 왜·중요한 분기의 주석이 있어야 한다."""
+
+    min_lines: int = 12  # 이 줄 수(공백 제외) 이상인 블록만 본다. 짧은 조각은 본문이 설명한다
+    lines_per_comment: int = 25  # 이 줄 수마다 주석 1줄 이상. 파일 경로 머리줄은 주석으로 세지 않는다
+
+
 class Parameters(BaseModel):
     """조절 값 (09 문서 2.4절). 기본값은 1a 이전 Settings 기본값과 같다."""
 
@@ -199,6 +218,8 @@ class Parameters(BaseModel):
     polish: PolishParameters = Field(default_factory=PolishParameters)
     publish: PublishParameters = Field(default_factory=PublishParameters)
     glossary: GlossaryParameters = Field(default_factory=GlossaryParameters)
+    style: StyleParameters = Field(default_factory=StyleParameters)  # 문체 게이트 (D-85)
+    code_comments: CodeCommentParameters = Field(default_factory=CodeCommentParameters)  # 코드 주석 게이트 (D-85)
     # 템플릿 이름 → 있어야 하는 구절. 코드의 기본 목록(services/pipeline_validation.py)에 더해 합친다 (R-08, Q-38)
     prompt_lint: dict[str, list[str]] = Field(default_factory=dict)
 

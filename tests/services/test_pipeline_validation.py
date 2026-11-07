@@ -67,7 +67,7 @@ def test_r08_checks_json_mention_placeholders_and_family_names():
 def test_r08_prompt_lint_merges_code_defaults_with_data_and_only_warns():
     body = make_pipeline_body()
     body.prompts["claude"] = {
-        "write_draft": "Write JSON. 60 max_chars 40% ~다 합니다 마치며 transliteration 스테이트리스"
+        "write_draft": "Write JSON. 60 max_chars 40% comments 마치며 transliteration 스테이트리스"
     }
     body.parameters.prompt_lint = {"write_draft": ["멱등성"]}
 
@@ -79,7 +79,7 @@ def test_r08_prompt_lint_merges_code_defaults_with_data_and_only_warns():
     body.parameters.prompt_lint = {}
     body.prompts["claude"]["write_draft"] = "Write JSON only"
     defaults = [finding for finding in validate_version(body) if "expected phrase" in finding.message]
-    assert len(defaults) == 8  # 데이터에서 lint 를 비워도 코드 기본 목록은 남는다 (Q-38)
+    assert len(defaults) == 7  # 데이터에서 lint 를 비워도 코드 기본 목록은 남는다 (Q-38). 어미 구절 둘은 D-85 로 뺐다
 
 
 def test_r09_checks_parameter_ranges():

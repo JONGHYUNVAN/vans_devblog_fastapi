@@ -1,8 +1,8 @@
 {
   "meta": {
     "label": "baseline",
-    "note": "1a 기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수(2026-11-07). agents pipeline bootstrap 이 같은 입력으로 v1 을 만든다",
-    "content_hash": "sha256:2156cccbc67d56bc93df08b8bb9064c82c8632694af42e287c4121fbd6df9007"
+    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-85(어미 고정 제거, 문체·코드 주석 게이트 조절 값)로 재생성",
+    "content_hash": "sha256:b5473764d5cae4a61c33d721426a9fbdc75da0270c66a2edeb7950a8500e4ceb"
   },
   "schema_version": 1,
   "slots": {
@@ -401,6 +401,15 @@
       "max_terms": 12,
       "surface_max_chars": 40,
       "terminology_max": 150
+    },
+    "style": {
+      "minority_register_ratio": 0.1,
+      "minority_register_min": 3,
+      "forbid_imperatives": true
+    },
+    "code_comments": {
+      "min_lines": 12,
+      "lines_per_comment": 25
     },
     "prompt_lint": {}
   }

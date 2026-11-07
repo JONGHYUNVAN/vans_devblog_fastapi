@@ -17,7 +17,7 @@ Revise the previous Korean draft (`previous`) to resolve validation errors, revi
   * Never mark actual factual errors or code bugs in your text as `OUT_OF_SCOPE`—fix them or refute them with technical proof.
 - Maintain existing `<!-- sec:id -->` anchors. If a section referenced by an item is merged or removed, record the new anchor in `section_id_after`.
 - Adhere to all `structure_rules`, code tag rules (`python`/`typescript`/`json` vs `-snippet`), and `evidence` rules from `write_draft`.
-- Keep the plain "~다" register of `previous` (never "~합니다") and add no recap paragraphs or generic closers while revising. When a fix needs new code, add a `-snippet` excerpt unless a complete file is the only way to prove the point.
+- Keep the register of `previous` consistent (do not switch between 합니다 and 다 styles while editing) and add no recap paragraphs or generic closers. When a fix needs new code, add a `-snippet` excerpt unless a complete file is the only way to prove the point, with Korean comments at the points that matter (the validation gate rejects long blocks without comments).
 </resolution_rules>
 
 <length_budget>

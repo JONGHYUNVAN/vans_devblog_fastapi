@@ -14,7 +14,7 @@ Revise the Korean draft (`previous`) to eliminate all `validation_errors`, resol
    - Preserve `<!-- sec:id -->` anchors (log any merged anchor in `section_id_after`) and `<!-- sec:code-N -->` code anchors.
    - Ensure `python`/`typescript`/`json` blocks pass strict syntax parsing (use `-snippet` for partial excerpts).
    - Stay within `min_chars`..`max_chars` and obey `forbidden_syntax` and `evidence` rules.
-   - Keep the plain "~다" register (never "~합니다"); add no recap paragraphs or generic closers. New code for a fix is a `-snippet` excerpt unless a complete file is the only way to prove the point.
+   - Keep the register of `previous` consistent (do not switch between 합니다 and 다 styles); add no recap paragraphs or generic closers. New code for a fix is a `-snippet` excerpt unless a complete file is the only way to prove the point, with Korean comments at the points that matter (the validation gate rejects long blocks without comments).
 
 ### Output Schema
 Output ONLY the raw JSON object (no ```json fences):

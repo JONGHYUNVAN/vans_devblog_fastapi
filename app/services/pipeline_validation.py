@@ -25,8 +25,9 @@ Level = Literal["error", "warning"]
 
 # R-08 의 기본 필수 구절 (D-62 가 보강한 규칙. 데이터의 prompt_lint 를 더해 합친다, Q-38). 가족 전용 템플릿에만 적용한다
 DEFAULT_PROMPT_LINT: dict[str, list[str]] = {
-    "write_draft": ["60", "max_chars", "40%", "~다", "합니다", "마치며", "transliteration", "스테이트리스"],
-    "revise_draft": ["~다", "합니다"],
+    # 어미 고정 구절("~다"·"합니다")은 D-85 로 뺐다. 문체는 게이트가 잰다. 대신 코드 주석 요구가 있어야 한다
+    "write_draft": ["60", "max_chars", "40%", "comments", "마치며", "transliteration", "스테이트리스"],
+    "revise_draft": ["comments"],
     "propose_topic": ["transliteration", "스테이트리스", "stateless"],
 }
 # 작성·수정·제안을 맡는 가족. common·haiku 의 스텁·변환 템플릿에는 적용하지 않는다

@@ -19,7 +19,7 @@ Include every remaining blocking item (`CRITICAL`, `MAJOR`) in `resolutions` wit
 ## Step 4: Verify Structural Contract (`structure_rules`)
 - Preserve existing `<!-- sec:id -->` anchors (if merged/renamed, set `section_id_after` to the new anchor).
 - Keep all `<!-- sec:code-N -->` anchors, valid language tags (`python`/`typescript`/`json` vs `-snippet`), character limits (`min_chars`..`max_chars`), and `evidence` integrity rules.
-- Keep the plain "~다" register (never "~합니다") and add no recap paragraphs or generic closers. New code for a fix is a `-snippet` excerpt unless a complete file is the only way to prove the point.
+- Keep the register of `previous` consistent (do not switch between 합니다 and 다 styles) and add no recap paragraphs or generic closers. New code for a fix is a `-snippet` excerpt unless a complete file is the only way to prove the point, with Korean comments at the points that matter (the validation gate rejects long blocks without comments).
 
 ## Output Format
 Return ONLY a single raw JSON object (no markdown fences):

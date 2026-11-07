@@ -283,3 +283,57 @@ def test_missing_grammar_skips_the_check_instead_of_failing_the_gate(monkeypatch
     monkeypatch.setattr("tree_sitter_language_pack.get_parser", unavailable)
 
     assert GATE.validate(validating(body(language="typescript", code="const x = ;"))) == []
+
+
+# ---------- 문체·코드 주석 게이트 (D-85) ----------
+PLAIN = "토큰은 서명만 본다. 만료는 exp 가 정한다. 로그아웃은 입력을 바꾸지 않는다. "
+POLITE = "토큰은 서명만 봅니다. 만료는 exp 가 정합니다. 로그아웃은 입력을 바꾸지 않습니다. "
+
+
+def test_mixed_register_fails_with_examples_and_section():
+    errors = GATE.check_style(body(extra=f"\n<!-- sec:body-2 -->\n{PLAIN * 2}\n\n{POLITE}"))
+    assert any("문체가 섞였다" in error and "합쇼체" in error and "[body-2]" in error for error in errors)
+
+
+def test_consistent_register_passes_and_a_stray_sentence_is_tolerated():
+    assert not GATE.check_style(body(extra=f"\n<!-- sec:body-2 -->\n{PLAIN * 4}"))
+    one_polite = PLAIN * 7 + "이 줄만 다릅니다."  # 22문장 중 1문장: 최소 문장 수(3) 미달
+    assert not GATE.check_style(body(extra=f"\n<!-- sec:body-2 -->\n{one_polite}"))
+
+
+def test_imperative_sentence_fails():
+    errors = GATE.check_style(body(extra="\n<!-- sec:body-2 -->\n먼저 설정 파일을 여십시오. 그다음 값을 확인해 보자."))
+    assert any("명령형" in error and "여십시오" in error for error in errors)
+
+
+def test_table_heading_quote_and_code_are_not_sentences():
+    extra = (
+        "\n<!-- sec:body-2 -->\n## 제목입니다\n| 열입니다 | 값입니다 |\n> 인용입니다. 또 인용입니다. 셋째입니다.\n"
+        + PLAIN
+    )
+    assert not [error for error in GATE.check_style(body(extra=extra)) if "문체" in error]
+
+
+LONG_CODE = "\n".join(f"value_{index} = {index}" for index in range(15))
+
+
+def test_long_code_block_without_comments_fails_and_header_does_not_count():
+    errors = GATE.check_style(body(code=LONG_CODE))
+    assert any("코드 블록 code-1" in error and "설명 주석이 0줄" in error for error in errors)
+    header_only = "# app/services/example.py\n" + LONG_CODE
+    errors = GATE.check_style(body(code=header_only))
+    assert any("설명 주석이 0줄" in error for error in errors)
+
+
+def test_long_code_block_with_a_real_comment_passes_and_short_blocks_are_ignored():
+    commented = "# 값은 순서대로 쓰인다. 뒤의 검사가 이 순서에 기댄다\n" + LONG_CODE
+    assert not GATE.check_style(body(code=commented))
+    assert not GATE.check_style(body(code="a = 1\nb = 2\nc = 3", language="python-snippet"))
+    ts = "\n".join(f"const v{index} = {index};" for index in range(15))
+    assert any("설명 주석" in error for error in GATE.check_style(body(code=ts, language="typescript-snippet")))
+    assert not GATE.check_style(body(code="// 왜: 순서가 중요하다\n" + ts, language="typescript-snippet"))
+
+
+def test_json_block_is_not_checked_for_comments():
+    rows = ",\n".join(f'  "k{index}": {index}' for index in range(15))
+    assert not GATE.check_style(body(code="{\n" + rows + "\n}", language="json"))

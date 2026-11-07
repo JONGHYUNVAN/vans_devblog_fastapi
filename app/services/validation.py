@@ -10,9 +10,9 @@ import re
 from collections import Counter
 
 from app.models.enums import ArbitrationOutcome, ResolutionStatus, ReviewScope, RevisionCause
-from app.models.pipeline import Parameters, StructureParameters
+from app.models.pipeline import CodeCommentParameters, Parameters, StructureParameters, StyleParameters
 from app.models.post_draft import DraftVersion, PostDraft
-from app.models.sections import ANCHOR_PATTERN, CODE_ANCHOR_PATTERN, find_anchors, markdown_links
+from app.models.sections import ANCHOR_PATTERN, CODE_ANCHOR_PATTERN, find_anchors, markdown_links, mask_code_fences
 from app.models.tiptap import code_language, markdown_to_tiptap, parse_markdown
 
 logger = logging.getLogger(__name__)
@@ -34,11 +34,15 @@ class ValidationGate:
         max_chars: int,
         min_code_blocks: int = 1,
         structure: StructureParameters | None = None,
+        style: StyleParameters | None = None,
+        code_comments: CodeCommentParameters | None = None,
     ) -> None:
         self._min_chars = min_chars
         self._max_chars = max_chars
         self._min_code_blocks = min_code_blocks
         self._structure = structure if structure is not None else StructureParameters()
+        self._style = style if style is not None else StyleParameters()
+        self._code_comments = code_comments if code_comments is not None else CodeCommentParameters()
 
     @classmethod
     def from_parameters(cls, parameters: Parameters) -> "ValidationGate":
@@ -48,6 +52,8 @@ class ValidationGate:
             max_chars=parameters.draft_max_chars,
             min_code_blocks=parameters.min_code_blocks,
             structure=parameters.structure,
+            style=parameters.style,
+            code_comments=parameters.code_comments,
         )
 
     def validate(self, draft: PostDraft) -> list[str]:
@@ -59,6 +65,8 @@ class ValidationGate:
         markdown = version.content_markdown
         # 1) 본문만 보는 검사. LLM 앞의 결정론적 관문이라 실패하면 REVISING(GATE) 로 돌아가고 iteration 은 오르지 않는다(D-11)
         errors = self.check_markdown(markdown, draft.topic.target_level)
+        # 1a) 문체·코드 주석 (D-85). 다듬기의 check_markdown 에는 넣지 않는다: 다듬기는 자기 패치의 구조만 책임진다
+        errors += self.check_style(markdown)
         # 2) 리뷰 반영본만 해소 대조. 초안·게이트 재작성·사람 재수정은 대조할 리뷰가 없다
         if version.origin_cause == RevisionCause.REVIEW:
             errors += _check_resolutions(draft, version)
@@ -75,6 +83,14 @@ class ValidationGate:
         errors += _check_length(markdown, self._min_chars, self._max_chars)
         errors += _check_convertible(markdown)
         return errors
+
+    def check_style(self, markdown: str) -> list[str]:
+        """문체·코드 주석 검사 (D-85). 어미를 프롬프트로 고정하지 않고 생성 결과를 잰다. 위반은 예시를 들어 수정 호출이 고치게 한다.
+
+        VALIDATING 게이트(validate)만 부른다. 다듬기가 패치마다 부르는 check_markdown 에는 넣지 않는다: 다듬기 전부터 있던 어미를
+        다듬기 실패로 돌리면 안 되고, 문단 하나로는 혼용을 가릴 수 없다.
+        """
+        return _check_register(markdown, self._style) + _check_code_comments(markdown, self._code_comments)
 
 
 def _check_anchors(anchors: list[str], required_sections: list[str]) -> list[str]:
@@ -150,6 +166,138 @@ def _has_syntax_error(grammar: str, code: str) -> bool:
         logger.warning("skip %s syntax check: %s: %s", grammar, type(exc).__name__, exc)
         return False
     return parser.parse(code.encode()).root_node.has_error
+
+
+# ---------- 문체 (D-85) ----------
+# 문장은 마침표·물음표·느낌표 뒤 공백에서 나눈다. 끝의 따옴표·괄호·강조 기호는 어미 판별 전에 뗀다
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_TAIL = re.compile(r"[\s.!?…\"'”’)\]`*_]+$")
+# 줄 머리로 거르는 것: 제목, 표, 앵커·HTML 주석, 인용, 구분선. 목록 표식은 떼고 문장으로 센다
+_SKIP_LINE = re.compile(r"^\s*(#|\||<!--|>|---\s*$)")
+_LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# 끝 글자로 어미를 가른다. 순서가 중요하다: "~세요"는 "~요"보다, "~니다"는 "~다"보다 먼저 봐야 한다
+_IMPERATIVE_ENDINGS = ("하십시오", "십시오", "하세요", "주세요", "보세요", "하라", "해라", "하자", "보자")
+_POLITE_ENDINGS = ("니다", "니까")  # 합쇼체: ~습니다·~입니다·~합니까
+_HAEYO_ENDINGS = ("요", "죠")  # 해요체
+_PLAIN_ENDINGS = ("다",)  # 해라체 서술문. 의문·영문·코드로 끝나는 문장은 가리지 않는다
+_REGISTER_LABELS = {"plain": "해라체(~다)", "polite": "합쇼체(~습니다)", "haeyo": "해요체(~요)"}
+_EXAMPLES_SHOWN = 3
+
+
+def _classify_ending(sentence: str) -> str | None:
+    """문장 하나의 어미 종류. imperative·polite·haeyo·plain 중 하나이고, 가릴 수 없으면 None."""
+    core = _SENTENCE_TAIL.sub("", sentence)
+    if core.endswith(_IMPERATIVE_ENDINGS):
+        return "imperative"
+    if core.endswith(_POLITE_ENDINGS):
+        return "polite"
+    if core.endswith(_HAEYO_ENDINGS):
+        return "haeyo"
+    if core.endswith(_PLAIN_ENDINGS):
+        return "plain"
+    return None
+
+
+def _prose_sentences(markdown: str) -> list[tuple[str, str]]:
+    """코드·제목·표·앵커·인용을 뺀 서술문을 (섹션 id, 문장) 으로. 섹션은 직전 앵커다(없으면 "intro" 앞이라 "?")."""
+    sentences: list[tuple[str, str]] = []
+    section = "?"
+    for line in mask_code_fences(markdown).split("\n"):
+        anchor = ANCHOR_PATTERN.search(line)
+        if anchor:
+            section = anchor.group(1)
+            continue
+        if not line.strip() or _SKIP_LINE.match(line):
+            continue
+        text = _LIST_MARKER.sub("", line).strip()
+        sentences += [(section, piece.strip()) for piece in _SENTENCE_SPLIT.split(text) if piece.strip()]
+    return sentences
+
+
+def _format_examples(examples: list[tuple[str, str]]) -> str:
+    return "; ".join(f"[{section}] '{sentence[:60]}'" for section, sentence in examples[:_EXAMPLES_SHOWN])
+
+
+def _check_register(markdown: str, style: StyleParameters) -> list[str]:
+    """어미 혼용·명령형 검사 (D-85). 소수 어미가 비율·문장 수 임계를 모두 넘을 때만 혼용으로 본다.
+
+    어미를 고치는 것은 수정 호출의 몫이다. 오류 문장에 예시와 섹션을 넣어 모델이 어디를 고칠지 알게 한다.
+    """
+    classified: dict[str, list[tuple[str, str]]] = {"plain": [], "polite": [], "haeyo": [], "imperative": []}
+    for section, sentence in _prose_sentences(markdown):
+        kind = _classify_ending(sentence)
+        if kind is not None:
+            classified[kind].append((section, sentence))
+    errors: list[str] = []
+    registers = {kind: items for kind, items in classified.items() if kind != "imperative" and items}
+    total = sum(len(items) for items in registers.values())
+    if len(registers) > 1:
+        majority = max(registers, key=lambda kind: len(registers[kind]))
+        for kind, items in registers.items():
+            if kind == majority:
+                continue
+            # 비율과 최소 문장 수를 함께 본다. 긴 글의 한두 문장, 짧은 글의 높은 비율 어느 쪽도 혼자서는 혼용이 아니다
+            if len(items) >= style.minority_register_min and len(items) / total >= style.minority_register_ratio:
+                errors.append(
+                    f"문체가 섞였다: {_REGISTER_LABELS[majority]} {len(registers[majority])}문장, "
+                    f"{_REGISTER_LABELS[kind]} {len(items)}문장. 한 가지 어미로 통일하라. 예: {_format_examples(items)}"
+                )
+    if style.forbid_imperatives and classified["imperative"]:
+        errors.append(
+            f"설명글에 명령형·청유형 문장이 {len(classified['imperative'])}개 있다. 서술문으로 바꿔라. "
+            f"예: {_format_examples(classified['imperative'])}"
+        )
+    return errors
+
+
+# ---------- 코드 블록 주석 (D-85) ----------
+_COMMENT_MARKERS = {
+    "python": ("#", '"""', "'''"),
+    "typescript": ("//", "/*", "*", "*/"),
+    "ts": ("//", "/*", "*", "*/"),
+    "tsx": ("//", "/*", "*", "*/"),
+    "javascript": ("//", "/*", "*", "*/"),
+    "js": ("//", "/*", "*", "*/"),
+}
+_PATH_HEADER = re.compile(r"[\w./-]+\.(py|ts|tsx|js|jsx|mjs)\b")
+
+
+def _comment_markers(language: str | None) -> tuple[str, ...] | None:
+    """언어 태그(스니펫 접미 포함)에 맞는 주석 표식. 주석 문법을 모르는 언어(json·sql·bash 등)는 None 이라 검사하지 않는다."""
+    if language is None:
+        return None
+    return _COMMENT_MARKERS.get(language.removesuffix("-snippet"))
+
+
+def _check_code_comments(markdown: str, rule: CodeCommentParameters) -> list[str]:
+    """긴 코드 블록의 설명 주석 수 (D-85). 파일 경로만 적은 머리줄은 주석으로 세지 않는다.
+
+    독자는 본문보다 코드를 복사한다. 왜 그 분기인지, 어느 줄이 불변식을 지키는지는 코드 안에 있어야 한다.
+    """
+    errors: list[str] = []
+    lines = markdown.split("\n")
+    for fence in (token for token in parse_markdown(markdown) if token.type == "fence"):
+        markers = _comment_markers(code_language(fence.info))
+        if markers is None:
+            continue
+        code_lines = [line.strip() for line in fence.content.split("\n") if line.strip()]
+        if len(code_lines) < rule.min_lines:
+            continue
+        comment_lines = [line for line in code_lines if line.startswith(markers)]
+        if comment_lines and code_lines[0] == comment_lines[0] and _PATH_HEADER.search(comment_lines[0]):
+            comment_lines = comment_lines[1:]  # `# app/x.py` 같은 머리줄은 위치 표시지 설명이 아니다
+        required = -(-len(code_lines) // rule.lines_per_comment)  # 올림
+        if len(comment_lines) >= required:
+            continue
+        start_line = fence.map[0] if fence.map else 0
+        anchor_line = _previous_nonblank(lines, start_line)
+        anchor = ANCHOR_PATTERN.search(lines[anchor_line]) if anchor_line is not None else None
+        label = f"코드 블록 {anchor.group(1)}" if anchor else f"{start_line + 1}행의 코드 블록"
+        errors.append(
+            f"{label}({len(code_lines)}줄)에 설명 주석이 {len(comment_lines)}줄이다. {rule.lines_per_comment}줄당 1줄 이상, "
+            "왜 그렇게 하는지와 중요한 분기에 한국어 주석을 넣어라. 파일 경로만 적은 머리줄은 세지 않는다"
+        )
+    return errors
 
 
 def _check_length(markdown: str, min_chars: int, max_chars: int) -> list[str]:

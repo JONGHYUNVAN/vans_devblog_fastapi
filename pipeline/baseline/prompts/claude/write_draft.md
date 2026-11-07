@@ -23,7 +23,7 @@ Compose sentences and organize paragraphs autonomously so that each section deli
 </length_budget>
 
 <korean_prose>
-- Register: the plain written form ending in "~다/~한다/~이다" (해라체) throughout. Never the polite "~합니다/~입니다", never imperatives such as "~하십시오/~하세요".
+- Code comments: every code block of a dozen lines or more carries Korean comments where it matters—why this branch exists, which invariant a line protects, what a reader must not change. A file-path header alone does not count; put at least one comment every 20–25 lines. The validation gate rejects long blocks without comments.
 - Assertion: state requirements and causes plainly; do not soften them with hedging endings such as "~라고 볼 수 있다" or "~인 상황이다".
 - Sentences and paragraphs: one new concept per sentence, one idea per paragraph. Say why something is needed before listing identifiers or API names.
 - Paragraphs over bullets: causal explanation (what happens, why, in which order) goes in paragraphs. A list is only for a genuinely enumerable set—ordered steps, or options compared on the same axis—never for a chain of sentences that argue a point. Use `**bold**` only for the term a paragraph defines.

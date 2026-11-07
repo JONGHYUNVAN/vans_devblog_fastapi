@@ -96,6 +96,8 @@ DraftPipelineService.drive(draft_id):
 | 코드 블록 구문 검사(경량, subprocess 없음): 태그가 `python` 이면 `ast.parse` (`python-snippet` 은 제외), `json` 이면 `json.loads` | 실패하면 게이트 실패. 그 외 언어(TS, C#, SQL 등)는 빈 블록·펜스 짝만 검사한다 |
 | 본문 길이 `DRAFT_MIN_CHARS` 이상 `DRAFT_MAX_CHARS` 이하. 앵커와 코드를 포함한다 | 게이트 실패 |
 | `markdown_to_tiptap` 변환 성공. 8절 변환표의 문법만 쓴다. HTML(섹션 앵커 제외), 이미지, 각주, `mermaid` 코드 블록이 있으면 실패 | 게이트 실패 |
+| 서술문 어미 분포(코드·제목·표·앵커·인용 제외): 소수 어미(합쇼체·해요체)가 `style.minority_register_ratio` 이상이면서 `style.minority_register_min` 문장 이상이면, 또는 명령형·청유형 문장이 있으면 | 게이트 실패. 오류에 예시 문장과 섹션을 적어 수정 호출이 고친다. 어미를 프롬프트로 고정하지 않는다(09 문서 D-85) |
+| 코드 블록 주석: `python`·`typescript`(스니펫 포함) 블록이 `code_comments.min_lines` 줄 이상이면 `lines_per_comment` 줄당 설명 주석 1줄 이상. 파일 경로만 적은 머리줄은 세지 않는다 | 게이트 실패(D-85). `json`·`sql` 등 주석 문법을 모르는 언어는 보지 않는다 |
 | `origin_cause == REVIEW` 인 버전: 아래 두 층 검사 | 게이트 실패. 첫 초안(`None`)과 사람 재수정(`HUMAN`)에는 적용하지 않는다 |
 | 리뷰 완료 이전 버전이 있으면, 그 버전의 `open_blocking_items`가 가리키는 앵커가 남아 있다. 없어졌으면 그 항목의 `section_id_after`가 있다 (단 `origin_cause == HUMAN` 은 면제) | 게이트 실패 |
 | 외부 링크 형식 | 경고만 기록 |

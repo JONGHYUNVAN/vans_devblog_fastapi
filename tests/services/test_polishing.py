@@ -15,7 +15,7 @@ pytestmark = pytest.mark.anyio
 
 A = AgentSlot.A
 BODY = (
-    "<!-- sec:intro -->\n첫 문장이다. 둘째 문장이다.\n\n<!-- sec:body-1 -->\n값을 확인하십시오. `retry` 를 2번 호출하지 않는다.\n\n"
+    "<!-- sec:intro -->\n첫 문장이다. 둘째 문장이다.\n\n<!-- sec:body-1 -->\n값을 확인한다. `retry` 를 2번 호출하지 않는다.\n\n"
     "<!-- sec:code-1 -->\n```python\nprint(1)\n```\n\n<!-- sec:tradeoff -->\n트레이드오프\n\n<!-- sec:conclusion -->\n결론\n"
 )
 FIRST, SECOND = 0, 1
@@ -124,9 +124,11 @@ async def test_patches_make_a_new_version_that_is_not_reviewed_again():
         True,
     )
     assert tone in polished.content_markdown
-    assert "값을 확인한다." in polished.content_markdown  # 정규식 패치
+    assert (
+        "값을 확인한다." in polished.content_markdown
+    )  # 원문 그대로. 게이트(D-85)가 명령형을 막아 정규식이 고칠 문장이 초안에 남지 않는다
     assert draft.polish is not None
-    assert draft.polish.applied == 2
+    assert draft.polish.applied == 1  # 문체 패치 하나뿐
     assert draft.polish.model_ids == ["fake-b-1"]  # 작성 벤더(fake-a)가 아닌 모델
     assert harness.llm.kinds.count("REVIEW_FULL") == 2
     # 전체 읽기와 수준 평가는 다듬은 본문을 본다
@@ -172,7 +174,7 @@ async def test_polished_body_that_fails_the_gate_at_the_end_is_discarded(monkeyp
 
     def failing_at_the_end(self, markdown, level):
         calls["count"] += 1
-        if "이어진다" in markdown and "값을 확인한다" in markdown and calls["count"] > 3:
+        if "이어진다" in markdown and calls["count"] > 2:  # 1: VALIDATING, 2: 패치 뒤 문단 검사, 3: 합친 본문 검사
             return ["본문이 너무 길다"]
         return original(self, markdown, level)
 
@@ -210,7 +212,10 @@ async def test_note_does_not_count_the_polished_version_and_summary_shows_the_di
 
 async def test_blocking_final_read_after_polish_escalates_with_the_polished_body_available():
     finding = {"kind": "BODY_CODE_CONTRADICTION", "section_id": "body-1", "quote": "확인한다", "comment": "어긋난다"}
-    _, draft = await _drive(FINAL_READ=[final_read_output(finding)])
+    _, draft = await _drive(
+        POLISH_TONE=[polish_output((FIRST, "첫 문장이다. 둘째 문장으로 이어진다."))],
+        FINAL_READ=[final_read_output(finding)],
+    )
 
     assert draft.status == PostStatus.ESCALATED
     assert draft.publishable_version is not None

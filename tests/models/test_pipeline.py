@@ -87,3 +87,11 @@ def test_stored_document_loads_back():
 
     assert stored["_id"] == "v1" and "version_id" not in stored
     assert PipelineVersion.model_validate(stored) == version
+
+
+def test_style_and_code_comment_parameters_have_the_d85_defaults():
+    """D-85: 어미는 게이트가 잰다. 옛 버전 문서(v1)에 이 키가 없어도 기본값으로 읽힌다."""
+    parameters = Parameters()
+    assert (parameters.style.minority_register_ratio, parameters.style.minority_register_min) == (0.1, 3)
+    assert parameters.style.forbid_imperatives is True
+    assert (parameters.code_comments.min_lines, parameters.code_comments.lines_per_comment) == (12, 25)
