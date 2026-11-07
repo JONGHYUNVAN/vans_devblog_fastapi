@@ -12,6 +12,7 @@
 | [05_agent_contracts.md](05_agent_contracts.md) | 에이전트 페르소나·리뷰 렌즈, 프롬프트 입출력 JSON 계약 |
 | [06_fastapi_architecture.md](06_fastapi_architecture.md) | 패키지 구조, 계층별 책임, API·CLI, 비동기 모델, 테스트 전략 |
 | [07_decisions_and_open_questions.md](07_decisions_and_open_questions.md) | 확정한 결정(ADR 요약), 미결 사항, 구현 로드맵 |
+| [08_glossary_and_provenance.md](08_glossary_and_provenance.md) | 용어 사전(두 층 모형, 추출→등록 확인→승인→표시)과 글 단위 제작 기록. 설계와 구현 상태 |
 
 ## 상태
 
@@ -33,4 +34,6 @@
 - 2026-11-04: 발행 계정을 벤더별로 나눴다(D-45). 글을 쓴 슬롯의 벤더 계정이 게시글 작성자가 되어 블로그에서 어느 AI가 쓴 글인지 보인다. `PUBLISHER_EMAIL`·`PUBLISHER_PASSWORD` 는 `{ANTHROPIC,GOOGLE,XAI}_PUBLISHER_EMAIL`·`_PASSWORD` 로 바뀌었다.
 - 2026-11-05: 품질 개선 0~4단계 코드를 마쳤다(07 문서 D-48~D-59, 로드맵 8단계). 범위 필드·`OUT_OF_SCOPE`·MAJOR 중재, `POST_REVIEW`(다듬기·전체 읽기·수준 평가), Mongo `agent_routes` 호출별 라우트와 라운드 스냅샷(`AGENT_SLOT_BINDINGS` 삭제), effort·잘림 처리, xAI Responses API, 수준 라벨·근거 입력, 렌즈당 모델 하나, 웹 검색 사실 확인, TS 문법 검사, 프롬프트 v3. 단위 테스트는 가짜 LLM 이고 실제 벤더로는 돌리지 않았다. 옛 라운드·글은 같은 코드로 끝까지 돈다.
 - 2026-11-06: 운영 라운드 첫 완주에서 프런트에 화면이 없는 `jest` 메인에 글이 발행돼 블로그 주소가 404 였다. 라운드 스냅샷을 `AGENT_MAIN_CATEGORIES` 로 거른다(D-60).
+- 2026-11-07: 프롬프트 v4 코드 완료(07 문서 D-62). 가족별 템플릿 `app/agents/prompts/v4/`, 작성·수정 입력에서 페르소나 제거, `tone_markers`·`polish_format` 폐지, `conclusion` 필수 해제, `level_criteria` 입력, 라운드 생성 때 `validate_prompts`, `agents compare-prompts --out-dir`. `Settings.prompt_version` 기본값은 v4 다(같은 날 2차 비교 뒤 올림). 되돌리기는 `.env` 의 `PROMPT_VERSION=v3`. 같은 날 첫 비교에서 세 가족이 v3 보다 길어져 작성 프롬프트에 길이 예산·어미·상투 문구 규칙을 보강했고, 2차 비교에서 셋 다 게이트를 통과했다(`.claude/reviews/prompts_v4_compare_2026-11-07.md`).
+- 2026-11-07: 용어 사전·제작 기록(08 문서, 07 문서 D-63~D-69, 로드맵 9단계) FastAPI 쪽 코드 완료. `POST_REVIEW` 에 `GLOSSARY` 단계(선택 라우트, 실패해도 발행), 컬렉션 5개(`glossary_headwords`·`glossary_senses`·`post_glossary`·`glossary_counters`·`post_provenance`), 발행 뒤 파생 문서 따라 쓰기와 정리, 공개 읽기 API(`/api/v1/glossary/…`, `/api/v1/agents/posts/{id}/provenance/`), CLI `agents glossary …`·`agents provenance …`. 02·03·04·05·06 에 반영했다. 가짜 LLM 테스트뿐이고 배포된 `agent_routes` 에 `GLOSSARY` 라우트는 아직 없다(`agents seed-routes`). vans_story 쪽은 08 문서 2.8절.
 - 코드 컨벤션은 이 저장소의 [CONVENTIONS.md](../CONVENTIONS.md)다.

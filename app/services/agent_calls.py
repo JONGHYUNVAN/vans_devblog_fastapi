@@ -1,6 +1,7 @@
 """LLM 호출 한 단계를 끝까지 책임진다: 소프트 예산 검사, 벤더 호출, 재시도, 영수증 (설계 04 문서 6절, 06 문서 3절)."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ from app.core.exceptions import (
 )
 from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
 from app.models.enums import AgentSlot, CallKind, ReviewLens
+from app.models.level import DEFAULT_LEVEL_CRITERIA
 from app.models.model_binding import CallModel
 from app.models.post_draft import FactClaim, PostDraft
 from app.models.routing import raised_output_limit
@@ -371,6 +373,10 @@ class AgentCallService:
                 error = "; ".join(
                     f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in exc.errors()
                 )
+        if response.truncated:
+            # 생각 토큰이 한도를 다 쓰면 본문이 비어 스키마 오류로만 보인다. 잘림을 먼저 말한다
+            truncated = f"truncated at max_output_tokens={binding.max_output_tokens}"
+            error = f"{truncated}; {error}" if error else truncated
         return ReplayResult(
             text=response.text,
             usage=TokenUsage(**response.usage.model_dump()),
@@ -409,7 +415,7 @@ class AgentCallService:
         )
         async with self._llm.gate(binding.provider).slot():
             searched = await self._llm.get(binding.provider).complete(
-                _to_llm_messages(render_messages(fact_input, prompt_version)),
+                _to_llm_messages(render_messages(fact_input, prompt_version, binding)),
                 None,
                 _params(binding, True),
                 float(self._settings.draft_timeout_s),
@@ -425,7 +431,7 @@ class AgentCallService:
         )
         async with self._llm.gate(transformer.provider).slot():
             transformed = await self._llm.get(transformer.provider).complete(
-                _to_llm_messages(render_messages(transform_input, prompt_version)),
+                _to_llm_messages(render_messages(transform_input, prompt_version, transformer)),
                 FactCheckOutput.model_json_schema(),
                 _params(transformer, False),
                 float(self._settings.review_timeout_s),
@@ -439,31 +445,46 @@ class AgentCallService:
         *,
         versions: Iterable[str],
         runs: int,
-        core_mechanism: str,
-        out_of_scope: list[str],
+        core_mechanism: str | None = None,
+        out_of_scope: list[str] | None = None,
+        on_draft: Callable[[str, int, DraftOutput], None] | None = None,
+        max_output_tokens: int | None = None,
     ) -> list[tuple[str, int, VersionDensity | None, str | None]]:
         """저장된 WRITE_DRAFT 입력을 여러 프롬프트 버전으로 다시 써 밀도를 잰다. 같은 주제를 새 라운드로 돌리면 중복 검사에 걸린다.
 
-        옛 입력에는 범위 필드가 없어 호출자가 채운다. 영수증·상태를 바꾸지 않는다. 행은 (버전, 회차, 밀도, 오류)다.
+        옛 입력에는 범위 필드가 없어 호출자가 채운다(None 이면 입력의 값을 둔다). 영수증·상태를 바꾸지 않는다. 행은 (버전, 회차, 밀도, 오류)다.
+        프롬프트 가족은 영수증의 모델을 따른다. on_draft 가 있으면 파싱된 글을 (버전, 회차, 글)로 넘긴다. 글을 읽고 판단하는 용도다.
+        replay 는 잘린 응답의 한도를 올리지 않으므로(D-53 은 call 에만) max_output_tokens 로 영수증보다 큰 한도를 줄 수 있다.
         """
         if call.kind != CallKind.WRITE_DRAFT:
             raise ValueError(f"call {call.call_id} is {call.kind}, not WRITE_DRAFT")
         user_message = next(message.content for message in call.messages if message.role == "user")
-        write_input = WriteDraftInput.model_validate_json(user_message.removeprefix("입력(JSON):\n"))
-        write_input.topic = write_input.topic.model_copy(
-            update={"core_mechanism": core_mechanism, "out_of_scope": out_of_scope}
-        )
+        stored = json.loads(user_message.removeprefix("입력(JSON):\n"))
+        # v3 이전 입력에는 level_criteria 가 없고 persona 가 있다. 비교 도구라 기본 기준표로 채우고 persona 는 모델이 버린다
+        stored.setdefault("level_criteria", DEFAULT_LEVEL_CRITERIA.model_dump())
+        write_input = WriteDraftInput.model_validate(stored)
+        overrides = {
+            key: value
+            for key, value in (("core_mechanism", core_mechanism), ("out_of_scope", out_of_scope))
+            if value is not None
+        }
+        if overrides:
+            write_input.topic = write_input.topic.model_copy(update=overrides)
+        binding = call.model_binding
+        if max_output_tokens is not None:
+            binding = binding.model_copy(update={"max_output_tokens": max_output_tokens})
         rows = []
         for version in versions:
-            messages = render_messages(write_input, version)
+            messages = render_messages(write_input, version, binding)
             for run in range(1, runs + 1):
-                result = await self.replay(call, messages=messages)
+                result = await self.replay(call, binding=binding, messages=messages)
                 if result.error is not None:
                     rows.append((version, run, None, result.error))
                     continue
-                rows.append(
-                    (version, run, density_of(DraftOutput.model_validate_json(result.text).content_markdown), None)
-                )
+                output = DraftOutput.model_validate_json(result.text)
+                if on_draft is not None:
+                    on_draft(version, run, output)
+                rows.append((version, run, density_of(output.content_markdown), None))
         return rows
 
     async def _check_budget(

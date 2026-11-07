@@ -137,6 +137,7 @@ def test_create_round_400_without_post_be_and_201_with_categories(client, databa
             PublishingRoundRepository(database),
             PostDraftRepository(database),
             TopicRegistryRepository(database),
+            prompt_version="v3",  # 가짜 벤더는 v4 가족 디렉터리가 없다
             publisher=FakePostBE(
                 categories=[
                     PostCategory(id=row["id"], parent_id=row["parentId"], value=row["value"], label=row["label"])

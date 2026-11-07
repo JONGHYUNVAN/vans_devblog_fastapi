@@ -1,5 +1,7 @@
 """agent_drafts 컬렉션. 글 한 편의 버전·리뷰·중재를 한 문서에 내장한다 (설계 02 문서 6절)."""
 
+from datetime import datetime
+
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
@@ -35,6 +37,16 @@ class PostDraftRepository:
         query = {"status": {"$in": [status.value for status in statuses]}}
         docs = await self._drafts.find(query).sort("updated_at", 1).to_list()
         return [PostDraft.model_validate(doc) for doc in docs]
+
+    async def list_published_without_derived(self) -> list[PostDraft]:
+        """PUBLISHED 인데 글 단위 파생 문서(post_glossary·post_provenance)를 아직 다 쓰지 않은 글. 정리가 마저 쓴다 (설계 08 문서 2.2절)."""
+        query = {"status": PostStatus.PUBLISHED.value, "publication.derived_at": None}
+        docs = await self._drafts.find(query).sort("updated_at", 1).to_list()
+        return [PostDraft.model_validate(doc) for doc in docs]
+
+    async def set_derived_at(self, draft_id: str, derived_at: datetime) -> None:
+        """파생 문서를 다 썼다는 표시. revision 을 올리지 않는 단일 필드 갱신이다(PUBLISHED 글은 코루틴이 돌지 않는다)."""
+        await self._drafts.update_one({"_id": draft_id}, {"$set": {"publication.derived_at": derived_at}})
 
     async def add_if_missing(self, draft: PostDraft) -> bool:
         """같은 _id 가 없을 때만 넣는다. 넣었으면 True. 있으면 건드리지 않고 False (중단으로 정리된 글을 되살리지 않는다)."""

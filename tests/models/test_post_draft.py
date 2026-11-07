@@ -22,6 +22,7 @@ from app.models.enums import (
     RevisionCause,
     RoundAbortReason,
 )
+from app.models.glossary import GlossaryRecord
 from app.models.post_draft import (
     EvaluationOutcome,
     FinalRead,
@@ -990,10 +991,13 @@ def test_post_review_runs_polish_read_assess_then_ready():
     assert draft.post_review_stage == PostReviewStage.ASSESS_LEVEL
     assert draft.status == PostStatus.POST_REVIEW
     draft.record_level_assessment(_assessment())
+    assert (draft.status, draft.post_review_stage) == (PostStatus.POST_REVIEW, PostReviewStage.GLOSSARY)
+    draft.finish_glossary(GlossaryRecord(target_version=1, skipped="no GLOSSARY route"))
 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert draft.post_review_stage == PostReviewStage.DONE
     assert draft.level_assessment is not None and draft.level_assessment.level == 300
+    assert draft.glossary is not None and draft.glossary.skipped == "no GLOSSARY route"
 
 
 def test_post_review_stage_cannot_be_skipped():
@@ -1001,6 +1005,8 @@ def test_post_review_stage_cannot_be_skipped():
 
     with pytest.raises(InvalidTransitionError, match="at stage"):
         draft.record_final_read(_final_read())
+    with pytest.raises(InvalidTransitionError, match="at stage"):
+        draft.finish_glossary(GlossaryRecord(target_version=1))
 
 
 @pytest.mark.parametrize("kind", [FinalReadKind.BODY_CODE_CONTRADICTION, FinalReadKind.CORE_MECHANISM_MISSING])
@@ -1068,7 +1074,7 @@ def test_revise_drops_the_assessment_of_the_old_body():
 
 def test_old_stored_draft_without_new_fields_still_loads():
     stored = _in_review().model_dump(by_alias=True)
-    for field in ("post_review_stage", "final_read", "level_assessment", "polish", "user_level"):
+    for field in ("post_review_stage", "final_read", "level_assessment", "polish", "glossary", "user_level"):
         del stored[field]
     for field in ("core_mechanism", "out_of_scope", "target_level", "prerequisites"):
         del stored["topic"][field]

@@ -236,7 +236,12 @@ def fake_model(vendor: str = "fake-a") -> dict[str, Any]:
     return {"provider": vendor, "model_id": f"{vendor}-1", "max_output_tokens": 1000}
 
 
-def route_documents() -> list[dict[str, Any]]:
+def glossary_route(vendor: str = "fake-a") -> dict[str, Any]:
+    """용어 추출 라우트. 선택 라우트라 기본 문서에는 없고, 용어 시나리오만 넣는다 (설계 08 문서 D-64)."""
+    return {"_id": "GLOSSARY", "candidates": [fake_model(vendor)]}
+
+
+def route_documents(with_glossary: bool = False) -> list[dict[str, Any]]:
     """agent_routes 문서 전체. 슬롯마다 자기 벤더로 쓰고, 리뷰·중재는 세 벤더를 후보로 둔다."""
     everyone = [fake_model(vendor) for vendor in FAKE_VENDORS.values()]
     documents: list[dict[str, Any]] = [{"_id": "SLOTS", **{slot.value: PERSONA_IDS[slot] for slot in AgentSlot}}]
@@ -250,15 +255,17 @@ def route_documents() -> list[dict[str, Any]]:
     documents += [{"_id": f"REVIEW:{lens}", "candidates": everyone} for lens in ReviewLens]
     documents += [
         {"_id": route_id, "candidates": everyone}
-        for route_id in ("ARBITRATE", "FINAL_READ", "ASSESS_LEVEL", "POLISH_TONE", "POLISH_FORMAT", "FACT_TRANSFORM")
+        for route_id in ("ARBITRATE", "FINAL_READ", "ASSESS_LEVEL", "POLISH_TONE", "FACT_TRANSFORM")
     ]
+    if with_glossary:
+        documents.append(glossary_route())
     return documents
 
 
-def make_routing() -> RoutingSnapshot:
+def make_routing(with_glossary: bool = False) -> RoutingSnapshot:
     routes = {
         document["_id"]: [CallModel.model_validate(each) for each in document["candidates"]]
-        for document in route_documents()
+        for document in route_documents(with_glossary)
         if document["_id"] != "SLOTS"
     }
     return RoutingSnapshot(routes=routes, slot_personas=PERSONA_IDS)
@@ -292,25 +299,27 @@ def make_call(
     completion_tokens: int = 0,
     output_parsed_ok: bool = True,
     started_second: int = 0,
+    **overrides: Any,
 ) -> AgentCall:
     started_at = datetime(2026, 11, 2, 0, 0, started_second, tzinfo=UTC)
-    return AgentCall(
-        call_id=call_id,
-        round_id="round-1",
-        draft_id=draft_id,
-        kind=kind,
-        slot=AgentSlot.A,
-        model_binding=CallModel(provider="fake", model_id="fake-1", max_output_tokens=1000),
-        prompt_template_version="v1",
-        attempt_number=1,
-        messages=[ChatMessage(role="user", content="써라")],
-        output_raw="{}" if output_parsed_ok else None,
-        output_parsed_ok=output_parsed_ok,
-        usage=TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
-        latency_ms=10,
-        started_at=started_at,
-        finished_at=started_at,
-    )
+    fields: dict[str, Any] = {
+        "call_id": call_id,
+        "round_id": "round-1",
+        "draft_id": draft_id,
+        "kind": kind,
+        "slot": AgentSlot.A,
+        "model_binding": CallModel(provider="fake", model_id="fake-1", max_output_tokens=1000),
+        "prompt_template_version": "v1",
+        "attempt_number": 1,
+        "messages": [ChatMessage(role="user", content="써라")],
+        "output_raw": "{}" if output_parsed_ok else None,
+        "output_parsed_ok": output_parsed_ok,
+        "usage": TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+        "latency_ms": 10,
+        "started_at": started_at,
+        "finished_at": started_at,
+    }
+    return AgentCall(**(fields | overrides))
 
 
 def make_registry_entry(
@@ -398,6 +407,36 @@ def assess_level_output(level: int = 200, quote: str = "본론") -> str:
 
 def polish_output(*patches: tuple[int, str]) -> str:
     return json.dumps({"patches": [{"index": index, "text": text} for index, text in patches]}, ensure_ascii=False)
+
+
+# 용어 시나리오 본문. 코드 안의 stateless 는 용어가 아니다 (설계 08 문서 2.3절 surface 규칙)
+GLOSSARY_BODY = (
+    "<!-- sec:intro -->\n스테이트리스는 서버가 상태를 들지 않는 설계다. 토큰은 서명 문자열이다.\n\n"
+    "<!-- sec:body-1 -->\n본론: 낙관적 잠금을 revision 으로 건다. `stateless` 는 코드 안 단어다.\n\n"
+    "<!-- sec:code-1 -->\n```python\nprint(1)\n```\n\n<!-- sec:tradeoff -->\n트레이드오프\n\n<!-- sec:conclusion -->\n결론\n"
+)
+
+
+def new_sense(
+    domains: Iterable[str] = ("backend",),
+    definition: str = "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계다.",
+    distinguisher: str = "",
+) -> dict[str, Any]:
+    return {"domains": list(domains), "definition": definition, "distinguisher": distinguisher}
+
+
+def glossary_candidate(
+    term_ko: str = "무상태",
+    term_en: str | None = "stateless",
+    surface: str = "스테이트리스는",
+    section_id: str = "intro",
+    **fields: Any,
+) -> dict[str, Any]:
+    return {"term_ko": term_ko, "term_en": term_en, "surface": surface, "section_id": section_id, **fields}
+
+
+def glossary_output(*candidates: dict[str, Any]) -> str:
+    return json.dumps({"candidates": list(candidates)}, ensure_ascii=False)
 
 
 def draft_output(content: str = VALID_BODY, title: str = "제목") -> str:

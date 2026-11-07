@@ -1,0 +1,114 @@
+{
+  "post_id": "6734a1b2c3d4e5f6a7b8c9d0",
+  "draft_id": "round-1:A",
+  "round_id": "round-1",
+  "round_seq": 1,
+  "author_slot": "A",
+  "author_provider": "fake",
+  "writer": {
+    "provider": "fake",
+    "model_id": "fake-1",
+    "effort": null
+  },
+  "title": "제목 v1",
+  "published_at": "2026-11-07T09:00:00Z",
+  "final_version": 1,
+  "authored_version": 1,
+  "versions": [
+    {
+      "version_number": 1,
+      "origin_cause": null,
+      "model_id": null,
+      "passed_validation": true
+    }
+  ],
+  "iteration": 0,
+  "level": null,
+  "user_level": null,
+  "prompt_template_versions": [
+    "v1"
+  ],
+  "stages": [
+    {
+      "stage": "TOPIC",
+      "label": "주제 제안",
+      "lens": null,
+      "scope": null,
+      "target_version": null,
+      "item_id": null,
+      "models": [
+        {
+          "provider": "fake",
+          "model_id": "fake-1",
+          "effort": null
+        }
+      ],
+      "prompt_template_versions": [
+        "v1"
+      ],
+      "calls": [
+        {
+          "call_id": "call-topic",
+          "kind": "PROPOSE_TOPIC",
+          "provider": "fake",
+          "model_id": "fake-1",
+          "effort": null,
+          "prompt_template_version": "v1",
+          "attempt_number": 1,
+          "succeeded": true,
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "latency_ms": 10,
+          "started_at": "2026-11-02T00:00:00Z"
+        }
+      ],
+      "prompt_tokens": 10,
+      "completion_tokens": 5,
+      "outcome": "시도 0회"
+    },
+    {
+      "stage": "WRITE",
+      "label": "작성",
+      "lens": null,
+      "scope": null,
+      "target_version": 1,
+      "item_id": null,
+      "models": [
+        {
+          "provider": "fake",
+          "model_id": "fake-1",
+          "effort": null
+        }
+      ],
+      "prompt_template_versions": [
+        "v1"
+      ],
+      "calls": [
+        {
+          "call_id": "call-write-1",
+          "kind": "WRITE_DRAFT",
+          "provider": "fake",
+          "model_id": "fake-1",
+          "effort": null,
+          "prompt_template_version": "v1",
+          "attempt_number": 1,
+          "succeeded": true,
+          "prompt_tokens": 100,
+          "completion_tokens": 50,
+          "latency_ms": 10,
+          "started_at": "2026-11-02T00:00:01Z"
+        }
+      ],
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "outcome": "v1 게이트 통과"
+    }
+  ],
+  "prompt_tokens": 110,
+  "completion_tokens": 55,
+  "total_tokens": 165,
+  "call_count": 2,
+  "failed_attempts": 0,
+  "schema_version": 1,
+  "built_at": "2026-11-07T09:00:00Z"
+}

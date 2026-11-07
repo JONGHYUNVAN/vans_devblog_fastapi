@@ -249,7 +249,7 @@ async def test_interrupted_step_resumes_from_last_saved_state_with_the_same_call
     assert draft.status == PostStatus.READY_TO_PUBLISH
     # 끊긴 호출(응답 전 취소)은 영수증도 응답도 없다. 다시 돌리면 그 호출만 다시 한다
     assert harness.llm.kinds == ["WRITE_DRAFT", "REVIEW_FULL", "REVIEW_FULL", "REVISE_DRAFT", "SPOT_CHECK"]
-    finished_stages = 6  # 사실 확인 2(검색·변환), 다듬기 2, 전체 읽기, 수준 평가
+    finished_stages = 5  # 사실 확인 2(검색·변환), 다듬기 1, 전체 읽기, 수준 평가
     assert len(harness.llm.calls) == 7 + finished_stages
     assert len(await harness.calls.list_by_draft(draft_id)) == 5 + finished_stages
     writes = [call for call in harness.llm.calls if "글 한 편을 한국어로 쓴다" in call.messages[0].content]

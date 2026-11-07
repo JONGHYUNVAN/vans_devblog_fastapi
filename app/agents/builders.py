@@ -16,12 +16,14 @@ from app.agents.contracts import (
     AssessLevelInput,
     AvoidTopic,
     CitationRef,
+    DomainOption,
     DraftOutput,
     FactCheckInput,
     FactTransformInput,
     FinalReadInput,
+    GlossaryInput,
+    KnownHeadword,
     LinkStatus,
-    PolishFormatInput,
     PolishToneInput,
     ProposeTopicInput,
     ReviewForAuthor,
@@ -35,13 +37,15 @@ from app.agents.contracts import (
     WriteDraftInput,
 )
 from app.agents.personas import PersonaProfile, get_persona
-from app.agents.prompts.registry import load_template
+from app.agents.prompts.registry import load_template, prompt_family
 from app.models.agent_call import ChatMessage
 from app.models.enums import AgentSlot, ArbitrationOutcome, ReviewLens, ReviewScope, RevisionCause
+from app.models.glossary import DOMAINS
 from app.models.level import DEFAULT_LEVEL_CRITERIA, LevelCriteria
-from app.models.post_draft import PostDraft, ReviewItem
+from app.models.model_binding import CallModel
+from app.models.post_draft import DraftVersion, PostDraft, ReviewItem
 from app.models.publishing_round import PublishingRound
-from app.models.sections import changed_sections, find_anchors, section_text
+from app.models.sections import CODE_ANCHOR_PATTERN, changed_sections, find_anchors, section_text
 from app.models.topic import TopicRegistryEntry
 
 _TEMPLATE_BY_INPUT: dict[type[BaseModel], str] = {
@@ -56,8 +60,8 @@ _TEMPLATE_BY_INPUT: dict[type[BaseModel], str] = {
     FactTransformInput: "fact_transform",
     FinalReadInput: "final_read",
     AssessLevelInput: "assess_level",
-    PolishFormatInput: "polish_format",
     PolishToneInput: "polish_tone",
+    GlossaryInput: "glossary",
 }
 
 
@@ -109,10 +113,11 @@ def build_propose_topic_input(
 def build_write_draft_input(
     draft: PostDraft, publishing_round: PublishingRound, rules: StructureRules
 ) -> WriteDraftInput:
+    """작성자 입력에는 페르소나가 없다(v4). 수준 기준표를 넣어 target_level 이 요구하는 깊이를 작성자가 본다."""
     return WriteDraftInput(
-        persona=persona_of(publishing_round, draft.author_slot),
         topic=draft.topic,
         structure_rules=rules,
+        level_criteria=level_criteria_of(publishing_round),
         evidence=publishing_round.evidence,
     )
 
@@ -167,7 +172,6 @@ def build_revise_draft_input(
         draft.revision_cause == RevisionCause.GATE and previous.origin_cause == RevisionCause.HUMAN
     )
     return ReviseDraftInput(
-        persona=persona_of(publishing_round, draft.author_slot),
         topic=draft.topic,
         structure_rules=rules,
         previous=DraftOutput(
@@ -183,8 +187,9 @@ def build_revise_draft_input(
     )
 
 
-def _tone_rule(draft: PostDraft, publishing_round: PublishingRound) -> TonePreservationRule:
-    return TonePreservationRule(author_tone_markers=persona_of(publishing_round, draft.author_slot).tone_markers)
+def _tone_rule() -> TonePreservationRule:
+    """v4: 어조 마커가 없다. 리뷰어는 must_not_flag 만 지킨다."""
+    return TonePreservationRule()
 
 
 def build_review_input(draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens) -> ReviewInput:
@@ -195,7 +200,8 @@ def build_review_input(draft: PostDraft, publishing_round: PublishingRound, lens
         secondary_lens=assignment.secondary_lens,
         topic=TopicForReviewer.from_topic(draft.topic),
         content_markdown=draft.current_version.content_markdown,
-        tone_preservation=_tone_rule(draft, publishing_round),
+        level_criteria=level_criteria_of(publishing_round),
+        tone_preservation=_tone_rule(),
     )
 
 
@@ -216,7 +222,7 @@ def build_spot_check_input(draft: PostDraft, publishing_round: PublishingRound, 
         current_content=current.content_markdown,
         my_previous_items=[ReviewItemForReviewer.from_item(item) for item in my_items],
         resolutions=[resolution for resolution in current.resolutions if resolution.item_id in my_ids],
-        tone_preservation=_tone_rule(draft, publishing_round),
+        tone_preservation=_tone_rule(),
     )
 
 
@@ -241,7 +247,7 @@ def build_fact_check_input(
         my_previous_items=[ReviewItemForReviewer.from_item(item) for item in my_items],
         resolutions=[resolution for resolution in current.resolutions if resolution.item_id in my_ids],
         link_status=link_status,
-        tone_preservation=_tone_rule(draft, publishing_round),
+        tone_preservation=_tone_rule(),
     )
 
 
@@ -256,6 +262,16 @@ def build_fact_transform_input(
         verification_text=verification_text,
         citations=citations,
     )
+
+
+def _scope_declaration(markdown: str) -> str:
+    """본문의 범위 선언: tradeoff, 없으면 conclusion, 둘 다 없으면(수준 100) 마지막 섹션. 코드 앵커는 섹션이 아니다."""
+    for section_id in ("tradeoff", "conclusion"):
+        text = section_text(markdown, section_id)
+        if text:
+            return text
+    sections = [anchor for anchor in find_anchors(markdown) if not CODE_ANCHOR_PATTERN.match(anchor)]
+    return (section_text(markdown, sections[-1]) if sections else None) or ""
 
 
 def build_arbitrate_input(draft: PostDraft, item: ReviewItem, search_evidence: str | None = None) -> ArbitrateInput:
@@ -286,9 +302,7 @@ def build_arbitrate_input(draft: PostDraft, item: ReviewItem, search_evidence: s
         reviewer_unresolved_note=note,
         core_mechanism=draft.topic.core_mechanism,
         out_of_scope=draft.topic.out_of_scope,
-        scope_declaration=section_text(current.content_markdown, "tradeoff")
-        or section_text(current.content_markdown, "conclusion")
-        or "",
+        scope_declaration=_scope_declaration(current.content_markdown),
         search_evidence=search_evidence,
     )
 
@@ -322,9 +336,46 @@ def build_assess_level_input(draft: PostDraft, publishing_round: PublishingRound
     )
 
 
-def render_messages(model: BaseModel, prompt_version: str) -> list[ChatMessage]:
-    """시스템 메시지는 입력 종류의 템플릿(페르소나 자리만 치환), 사용자 메시지는 입력 JSON."""
-    template = Template(load_template(_TEMPLATE_BY_INPUT[type(model)], prompt_version))
+def build_glossary_input(
+    draft: PostDraft,
+    publishing_round: PublishingRound,
+    version: DraftVersion,
+    known_headwords: list[KnownHeadword],
+    *,
+    min_terms: int,
+    max_terms: int,
+) -> GlossaryInput:
+    """용어 추출 입력 (설계 08 문서 2.3절). version 은 발행본이다(추출 단계에서는 현재 버전, 보충에서는 발행된 버전)."""
+    topic = draft.topic
+    main_label = next(
+        (
+            category.main_label
+            for category in publishing_round.categories
+            if category.main_category_id == topic.main_category_id
+        ),
+        topic.main_category_id,
+    )
+    return GlossaryInput(
+        title=version.title,
+        audience=topic.audience,
+        prerequisites=topic.prerequisites,
+        main_category=main_label,
+        keywords=list(topic.keywords),
+        content_markdown=version.content_markdown,
+        section_ids=find_anchors(version.content_markdown),
+        known_headwords=known_headwords,
+        allowed_domains=[DomainOption(slug=slug, label=label) for slug, label in DOMAINS.items()],
+        min_terms=min_terms,
+        max_terms=max_terms,
+    )
+
+
+def render_messages(model: BaseModel, prompt_version: str, call_model: CallModel) -> list[ChatMessage]:
+    """시스템 메시지는 입력 종류와 프롬프트 가족(호출 모델로 정한다)의 템플릿, 사용자 메시지는 입력 JSON.
+
+    치환은 propose_topic 의 $writer_bias 뿐이다. 입력에 persona 가 없는 작성·수정 호출에서 v3 이전 템플릿의 $display_name 은 빈 글이 된다.
+    """
+    template = Template(load_template(_TEMPLATE_BY_INPUT[type(model)], prompt_version, prompt_family(call_model)))
     persona = getattr(model, "persona", None)
     system = template.safe_substitute(
         display_name=persona.display_name if persona else "",

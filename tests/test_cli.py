@@ -43,3 +43,10 @@ def test_wait_keeps_polling_while_the_runner_still_publishes():
     # 승인됐거나 토글이 꺼진 READY_TO_PUBLISH 는 러너가 발행 중이다 (06 문서 3절 CLI 표)
     assert not _is_waiting_on_human(_progress("IN_PROGRESS", ("READY_TO_PUBLISH", False), ("PUBLISHED", False)))
     assert not _is_waiting_on_human(_progress("IN_PROGRESS", ("IN_REVIEW", False), ("ESCALATED", False)))
+
+
+def test_split_csv_trims_and_drops_empty_items():
+    from cli.__main__ import _split_csv
+
+    assert _split_csv("db, backend,,llm ") == ["db", "backend", "llm"]
+    assert _split_csv(None) is None and _split_csv("") is None

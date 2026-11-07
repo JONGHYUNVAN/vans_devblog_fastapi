@@ -4,6 +4,7 @@
 아니면 도메인 메서드가 InvalidTransitionError(409) 를 던진다. 진행은 하지 않는다. 다음 스캔이 글 코루틴을 띄운다.
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
@@ -16,8 +17,11 @@ from app.models.post_draft import PostDraft, Publication
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
+from app.services.derived_records import DerivedRecordsWriter
 from app.services.publishing import build_peer_review_note
 from app.services.round import RoundService
+
+logger = logging.getLogger(__name__)
 
 
 class DraftDecisionService:
@@ -29,12 +33,14 @@ class DraftDecisionService:
         topic_registry_repository: TopicRegistryRepository,
         round_service: RoundService,
         settings: Settings,
+        derived_writer: DerivedRecordsWriter | None = None,
     ) -> None:
         self._drafts = draft_repository
         self._calls = agent_call_repository
         self._topics = topic_registry_repository
         self._rounds = round_service
         self._settings = settings
+        self._derived = derived_writer
 
     async def approve(self, draft_id: str, *, approved_by: str) -> PostDraft:
         """발행 승인. 그 버전에 대한 것이다. 다음 스캔이 글 코루틴을 띄워 발행한다. 토글이 꺼져 있거나 이미 승인됐으면 409."""
@@ -118,6 +124,11 @@ class DraftDecisionService:
         """종결 결정 뒤 레지스트리를 따라 쓰고 라운드 완료를 확인한다 (04 문서 1절 표)."""
         if draft.status == PostStatus.PUBLISHED and draft.publication is not None:
             await self._topics.set_status(draft.draft_id, TopicRegistryStatus.PUBLISHED, draft.publication.published_at)
+            if self._derived is not None:
+                try:
+                    await self._derived.write(draft, built_by="publish")
+                except Exception:  # 결정은 끝났다. 파생 문서는 정리가 마저 쓴다 (설계 08 문서 2.2절)
+                    logger.exception("draft %s derived records deferred to reconcile", draft.draft_id)
         else:
             await self._topics.set_status(draft.draft_id, TopicRegistryStatus.RELEASED)
         await self._rounds.close_if_complete(draft.round_id)

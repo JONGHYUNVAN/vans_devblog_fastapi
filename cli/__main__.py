@@ -15,9 +15,13 @@ from app.dependencies import (
     build_agent_call_service,
     build_code_graph_repo_config_service,
     build_code_graph_service,
+    build_derived_records_writer,
     build_draft_decision_service,
+    build_glossary_service,
+    build_glossary_view_service,
     build_pipeline_runner,
     build_pipeline_view_service,
+    build_provenance_service,
     build_round_service,
     build_service_graph_service,
     ensure_agent_indexes,
@@ -322,11 +326,32 @@ def replay(
 def compare_prompts(
     call_id: str,
     version: Annotated[list[str], typer.Option(help="비교할 프롬프트 버전. 여러 번 준다")],
-    core_mechanism: Annotated[str, typer.Option(help="옛 입력에 없는 핵심 메커니즘")],
-    out_of_scope: Annotated[list[str], typer.Option(help="옛 입력에 없는 '다루지 않을 것'. 여러 번 준다")],
     runs: Annotated[int, typer.Option(min=1, help="버전마다 몇 번 쓸지")] = 3,
+    core_mechanism: Annotated[
+        str | None, typer.Option(help="옛 입력에 없을 때 채울 핵심 메커니즘. 입력에 있으면 생략")
+    ] = None,
+    out_of_scope: Annotated[
+        list[str] | None, typer.Option(help="옛 입력에 없을 때 채울 '다루지 않을 것'. 여러 번 준다. 입력에 있으면 생략")
+    ] = None,
+    out_dir: Annotated[
+        Path | None, typer.Option(help="생성한 글을 {버전}-{회차}.md 로 저장할 디렉터리. 읽고 판단하는 용도")
+    ] = None,
+    max_output_tokens: Annotated[
+        int | None,
+        typer.Option(
+            min=1, help="영수증의 출력 한도 대신 쓸 값. 생각 토큰이 한도를 다 써 본문이 비면 올려서 다시 돈다"
+        ),
+    ] = None,
 ) -> None:
-    """저장된 WRITE_DRAFT 입력을 프롬프트 버전별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다."""
+    """저장된 WRITE_DRAFT 입력을 프롬프트 버전별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다. 가족은 영수증의 모델을 따른다."""
+
+    def _save(prompt_version: str, run: int, output) -> None:
+        if out_dir is None:
+            return
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{prompt_version}-{run}.md"
+        path.write_text(f"# {output.title}\n\n> {output.summary}\n\n{output.content_markdown}", encoding="utf-8")
+        typer.echo(f"saved {path}")
 
     async def _compare(database, settings):
         service = build_agent_call_service(database, settings)
@@ -336,6 +361,8 @@ def compare_prompts(
             runs=runs,
             core_mechanism=core_mechanism,
             out_of_scope=out_of_scope,
+            on_draft=_save,
+            max_output_tokens=max_output_tokens,
         )
         for prompt_version, run, density, error in rows:
             _echo(
@@ -546,3 +573,275 @@ def code_graph_flow(
 
 if __name__ == "__main__":
     cli()
+
+
+# ---------- 용어 사전·제작 기록 (설계 08 문서 2.5절, 3.4절) ----------
+
+glossary = typer.Typer(help="용어 사전 승인·정리 (설계 agents_design/08 문서 2.5절)", no_args_is_help=True)
+agents.add_typer(glossary, name="glossary")
+provenance = typer.Typer(help="제작 기록 (설계 agents_design/08 문서 3절)", no_args_is_help=True)
+agents.add_typer(provenance, name="provenance")
+
+
+def _run_glossary(coroutine_factory):
+    """GlossaryService 를 조립해 코루틴을 돌린다. 입력 오류·없는 키는 메시지와 종료 코드 1."""
+
+    async def _main(database, settings):
+        return await coroutine_factory(build_glossary_service(database, settings))
+
+    return _run_agents(_main)
+
+
+def _split_csv(value: str | None) -> list[str] | None:
+    return [each.strip() for each in value.split(",") if each.strip()] if value else None
+
+
+@glossary.command("pending")
+def glossary_pending(
+    draft_id: Annotated[str | None, typer.Option(help="그 글이 제안한 것만")] = None,
+    post_id: Annotated[str | None, typer.Option(help="그 게시글이 제안한 것만")] = None,
+) -> None:
+    """PROPOSED 표제어·뜻·별칭과 보류 항목. 라운드가 끝난 뒤 사람이 읽는 목록이다."""
+
+    async def _pending(service):
+        _echo(await service.pending(draft_id=draft_id, post_id=post_id))
+
+    _run_glossary(_pending)
+
+
+@glossary.command("show")
+def glossary_show(post_or_draft_id: str) -> None:
+    """그 글의 항목(표시 여부 포함)·보류·버린 것."""
+
+    async def _show(service):
+        _echo(await service.show(post_or_draft_id))
+
+    _run_glossary(_show)
+
+
+@glossary.command("approve")
+def glossary_approve(post_or_draft_id: str, approved_by: Annotated[str, typer.Option()] = "cli") -> None:
+    """그 글이 제안한 표제어·뜻·별칭을 한 번에 승인한다. 구분 문구 불변식에 걸린 뜻은 남기고 사유를 찍는다."""
+
+    async def _approve(service):
+        _echo(await service.approve_all(post_or_draft_id, approved_by=approved_by))
+
+    _run_glossary(_approve)
+
+
+@glossary.command("approve-headword")
+def glossary_approve_headword(
+    key: str,
+    approved_by: Annotated[str, typer.Option()] = "cli",
+    term_ko: Annotated[str | None, typer.Option(help="표준 한국어 표기를 고쳐 승인")] = None,
+    term_en: Annotated[str | None, typer.Option(help="영어 원어를 고쳐 승인")] = None,
+) -> None:
+    """표제어 승인."""
+
+    async def _approve(service):
+        headword = await service.approve_headword(key, approved_by=approved_by, term_ko=term_ko, term_en=term_en)
+        _echo(headword.model_dump(mode="json"))
+
+    _run_glossary(_approve)
+
+
+@glossary.command("approve-sense")
+def glossary_approve_sense(
+    sense_key: str,
+    approved_by: Annotated[str, typer.Option()] = "cli",
+    definition: Annotated[str | None, typer.Option(help="정의를 고쳐 승인 (2문장 이하, ~다)")] = None,
+    distinguisher: Annotated[str | None, typer.Option(help="다른 뜻과 가르는 한 줄")] = None,
+    domains: Annotated[str | None, typer.Option(help="영역 슬러그, 쉼표로 (db,backend)")] = None,
+    term_ko: Annotated[str | None, typer.Option(help="이 뜻만의 표기")] = None,
+) -> None:
+    """뜻 승인. 표제어가 PROPOSED 면 함께 승인한다. 승인된 뜻이 둘 이상이면 모두 구분 문구가 있어야 한다."""
+
+    async def _approve(service):
+        sense = await service.approve_sense(
+            sense_key,
+            approved_by=approved_by,
+            definition=definition,
+            distinguisher=distinguisher,
+            domains=_split_csv(domains),
+            term_ko=term_ko,
+        )
+        _echo(sense.model_dump(mode="json"))
+
+    _run_glossary(_approve)
+
+
+@glossary.command("reject-headword")
+def glossary_reject_headword(key: str) -> None:
+    """표제어 거절. 그 뜻을 가리키던 항목은 표시되지 않는다."""
+
+    async def _reject(service):
+        _echo((await service.reject_headword(key)).model_dump(mode="json"))
+
+    _run_glossary(_reject)
+
+
+@glossary.command("reject-sense")
+def glossary_reject_sense(sense_key: str) -> None:
+    """뜻 거절(철회 포함)."""
+
+    async def _reject(service):
+        _echo((await service.reject_sense(sense_key)).model_dump(mode="json"))
+
+    _run_glossary(_reject)
+
+
+@glossary.command("alias")
+def glossary_alias(key: str, alias: str) -> None:
+    """별칭 승인. proposed_aliases 에 있으면 거기서 옮긴다. 다른 표제어가 그 키를 가지면 거절한다."""
+
+    async def _alias(service):
+        _echo((await service.add_alias(key, alias)).model_dump(mode="json"))
+
+    _run_glossary(_alias)
+
+
+@glossary.command("unalias")
+def glossary_unalias(key: str, alias: str) -> None:
+    """별칭 삭제."""
+
+    async def _unalias(service):
+        _echo((await service.remove_alias(key, alias)).model_dump(mode="json"))
+
+    _run_glossary(_unalias)
+
+
+@glossary.command("resolve")
+def glossary_resolve(
+    post_id: str, surface: Annotated[str, typer.Option()], sense: Annotated[str, typer.Option()]
+) -> None:
+    """보류 항목에 뜻을 붙인다."""
+
+    async def _resolve(service):
+        _echo((await service.resolve_pending(post_id, surface=surface, sense_key=sense)).model_dump(mode="json"))
+
+    _run_glossary(_resolve)
+
+
+@glossary.command("drop")
+def glossary_drop(post_id: str, surface: Annotated[str, typer.Option()]) -> None:
+    """항목·보류를 지운다."""
+
+    async def _drop(service):
+        _echo((await service.drop(post_id, surface=surface)).model_dump(mode="json"))
+
+    _run_glossary(_drop)
+
+
+@glossary.command("extract")
+def glossary_extract(
+    draft_id: Annotated[str | None, typer.Argument(help="보충할 글")] = None,
+    missing: Annotated[bool, typer.Option(help="PUBLISHED 인데 추출 기록이 없는 글 전부")] = False,
+) -> None:
+    """보충. 발행본으로 GLOSSARY 호출을 돌려 글 기록을 쓰고, PUBLISHED 면 post_glossary 를 다시 만든다(사람의 resolve·drop 은 사라진다)."""
+    if draft_id is None and not missing:
+        typer.echo("draft_id 나 --missing 중 하나가 필요하다.", err=True)
+        raise typer.Exit(1)
+
+    async def _extract(service):
+        targets = [draft_id] if draft_id is not None else await service.list_missing_draft_ids()
+        for target in targets:
+            record = await service.backfill(target)
+            _echo({"draft_id": target, "glossary": record.model_dump(mode="json")})
+
+    _run_glossary(_extract)
+
+
+@glossary.command("dedupe")
+def glossary_dedupe(out: Annotated[Path | None, typer.Option(help="쌍 목록을 쓸 파일")] = None) -> None:
+    """비슷한 표제어 쌍을 찍는다(코드 유사도). DB 는 바꾸지 않는다. 사람이 읽고 merge 로 적용한다."""
+
+    async def _dedupe(service):
+        pairs = await service.dedupe_candidates()
+        if out is not None:
+            out.write_text(json.dumps(pairs, ensure_ascii=False, indent=2), encoding="utf-8")
+            typer.echo(f"{len(pairs)}쌍을 {out} 에 썼다.")
+        else:
+            _echo(pairs)
+
+    _run_glossary(_dedupe)
+
+
+@glossary.command("merge")
+def glossary_merge(merge_key: str, into: Annotated[str, typer.Option()]) -> None:
+    """표제어 병합: merge_key 의 키·별칭을 into 로 옮기고 뜻의 headword_key 를 바꾼 뒤 MERGED 로 둔다."""
+
+    async def _merge(service):
+        _echo((await service.merge_headwords(merge_key, into_key=into)).model_dump(mode="json"))
+
+    _run_glossary(_merge)
+
+
+@glossary.command("merge-sense")
+def glossary_merge_sense(from_key: str, into: Annotated[str, typer.Option()]) -> None:
+    """뜻 병합: 글 항목을 옮기고 글 목록을 합친 뒤 from 을 REJECTED 로 둔다."""
+
+    async def _merge(service):
+        _echo((await service.merge_senses(from_key, into_key=into)).model_dump(mode="json"))
+
+    _run_glossary(_merge)
+
+
+@glossary.command("check")
+def glossary_check() -> None:
+    """무결성 검사. 문제가 있으면 종료 코드 1."""
+
+    async def _check(service):
+        problems = await service.check()
+        _echo(problems)
+        if problems:
+            raise typer.Exit(1)
+
+    _run_glossary(_check)
+
+
+@glossary.command("terms")
+def glossary_terms(
+    q: Annotated[str | None, typer.Option(help="표기·별칭 부분 일치")] = None,
+    page: Annotated[int, typer.Option(min=1)] = 1,
+    size: Annotated[int, typer.Option(min=1, max=200)] = 50,
+) -> None:
+    """승인된 사전을 찍는다 (읽기 API 와 같은 응답)."""
+
+    async def _terms(database, settings):
+        result = await build_glossary_view_service(database, settings).list_terms(q=q, page=page, size=size)
+        _echo(result.model_dump(mode="json"))
+
+    _run_agents(_terms)
+
+
+@provenance.command("build")
+def provenance_build(
+    draft_id: Annotated[str | None, typer.Argument(help="PUBLISHED 글")] = None,
+    missing: Annotated[bool, typer.Option(help="derived_at 이 없는 PUBLISHED 글 전부(정리와 같은 일)")] = False,
+    rebuild: Annotated[bool, typer.Option(help="있는 기록을 다시 만들어 덮어쓴다")] = False,
+) -> None:
+    """제작 기록을 만든다. LLM 호출 없음."""
+    if draft_id is None and not missing:
+        typer.echo("draft_id 나 --missing 중 하나가 필요하다.", err=True)
+        raise typer.Exit(1)
+
+    async def _build(database, settings):
+        if draft_id is not None:
+            service = build_provenance_service(database, settings)
+            record = await service.build_for_draft(draft_id, rebuild=rebuild, built_by="cli")
+            _echo(record.model_dump(mode="json"))
+        else:
+            written = await build_derived_records_writer(database).write_missing(built_by="cli")
+            _echo({"written": written})
+
+    _run_agents(_build)
+
+
+@provenance.command("show")
+def provenance_show(post_id: str) -> None:
+    """게시글 id 로 제작 기록을 찍는다 (공개 API 와 같은 응답)."""
+
+    async def _show(database, settings):
+        _echo((await build_provenance_service(database, settings).get_public(post_id)).model_dump(mode="json"))
+
+    _run_agents(_show)

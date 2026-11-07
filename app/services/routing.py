@@ -13,7 +13,7 @@ from app.models.routing import (
     ROUTE_ASSESS_LEVEL,
     ROUTE_FACT_TRANSFORM,
     ROUTE_FINAL_READ,
-    ROUTE_POLISH_FORMAT,
+    ROUTE_GLOSSARY,
     ROUTE_POLISH_TONE,
     RoutingSnapshot,
     propose_route,
@@ -22,6 +22,7 @@ from app.models.routing import (
     select_any,
     select_arbiter,
     select_independent,
+    select_optional,
     select_proposer,
     select_reviewers,
     select_reviser,
@@ -53,7 +54,6 @@ def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding]) -> RoutingSnap
         ROUTE_ARBITRATE,
         ROUTE_FINAL_READ,
         ROUTE_ASSESS_LEVEL,
-        ROUTE_POLISH_FORMAT,
         ROUTE_POLISH_TONE,
         ROUTE_FACT_TRANSFORM,
     ):
@@ -109,9 +109,10 @@ class DraftRoutes:
         return select_independent(self._snapshot, ROUTE_POLISH_TONE, self._writer.provider)
 
     @property
-    def format_polisher(self) -> CallModel:
-        return select_any(self._snapshot, ROUTE_POLISH_FORMAT)
-
-    @property
     def fact_transformer(self) -> CallModel:
         return select_any(self._snapshot, ROUTE_FACT_TRANSFORM)
+
+    @property
+    def glossary_extractor(self) -> CallModel | None:
+        """용어 추출. 벤더 제약이 없다. 라우트가 없는 라운드(이 기능 전 스냅샷)는 None 이고 단계를 건너뛴다."""
+        return select_optional(self._snapshot, ROUTE_GLOSSARY)

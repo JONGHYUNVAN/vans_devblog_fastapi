@@ -11,6 +11,6 @@ def test_three_personas_cover_the_three_lenses():
 
 
 def test_get_persona_returns_profile_and_rejects_unknown_id():
-    assert get_persona("architect").display_name == "구조적 아키텍트"
+    assert get_persona("architect").display_name == "아키텍처와 경계"
     with pytest.raises(ValueError, match="unknown persona"):
         get_persona("nobody")

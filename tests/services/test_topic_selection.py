@@ -23,7 +23,7 @@ DISTINCT = {
 
 def _by_slot(outputs: dict[AgentSlot, str | Exception]):
     """PROPOSE_TOPIC 은 슬롯 순으로 gather 되므로 입력의 페르소나로 슬롯을 가려 답한다."""
-    by_persona = {"구조적 아키텍트": A, "시스템 엔지니어": B, "실용주의 트러블슈터": C}
+    by_persona = {"아키텍처와 경계": A, "시스템 내부 동작": B, "엣지 케이스와 실패 모드": C}
 
     def build(call_input):
         outcome = outputs[by_persona[call_input["persona"]["display_name"]]]

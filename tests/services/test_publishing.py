@@ -323,7 +323,7 @@ async def test_note_lists_only_models_that_changed_the_body():
     note = build_peer_review_note(draft, publishing_round)
 
     assert "- 모델: fake-a-1 작성, fake-b-1(논리·가독성)·fake-c-1(사실·구조)·fake-b-1(비판·실무) 리뷰\n" in note
-    assert "이 글은 **구조적 아키텍트**가 작성하고 논리·가독성, 사실·구조, 비판·실무 관점의 교차 리뷰를 거쳐" in note
+    assert "이 글은 **fake-a-1** 모델이 작성하고 논리·가독성, 사실·구조, 비판·실무 관점의 교차 리뷰를 거쳐" in note
 
 
 async def test_note_for_a_reviser_on_another_model_says_so():

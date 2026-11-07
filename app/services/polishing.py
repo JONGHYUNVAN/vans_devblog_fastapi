@@ -1,4 +1,4 @@
-"""발행 전 다듬기: 정규식, 줄바꿈(가장 싼 모델), 문체(작성 벤더가 아닌 모델). 뜻을 바꾸지 않는 표현만 고친다.
+"""발행 전 다듬기: 정규식 어미 치환과 문체(작성 벤더가 아닌 모델). 뜻을 바꾸지 않는 표현만 고친다. 줄바꿈 다듬기(POLISH_FORMAT)는 v4 에서 뺐다.
 
 모델이 글 전체를 다시 쓰지 못하게 문단 단위 패치만 받고, 안전장치를 통과한 패치만 적용한다. 압축된 서사를 풀어 쓰는 일은 하지 않는다.
 다듬기 실패는 글을 멈추지 않는다. 수정 루프로 돌아가지 않고, 패치가 없으면 새 버전도 만들지 않는다. 호출·게이트 실패는 PolishRecord 에 남는다.
@@ -9,13 +9,11 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
-from app.agents.builders import persona_of, render_messages
-from app.agents.contracts import ParagraphForPolish, PolishFormatInput, PolishOutput, PolishToneInput
+from app.agents.builders import render_messages
+from app.agents.contracts import ParagraphForPolish, PolishOutput, PolishToneInput
 from app.core.config import Settings
 from app.models.enums import CallKind
-from app.models.model_binding import CallModel
 from app.models.post_draft import DiscardedPatch, PolishRecord, PostDraft
 from app.models.publishing_round import PublishingRound
 from app.models.sections import ANCHOR_PATTERN, find_anchors
@@ -36,7 +34,6 @@ _LENGTH_SLACK_CHARS = 30  # 문체 패치의 길이 변화 허용폭. 이보다 
 _LENGTH_SLACK_RATIO = 0.25
 _PARAGRAPH_TOKENS = frozenset({"paragraph_open", "inline", "paragraph_close"})
 _PLAIN_INLINE = frozenset({"text", "softbreak", "hardbreak"})
-_BREAK = re.compile(r" ?\n+ ?")
 # 정규식으로 고치는 어미. 인라인 코드 밖에서만 적용한다
 _PHRASE_FIXES = (
     (re.compile(r"하십시오"), "한다"),
@@ -76,14 +73,6 @@ class _Document:
             ParagraphForPolish(index=index, text=self.pieces[position])
             for index, position in enumerate(self.paragraph_positions)
         ]
-
-
-def _only_breaks_differ(before: str, after: str) -> bool:
-    """줄바꿈과 그에 붙은 공백 하나만 다른가. 문단 나누기는 공백 하나를 빈 줄로 바꾸므로 이것까지 허용한다.
-
-    공백 전체를 무시하면 띄어쓰기로 뜻이 바뀌는 한국어 문장과 인라인 코드가 깨진다.
-    """
-    return _BREAK.sub(" ", before) == _BREAK.sub(" ", after)
 
 
 def _signature(text: str) -> tuple[list[str], ...]:
@@ -126,12 +115,6 @@ def _preserved_violation(before: str, after: str) -> str | None:
     return "서식 변경" if _inline_markup(before) != _inline_markup(after) else None
 
 
-def _format_violation(before: str, after: str) -> str | None:
-    if not _only_breaks_differ(before, after):
-        return "줄바꿈 외의 변경"
-    return _preserved_violation(before, after)
-
-
 def _tone_violation(before: str, after: str) -> str | None:
     if abs(len(after) - len(before)) > max(_LENGTH_SLACK_CHARS, len(before) * _LENGTH_SLACK_RATIO):
         return "길이 변화"
@@ -169,45 +152,30 @@ class PolishingService:
             if len(each.text) >= _LONG_PARAGRAPH_CHARS
         ]
 
-        steps: list[
-            tuple[CallKind, Callable[[], CallModel], Callable[[], Any], Callable[[str, str], str | None], str]
-        ] = [
-            (
-                CallKind.POLISH_FORMAT,
-                lambda: routes.format_polisher,
-                lambda: PolishFormatInput(paragraphs=document.paragraphs()),
-                _format_violation,
-                "format",
-            ),
-            (
-                CallKind.POLISH_TONE,
-                lambda: routes.tone_polisher,
-                lambda: PolishToneInput(
-                    paragraphs=document.paragraphs(),
-                    tone_markers=persona_of(publishing_round, draft.author_slot).tone_markers,
+        try:
+            model = routes.tone_polisher
+            result = await self._calls.call(
+                kind=CallKind.POLISH_TONE,
+                round_id=draft.round_id,
+                binding=model,
+                messages=render_messages(
+                    PolishToneInput(paragraphs=document.paragraphs()), self._settings.prompt_version, model
                 ),
-                _tone_violation,
-                "tone",
-            ),
-        ]
-        for kind, select_model, build_input, violation, source in steps:
-            try:
-                model = select_model()
-                result = await self._calls.call(
-                    kind=kind,
-                    round_id=draft.round_id,
-                    binding=model,
-                    messages=render_messages(build_input(), self._settings.prompt_version),
-                    schema=PolishOutput,
-                    draft=draft,
-                    target_version=base.version_number,
-                )
-            except Exception as exc:  # 다듬기 실패는 글을 멈추지 않는다(재시도 소진·예산 초과·벤더 거부 전부)
-                logger.warning("draft %s skipped %s: %s", draft.draft_id, kind, exc)
-                record.skipped.append(f"{kind}: {type(exc).__name__}")
-                continue
+                schema=PolishOutput,
+                draft=draft,
+                target_version=base.version_number,
+            )
+        except Exception as exc:  # 다듬기 실패는 글을 멈추지 않는다(재시도 소진·예산 초과·벤더 거부 전부)
+            logger.warning("draft %s skipped %s: %s", draft.draft_id, CallKind.POLISH_TONE, exc)
+            record.skipped.append(f"{CallKind.POLISH_TONE}: {type(exc).__name__}")
+        else:
             applied = self._apply(
-                document, source, [(each.index, each.text) for each in result.output.patches], violation, level, record
+                document,
+                "tone",
+                [(each.index, each.text) for each in result.output.patches],
+                _tone_violation,
+                level,
+                record,
             )
             if applied:
                 last_call_id = result.call_id

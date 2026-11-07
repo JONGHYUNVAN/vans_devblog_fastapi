@@ -14,6 +14,7 @@ from app.models.enums import (
     ClaimStatus,
     ClaimType,
     FinalReadKind,
+    GlossaryStatus,
     IssueSeverity,
     PostLevel,
     ResolutionStatus,
@@ -37,30 +38,34 @@ class StructureRules(BaseModel):
     min_code_blocks: int = 1
     language: str = "ko"
     forbidden_syntax: list[str] = Field(
-        default_factory=lambda: ["HTML 태그(섹션 앵커 제외)", "이미지", "각주", "mermaid 코드 블록"]
+        default_factory=lambda: [
+            "HTML tags (except section anchors)",
+            "Images (![alt](url))",
+            "Footnotes",
+            "mermaid code blocks",
+        ]
     )
 
 
 class TonePreservationRule(BaseModel):
     may_flag: list[str] = Field(
         default_factory=lambda: [
-            "사실 오류",
-            "논리 결함",
-            "코드 버그·컨벤션 위반",
-            "이해를 방해하는 문장 구조",
-            "의미 없는 완충 문구·상투적 도입/마무리",
+            "Factual errors or specification mismatches",
+            "Logical leaps or broken causal links",
+            "Code bugs, syntax errors, or body-code contradictions",
+            "Sentence structures that obstruct comprehension",
+            "Hollow filler phrases or cliched AI introductions/summaries",
         ]
     )
     must_not_flag: list[str] = Field(
         default_factory=lambda: [
-            "유머·위트",
-            "1인칭 화법",
-            "문장 리듬·길이 선호",
-            "어조(직설·시니컬 포함)",
-            "불릿 대신 서술을 택한 것 자체",
+            "First-person narrative choice",
+            "Sentence rhythm and length preferences",
+            "Direct or assertive tone",
+            "Choosing prose paragraphs over bullet lists",
         ]
     )
-    author_tone_markers: list[str]  # 페르소나의 tone_markers. 페르소나 이름은 없다
+    author_tone_markers: list[str] = Field(default_factory=list)  # v4 에서는 항상 비어 있다. 옛 영수증 호환용
 
 
 # ── PROPOSE_TOPIC ──────────────────────────────────────────────────────
@@ -90,9 +95,11 @@ class ProposeTopicOutput(BaseModel):
 
 
 class WriteDraftInput(BaseModel):
-    persona: PersonaProfile
+    """작성자는 확정된 topic 만 본다. 페르소나는 넣지 않는다(v4). 옛 영수증의 persona 키는 읽을 때 버려진다."""
+
     topic: TopicProposal
     structure_rules: StructureRules
+    level_criteria: LevelCriteria  # topic.target_level 이 요구하는 assessment·evidence 기준
     evidence: str | None = None  # 실제 프로젝트 근거. 경험담은 이 안의 사실로만 쓴다
 
 
@@ -118,7 +125,6 @@ class ArbitrationForAuthor(BaseModel):
 
 
 class ReviseDraftInput(BaseModel):
-    persona: PersonaProfile
     topic: TopicProposal
     structure_rules: StructureRules
     previous: DraftOutput  # 직전 제출 버전. 게이트에 떨어진 본문도 여기 들어간다
@@ -196,6 +202,7 @@ class ReviewInput(BaseModel):
     secondary_lens: ReviewLens | None
     topic: TopicForReviewer  # 독자층·목차. 저자 정보 없음
     content_markdown: str
+    level_criteria: LevelCriteria  # topic.target_level 이 뜻하는 깊이. 미달은 MINOR 로만 적는다(D-54, Q-19)
     tone_preservation: TonePreservationRule
 
 
@@ -389,13 +396,8 @@ class ParagraphForPolish(BaseModel):
     text: str
 
 
-class PolishFormatInput(BaseModel):
-    paragraphs: list[ParagraphForPolish]
-
-
 class PolishToneInput(BaseModel):
-    paragraphs: list[ParagraphForPolish]
-    tone_markers: list[str]
+    paragraphs: list[ParagraphForPolish]  # v4: tone_markers 없음. 줄바꿈 다듬기(POLISH_FORMAT)는 뺐다
 
 
 class ParagraphPatch(BaseModel):
@@ -405,3 +407,69 @@ class ParagraphPatch(BaseModel):
 
 class PolishOutput(BaseModel):
     patches: list[ParagraphPatch]
+
+
+# ── GLOSSARY ───────────────────────────────────────────────────────────
+
+
+class DomainOption(BaseModel):
+    slug: str
+    label: str
+
+
+class KnownSense(BaseModel):
+    sense_key: str
+    domains: list[str]
+    definition: str
+    distinguisher: str = ""
+    status: GlossaryStatus  # APPROVED·PROPOSED 만 보낸다
+
+
+class KnownHeadword(BaseModel):
+    key: str
+    term_ko: str
+    term_en: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    senses: list[KnownSense] = Field(default_factory=list)
+
+
+class GlossaryInput(BaseModel):
+    """용어 추출 입력 (설계 08 문서 2.3절). 사전이 작으면 표제어 전체를 넣는다."""
+
+    title: str
+    audience: str
+    prerequisites: str  # 여기 있는 지식은 뽑지 않는다
+    main_category: str
+    keywords: list[str]
+    content_markdown: str  # 발행본. 앵커 유지 (section_id 의 근거)
+    section_ids: list[str]
+    known_headwords: list[KnownHeadword]
+    allowed_domains: list[DomainOption]  # DOMAINS 표. 새 뜻의 domains 는 이 중에서만
+    min_terms: int = 8
+    max_terms: int = 12
+
+
+class SenseProposal(BaseModel):
+    domains: list[str] = Field(min_length=1, max_length=3)  # allowed_domains 의 슬러그만. 첫째가 주 영역
+    definition: str = Field(min_length=1, max_length=240)  # 2문장 이하, "~다"
+    distinguisher: str = Field(default="", max_length=80)  # 한 줄. 표제어에 다른 뜻이 있을 때 채운다
+
+
+class GlossaryCandidate(BaseModel):
+    term_ko: str = ""
+    term_en: str | None = None
+    surface: str = Field(min_length=1)  # 본문에 있는 그대로. 조사 포함. 코드 밖. 한 줄
+    section_id: str  # 첫 등장 앵커
+    same_as: str | None = None  # known_headwords 의 key 중 하나 또는 null. 목록 밖 키는 코드가 null 로 본다
+    sense_key: str | None = None  # 그 표제어의 기존 뜻 키. 확신이 없으면 null
+    sense_candidates: list[str] = Field(default_factory=list)
+    new_sense: SenseProposal | None = None  # 기존 정의가 이 글에서 틀린 말이 될 때만
+
+    @field_validator("section_id")
+    @classmethod
+    def _normalize_section_id(cls, value: str) -> str:
+        return normalize_section_id(value)
+
+
+class GlossaryOutput(BaseModel):
+    candidates: list[GlossaryCandidate] = Field(max_length=24)  # 글당 상한(max_terms)은 코드가 자른다

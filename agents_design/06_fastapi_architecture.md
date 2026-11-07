@@ -33,12 +33,21 @@ app/
 │  ├─ config.py                Settings: 벤더 키, 반복·예산 상수, 승인 토글, 벤더별 발행 계정
 │  └─ exceptions.py            AppError + InvalidTransitionError(409), ConcurrentUpdateError(409), BudgetExceededError, LLMTransportError, LLMOutputError, LLMRetriesExhaustedError, PublishFailedError, PublishUncertainError
 ├─ routers/
-│  └─ agent_rounds.py          내부 API (X-Internal-Key)
+│  ├─ agent_rounds.py          내부 API (X-Internal-Key)
+│  ├─ glossary.py              공개 읽기: /api/v1/glossary/posts/{id}/, /headwords/{key}/, /terms/ (08 문서 2.6절)
+│  └─ post_provenance.py       공개 읽기: /api/v1/agents/posts/{id}/provenance/ (키 없음. 같은 접두의 별도 라우터, 08 문서 3.5절)
 ├─ schemas/
-│  └─ agent_pipeline.py        RoundCreate, RoundPublic, DraftPublic, DraftHistory, EscalationDecision, DraftApproval, DraftRetry, DraftDiscard, RoundProgress(CLI), … 필드 타입으로만 models 를 쓴다. 변환은 services/pipeline_views.py
+│  ├─ agent_pipeline.py        RoundCreate, RoundPublic, DraftPublic, DraftHistory, EscalationDecision, DraftApproval, DraftRetry, DraftDiscard, RoundProgress(CLI), … 필드 타입으로만 models 를 쓴다. 변환은 services/pipeline_views.py
+│  ├─ glossary.py              PostGlossaryPublic, PostGlossaryItemPublic, OtherSensePublic, DomainPublic, GlossaryTermList, HeadwordPublic, SensePublic, PostRef
+│  └─ provenance.py            ProvenancePublic 과 하위(단계·호출·버전). 저장 문서에서 built_by 와 호출 오류 문자열을 뺀 것
 ├─ services/
 │  ├─ routing.py               DraftRoutes(글 하나의 호출별 모델 선택), 라우팅 전 라운드의 legacy_snapshot
 │  ├─ polishing.py             PolishingService: 정규식·줄바꿈·문체 패치와 안전장치
+│  ├─ glossary.py              GlossaryService: extract(POST_REVIEW 의 GLOSSARY 단계), 등록 확인·뜻 선택(_resolve), pending·show·승인·거절·별칭·resolve·drop·merge·merge-sense·check·backfill (08 문서 2.2~2.5절)
+│  ├─ glossary_matching.py     normalize_key, headword_key_of, similarity, similar_headwords. 순수 함수
+│  ├─ glossary_views.py        GlossaryViewService: 공개 읽기(승인된 것만)와 엔티티 → 응답 변환
+│  ├─ provenance.py            build_provenance(영수증 → 글 단위 문서, 순수 함수), build_provenance_public, ProvenanceService(공개 조회·단건 보충)
+│  ├─ derived_records.py       DerivedRecordsWriter: 발행 뒤 post_glossary·post_ids·post_provenance 따라 쓰기와 derived_at. 발행·CONFIRM_PUBLISHED·정리·CLI 가 같이 쓴다
 │  ├─ round.py                 RoundService: 라우트 넣기·스냅샷, 라운드 생성(create_round: 라우트·페르소나·조합 검증, round_id 는 uuid, round_seq 는 기존 라운드 수 + 1)·글 문서 생성(build_draft)·종결(close_if_complete)·중단(abort_round)·정리(reconcile)
 │  ├─ topic_selection.py       TopicSelectionService.drive(round_id): 제안 수집, 중복 판별, 배정, 확정 (Phase 1). 한 걸음(제안·배정·확정)마다 라운드를 저장한다
 │  ├─ draft_pipeline.py        DraftPipelineService.drive(draft_id): 글 하나를 사람 대기나 종결까지 진행. 발행은 DraftPublisher 계약(PublishingService 가 구현)
@@ -65,13 +74,17 @@ app/
 │     │  └─ arbitrate.md
 │     ├─ v2/                   작성·수정에 문장 규칙 (D-47)
 │     ├─ v3/                   범위·수준·문단 규칙과 arbitrate_search, fact_check, fact_transform, final_read, assess_level, polish_format, polish_tone (D-59)
-│     └─ registry.py           PROMPT_VERSION = "v3", 템플릿 로더(load_template). 템플릿은 string.Template($display_name, $writer_bias)이고 .dockerignore 의 *.md 에서 예외다
+│     ├─ v4/                   가족별 디렉터리 claude/ gemini/ grok/ haiku/ common/. 영어 지시문·한국어 결과물, 페르소나 없음, polish_format 없음 (D-62). haiku/glossary.md 는 용어 추출이고 같은 파일이 v3/glossary.md(평면)에도 있다 (08 문서 D-69)
+│     └─ registry.py           PROMPT_VERSION = "v3"(Settings.prompt_version 이 실제 값), 로더 load_template(가족 → common → 평면), prompt_family, validate_prompts(라운드 생성 때). 템플릿은 string.Template($writer_bias)이고 .dockerignore 의 *.md 에서 예외다
 ├─ repositories/
 │  ├─ optimistic_lock.py       replace_with_revision: revision 조건 저장. agent_round·post_draft 가 같이 쓴다
 │  ├─ agent_round.py           agent_rounds 컬렉션, 주제 선정 라운드 부분 unique 인덱스
 │  ├─ post_draft.py            agent_drafts 컬렉션, revision 기반 낙관적 잠금
 │  ├─ agent_call.py            agent_calls 컬렉션, 글별 usage 합계
 │  ├─ model_route.py           agent_routes 컬렉션. 호출별 후보, SLOTS, LEVEL_CRITERIA 문서
+│  ├─ glossary.py              glossary_headwords·glossary_senses·post_glossary·glossary_counters. lookup_keys unique 다중키, next_sense_key
+│  ├─ post_provenance.py       post_provenance 컬렉션
+│  ├─ post_ref.py              Post BE 소유 posts·categories 읽기 전용(비동기). 뜻의 글 목록 링크용
 │  └─ topic_registry.py        agent_topics 컬렉션. list_active(중복 판별용 전체)·list_active_since(회피 목록용)
 ├─ models/
 │  ├─ enums.py                 02 문서 열거형
@@ -83,6 +96,8 @@ app/
 │  ├─ tiptap.py                markdown_to_tiptap: 04 문서 8절 변환표. markdown-it-py(commonmark + table·strikethrough)로 파싱한다. 순수 함수. 변환 불가는 ValueError
 │  ├─ routing.py               RoutingSnapshot, 후보 선택(select_*), 벤더·모델 지원표(candidate_errors), 라운드 생성 전 검사(validate_snapshot)
 │  ├─ level.py                 수준 기준표와 참고 글
+│  ├─ glossary.py              GlossaryHeadword, GlossarySense, PostGlossary, PostGlossaryItem, PendingTerm, GlossaryRecord, PostRefRecord, DOMAINS(영역 슬러그 → 표시 이름)
+│  ├─ provenance.py            PostProvenance 와 하위 모델, STAGE_LABELS
 │  └─ model_binding.py         ModelBinding(슬롯 응답 계약), CallModel(호출·영수증)
 └─ clients/
    ├─ mongo.py                 create_async_mongo_client
@@ -98,7 +113,7 @@ app/
       ├─ base.py               Publisher Protocol: list_categories() -> list[PostCategory], publish(PostCreatePayload) -> PublishResult. PostCreatePayload 는 CreatePostDto(camelCase alias)
       └─ post_be.py            PostBEPublisher: GET /api/v1/categories?activeOnly=true, 발행마다 vans_story_be POST /api/v1/auth/login(토큰은 응답 Authorization 헤더) → POST /api/v1/posts(Bearer). 실패 분류는 3절
 cli/
-└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics·seed-routes·routes·label·compare-prompts·fact-check
+└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics·seed-routes·routes·label·compare-prompts·fact-check, `agents glossary …`(08 문서 2.5절), `agents provenance build/show`
 ```
 
 ### `agents/`의 위치
@@ -237,6 +252,17 @@ class DraftPipelineService:
 
 경로는 trailing slash 포함(CONVENTIONS 2절). 상태 전이 위반은 409 `InvalidTransitionError`.
 
+### `routers/glossary.py`·`routers/post_provenance.py` (공개, 키 없음)
+
+vans_story 가 읽는다. 발행된 글의 부속이라 비밀이 없다(08 문서 D-63). 읽기는 `GlossaryViewService`·`ProvenanceService`, 쓰기는 CLI 뿐이다.
+
+| 메서드 | 경로 | 동작 |
+|---|---|---|
+| `GET` | `/api/v1/glossary/posts/{post_id}/` | 그 글의 승인된 항목과 같은 표제어의 다른 승인된 뜻. 추출 기록 없는 글(사람 글)은 404 |
+| `GET` | `/api/v1/glossary/headwords/{key}/` | 표제어와 승인된 뜻 전부, 뜻마다 글 목록(`posts`·`categories` 읽기). 미승인은 404 |
+| `GET` | `/api/v1/glossary/terms/?q=&page=&size=` | 승인된 사전. `q` 는 정규화 키 부분 일치(Mongo 만) |
+| `GET` | `/api/v1/agents/posts/{post_id}/provenance/` | 제작 기록 공개 응답. 없으면 404. `/api/v1/agents/` 접두지만 키 의존성이 없는 별도 라우터다 |
+
 ### `cli/`
 
 | 명령 | 동작 |
@@ -257,6 +283,11 @@ class DraftPipelineService:
 | `agents abort <round_id>` | 중단 |
 | `agents replay <call_id> [--provider] [--model]` | 영수증의 메시지를 그대로 다시 보내 응답·파싱 결과·토큰을 찍는다(프롬프트 튜닝용, 영수증·상태 변경 없음). 다른 모델로 보낼 수 있다. 파싱은 스키마까지만 본다 |
 | `agents metrics [--round-id]` | 07 문서 4절 지표를 JSON 으로 찍는다 |
+| `agents glossary pending [--draft-id] [--post-id]` / `show <id>` | PROPOSED 표제어·뜻·별칭과 보류 항목 / 그 글의 항목(표시 여부)·보류·버린 것 (08 문서 2.5절) |
+| `agents glossary approve <post_id \| draft_id>` / `approve-headword` / `approve-sense` / `reject-headword` / `reject-sense` / `alias` / `unalias` / `resolve` / `drop` | 승인·거절·별칭·보류 해소. 승인은 전역이고 둘째 뜻 승인은 구분 문구가 필요하다 |
+| `agents glossary extract <draft_id> \| --missing` | 보충. 발행본으로 `GLOSSARY` 호출을 돌려 글 기록과 `post_glossary` 를 다시 쓴다 |
+| `agents glossary dedupe [--out]` / `merge <key> --into <key>` / `merge-sense <key> --into <key>` / `check` / `terms` | 정리와 무결성 (08 문서 2.4절) |
+| `agents provenance build <draft_id> [--rebuild] \| --missing` / `show <post_id>` | 제작 기록 생성(LLM 없음)·조회 (08 문서 3.4절) |
 
 ## 4. 설정 (`core/config.py`)
 
@@ -301,6 +332,13 @@ class Settings(BaseSettings):
     agent_main_categories: str = "nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm"  # 블로그에 화면이 있는 메인 (D-60)
     prompt_version: str = "v3"
     llm_concurrency_per_provider: int = 2
+
+    # 용어 사전 (08 문서 2.3절)
+    glossary_full_list_max: int = 300     # 이 수까지는 표제어 전체를 추출 입력에 넣는다
+    glossary_min_terms: int = 8
+    glossary_max_terms: int = 12
+    glossary_surface_max_chars: int = 40
+    glossary_terminology_max: int = 150   # 작성자 표기 표준 입력 상한 (2.7절, 아직 프롬프트에 넣지 않는다)
 ```
 
 호출별 모델은 `Settings` 가 아니라 Mongo `agent_routes` 컬렉션이다(07 문서 D-51). temperature·effort 도 후보에 있다. 새 변수는 `.env.example`에 같이 추가한다. 슬롯의 페르소나·작성 모델을 라운드 생성 요청으로 덮어쓸 수 있게 해 A/B 테스트를 지원한다(라운드 문서에 스냅샷 저장).
@@ -329,6 +367,10 @@ class Settings(BaseSettings):
 | `models/routing.py` | 후보 선택(벤더 회피, 결정론), 키 없는 벤더 제외, 라우트 누락·지원하지 않는 조합 거절, 예시 파일 검사 |
 | `services/polishing.py` | 안전장치별 패치 거절, 문단 위치 유지, 패치 없으면 새 버전 없음, 호출·게이트 실패가 글을 멈추지 않음 |
 | `services/metrics.py` | 순수 함수. 밀도·범위 밖 비율·수준 일치도·모델/렌즈별 토큰과 fast-track(v1 이 발행본인 글만)·iteration·격리·실패 사유·중재·판정 불일치(렌즈별)·게이트 실패 종류(게이트를 거친 버전만)·`REJECTED_WITH_REASON`·종류별·글별 토큰. 빈 입력은 비율이 `None` |
+| `services/glossary_matching.py` | 정규화 키 표(08 문서 2.1절), 2-gram 유사도 순서·임계·상한 |
+| `services/glossary.py` | 시나리오 ⑭ 추출 성공 → PROPOSED 저장 → `READY_TO_PUBLISH` ⑮ 호출 실패해도 `READY_TO_PUBLISH` 와 `skipped` ⑯ 라우트 없는 스냅샷은 호출 없이 건너뜀 ⑰ 재개 때 되풀이 없음, 정확 일치가 AI `same_as` 를 이김, `same_as` 가 별칭 제안, 목록 밖 `same_as` → 새 표제어, 후보 버림 사유 7종, 뜻 둘에 AI 미정 → 보류, 영역만 다른 제안은 같은 뜻, 둘째 뜻 승인의 구분 문구 불변식, `approve_all` 의 건너뜀 사유, 별칭 유일성, `resolve`·`drop`, 읽기 API 가 승인된 것만 + `other_senses`, 표제어·뜻 병합, `check`, `backfill` |
+| `services/provenance.py`·`derived_records.py` | 영수증 → 단계 매핑(3.3절 표 행마다)·실패 시도 포함 합계·다른 글·다른 슬롯 영수증 제외, 영수증 없는 글, 공개 응답의 오류 문자열 제거, 발행 뒤 `post_glossary`·`post_ids`·`post_provenance`·`derived_at` 한 번, 정리가 빠진 것을 마저 씀, `CONFIRM_PUBLISHED` 경로, `--rebuild` |
+| `repositories/glossary.py`·`post_ref.py` | `lookup_keys` unique 다중키, 뜻 키 순번, `$addToSet` 한 번, ObjectId 로 `posts`·`categories` 읽기 |
 | `services/pipeline_views.py` | 라운드 진행 상태(승인 대기·글별 토큰), 격리 요약(diff·미해소·기각·중재), 영수증 필터(둘 다 없으면 400), 없는 id 는 404. 응답 형태는 라우터 golden 이 본다 |
 | `AgentCallService.replay` | 영수증 메시지를 그대로 보내고 새 영수증을 남기지 않음, 바인딩 덮어쓰기, `REVIEW` 영수증의 scope 로 출력 계약 선택 |
 | `services/publishing.py` | `CreatePostDto` 매핑. 외부 호출 후 로컬 반영 전 장애를 재현하면 다시 `drive`해도 호출하지 않고 `PUBLISH_UNCERTAIN`. `PublishFailedError`는 재시도 후 상한에서 `PUBLISH_FAILED`, `PublishUncertainError`는 즉시 `PUBLISH_UNCERTAIN`. `CONFIRM_PUBLISHED`는 호출 없이 `PUBLISHED`, `PUBLISH_AS_IS`·`REVISE`는 카운터·의도를 지움. 로그인 단계 실패는 결과 확정. 요약 노트에 HTML·여러 줄이 든 지적이 있어도 변환 성공. 응답 반영 전에 `REJECTED`이면 `PUBLISHED`로 쓰지 않고 `external_post_id`만 의도에 남긴다 |

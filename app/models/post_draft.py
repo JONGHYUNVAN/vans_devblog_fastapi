@@ -31,6 +31,7 @@ from app.models.enums import (
     RevisionCause,
     RoundAbortReason,
 )
+from app.models.glossary import GlossaryRecord
 from app.models.sections import normalize_section_id
 from app.models.topic import TopicProposal
 
@@ -238,6 +239,9 @@ class Publication(BaseModel):
     external_post_id: str  # Post BE 게시글 id. 발행 응답 또는 CONFIRM_PUBLISHED 결정에서 온다
     peer_review_note: str  # 하단 부록 마크다운. 발행 때 본문과 함께 Tiptap 으로 변환한다
     approved_by: str | None = None
+    derived_at: datetime | None = (
+        None  # 글 단위 파생 문서(post_glossary·post_provenance)를 다 쓴 시각. 없으면 정리가 마저 쓴다
+    )
 
 
 class FailureRecord(BaseModel):
@@ -348,6 +352,7 @@ class PostDraft(BaseModel):
     final_read: FinalRead | None = None
     level_assessment: LevelAssessment | None = None
     polish: PolishRecord | None = None
+    glossary: GlossaryRecord | None = None  # 용어 추출 결과. 발행 때 post_glossary 로 옮긴다 (설계 08 문서 2.2절)
     user_level: PostLevel | None = None  # 사용자가 직접 매긴 수준. 평가자와의 일치도 측정에 쓴다
     publication_intent: PublicationIntent | None = None
     publication: Publication | None = None
@@ -780,6 +785,12 @@ class PostDraft(BaseModel):
     def record_level_assessment(self, assessment: LevelAssessment) -> None:
         self._require_stage(PostReviewStage.ASSESS_LEVEL)
         self.level_assessment = assessment
+        self._advance_post_review(PostReviewStage.GLOSSARY)
+
+    def finish_glossary(self, record: GlossaryRecord) -> None:
+        """용어 추출을 끝낸다. 호출이 실패했거나 라우트가 없어 건너뛴 경우도 같다. 글을 멈추지 않는다 (설계 08 문서 D-64)."""
+        self._require_stage(PostReviewStage.GLOSSARY)
+        self.glossary = record
         self._advance_post_review(PostReviewStage.DONE)
 
     def escalate(self, reason: EscalationReason) -> None:

@@ -210,6 +210,7 @@ async def test_start_round_snapshots_post_be_categories():
         route_repository=harness.routes,
         providers=["fake", *FAKE_VENDORS.values()],
         main_categories=["backend"],
+        prompt_version="v3",  # 가짜 벤더는 v4 가족 디렉터리가 없다
     )
 
     publishing_round = await service.start_round(theme_keyword="mongodb", slot_bindings=BINDINGS)

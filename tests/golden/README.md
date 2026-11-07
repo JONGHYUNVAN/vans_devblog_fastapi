@@ -29,6 +29,15 @@ FastAPI 전환 후 같은 요청의 응답 형식을 비교하는 기준으로 �
 | agents_calls.json | GET /api/v1/agents/calls/?round_id=round-1 | 200 |
 | tiptap_sample.json | `tiptap_sample.md` 의 변환 결과 (3단계) | – |
 
+용어 사전·제작 기록 공개 API(2026-11-07)는 설계 08 문서 2.6절·3.5절의 계약이다. `tests/routers/test_glossary.py` 의 시드로 만들고 시각이 고정이라 값까지 비교한다. 키 없이 읽힌다.
+
+| 파일 | 요청 | 상태 |
+|---|---|---|
+| glossary_post.json | GET /api/v1/glossary/posts/6734a1b2c3d4e5f6a7b8c9d0/ | 200 |
+| glossary_terms.json | GET /api/v1/glossary/terms/ | 200 |
+| glossary_headword.json | GET /api/v1/glossary/headwords/token/ | 200 |
+| provenance.json | GET /api/v1/agents/posts/6734a1b2c3d4e5f6a7b8c9d0/provenance/ | 200 |
+
 코드 그래프 API(2026-11-03)는 `code_graph_design/README.md` "API" 절의 계약이다. `code_graph/ts_app` 트리를 실제 서비스로 분석하고 시각을 고정해 값까지 비교한다.
 `code_graph/` 의 소스 트리·`repos.json`·`{트리}.json` 은 파서 입력과 기대 그래프다(`tests/services/test_code_graph.py`).
 

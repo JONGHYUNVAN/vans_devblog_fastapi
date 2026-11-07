@@ -144,7 +144,7 @@ async def test_review_pass_goes_through_post_review_before_waiting_for_approval(
 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert draft.post_review_stage == PostReviewStage.DONE
-    assert harness.llm.all_kinds[-4:] == ["POLISH_FORMAT", "POLISH_TONE", "FINAL_READ", "ASSESS_LEVEL"]
+    assert harness.llm.all_kinds[-3:] == ["POLISH_TONE", "FINAL_READ", "ASSESS_LEVEL"]
     assert draft.level_assessment is not None and draft.level_assessment.level == 200
     assert draft.level_assessment.criteria_version == "v1"
     assert harness.publisher.payloads == []

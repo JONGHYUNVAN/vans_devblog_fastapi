@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.agents.personas import get_persona
+from app.agents.prompts.registry import PROMPT_VERSION, validate_prompts
 from app.clients.publisher.base import PostCategory, Publisher
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError
 from app.models.enums import AgentSlot, PostStatus, RoundAbortReason, RoundStatus, TopicRegistryStatus
@@ -22,6 +23,7 @@ from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.model_route import ModelRouteRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
+from app.services.derived_records import DerivedRecordsWriter
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +44,20 @@ class RoundService:
         route_repository: ModelRouteRepository | None = None,
         providers: Iterable[str] = (),
         main_categories: Iterable[str] = (),
+        prompt_version: str = PROMPT_VERSION,
+        derived_writer: DerivedRecordsWriter | None = None,
     ) -> None:
         self._rounds = round_repository
         self._drafts = draft_repository
         self._topics = topic_registry_repository
         self._publisher = publisher
         self._routes = route_repository
+        self._derived = (
+            derived_writer  # 정리가 PUBLISHED 글의 파생 문서(post_glossary·post_provenance)를 마저 쓴다 (설계 08 문서)
+        )
         self._providers = list(providers)  # API 키가 있는 벤더. 라운드 스냅샷에서 키 없는 후보를 뺀다
         self._main_categories = frozenset(main_categories)  # 블로그에 화면이 있는 메인 카테고리 값 (D-60)
+        self._prompt_version = prompt_version  # 후보 모델의 가족마다 템플릿이 있는지 라운드 생성 때 확인한다
 
     async def get(self, round_id: str) -> PublishingRound | None:
         return await self._rounds.get(round_id)
@@ -132,6 +140,7 @@ class RoundService:
         if len(set(personas)) != len(personas):
             raise ValueError("every slot needs a distinct persona")
         validate_snapshot(snapshot)
+        validate_prompts(snapshot, self._prompt_version)
         return snapshot
 
     async def seed_routes(self, documents: list[Mapping[str, Any]]) -> None:
@@ -139,7 +148,9 @@ class RoundService:
         if self._routes is None:
             raise ValueError("no model route repository is configured")
         declared = {candidate["provider"] for document in documents for candidate in document.get("candidates", [])}
-        validate_snapshot(build_snapshot(documents, declared))
+        snapshot = build_snapshot(documents, declared)
+        validate_snapshot(snapshot)
+        validate_prompts(snapshot, self._prompt_version)
         await self._routes.replace_all(documents)
 
     async def list_route_documents(self) -> list[dict[str, Any]]:
@@ -220,6 +231,8 @@ class RoundService:
                 await self._topics.set_status(entry.entry_id, TopicRegistryStatus.RELEASED)
         for publishing_round in await self._rounds.list_by_status(RoundStatus.IN_PROGRESS):
             await self.close_if_complete(publishing_round.round_id)
+        if self._derived is not None:
+            await self._derived.write_missing()
 
     async def _clean_up(self, publishing_round: PublishingRound) -> None:
         reason = publishing_round.abort_reason or RoundAbortReason.MANUAL

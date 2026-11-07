@@ -14,7 +14,11 @@ _FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 CODE_ANCHOR_PATTERN = re.compile(r"^code-\d+$")
 _LINK_PATTERN = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
-REQUIRED_SECTIONS = ["intro", "body-1", "tradeoff", "conclusion"]
+REQUIRED_SECTIONS = [
+    "intro",
+    "body-1",
+    "tradeoff",
+]  # conclusion 은 v4 에서 필수가 아니다. 상투적 결론 요약을 강제하지 않는다
 
 
 def required_sections_for(level: int | None) -> list[str]:

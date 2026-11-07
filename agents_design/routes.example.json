@@ -72,13 +72,13 @@
     "note": "문단 단위 패치만 받는다. 작성 벤더를 피한다"
   },
   {
-    "_id": "POLISH_FORMAT",
-    "candidates": [{"provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000}],
-    "note": "줄바꿈만 고친다. 안전장치를 통과하지 못하면 원문을 둔다"
-  },
-  {
     "_id": "FACT_TRANSFORM",
     "candidates": [{"provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000}],
     "note": "검색 호출의 글을 계약 JSON 으로 옮긴다. URL 은 코드가 검색 호출의 출처와 대조한다"
+  },
+  {
+    "_id": "GLOSSARY",
+    "candidates": [{"provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000}],
+    "note": "발행본에서 전제 밖 용어를 뽑아 기존 표제어·뜻과 맞춘다(08 문서). 선택 라우트: 없으면 그 단계를 건너뛰고 글은 발행된다"
   }
 ]

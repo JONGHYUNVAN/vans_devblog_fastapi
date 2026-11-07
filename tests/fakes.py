@@ -25,12 +25,16 @@ from app.models.publishing_round import LockedTopic, PublishingRound, TopicAttem
 from app.models.topic import TopicRegistryEntry
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
+from app.repositories.glossary import GlossaryRepository
 from app.repositories.model_route import ModelRouteRepository
 from app.repositories.post_draft import PostDraftRepository
+from app.repositories.post_provenance import PostProvenanceRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
+from app.services.derived_records import DerivedRecordsWriter
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService
+from app.services.glossary import GlossaryService
 from app.services.publishing import PublishingService
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
@@ -269,20 +273,55 @@ class _WriteResult:
         self.matched_count = matched_count
 
 
+def _values_at(doc: dict[str, Any], path: list[str]) -> list[Any]:
+    """점 경로의 값들. 배열을 만나면 원소마다 내려가고, 끝이 배열이면 원소도 후보다 (Mongo 의 다중키 조회: lookup_keys, items.sense_key)."""
+    current: list[Any] = [doc]
+    for part in path:
+        next_values: list[Any] = []
+        for value in current:
+            if isinstance(value, dict):
+                if part in value:
+                    next_values.append(value[part])
+            elif isinstance(value, list):
+                next_values += [element[part] for element in value if isinstance(element, dict) and part in element]
+        current = next_values
+    flattened: list[Any] = []
+    for value in current:
+        flattened.append(value)
+        if isinstance(value, list):
+            flattened += value
+    return flattened
+
+
 def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
-    """리포지토리가 쓰는 조건만 지원한다: 같음, $in, $gte, $ne."""
+    """리포지토리가 쓰는 조건만 지원한다: 같음, $in, $gte, $ne. 점 경로와 배열 원소 일치를 지원한다. 없는 필드는 None 이다."""
     for key, condition in query.items():
-        value = doc.get(key)
+        values = _values_at(doc, key.split(".")) or [None]
         if isinstance(condition, dict):
-            if "$in" in condition and value not in condition["$in"]:
+            if "$in" in condition and not any(value in condition["$in"] for value in values):
                 return False
-            if "$gte" in condition and not (value is not None and value >= condition["$gte"]):
+            if "$gte" in condition and not any(value is not None and value >= condition["$gte"] for value in values):
                 return False
-            if "$ne" in condition and value == condition["$ne"]:
+            if "$ne" in condition and any(value == condition["$ne"] for value in values):
                 return False
-        elif value != condition:
+        elif not any(value == condition for value in values):
             return False
     return True
+
+
+def _index_values(value: Any) -> set[Any]:
+    """unique 인덱스가 보는 값. 배열 필드는 원소마다(다중키), 없는 필드는 비교하지 않는다."""
+    if isinstance(value, list):
+        return set(value)
+    return set() if value is None else {value}
+
+
+def _set_path(doc: dict[str, Any], path: str, value: Any) -> None:
+    target = doc
+    *parents, last = path.split(".")
+    for part in parents:
+        target = target.setdefault(part, {})
+    target[last] = value
 
 
 class FakeAsyncCursor:
@@ -308,17 +347,45 @@ class FakeAsyncCollection:
     async def create_index(self, keys: Any, **options: Any) -> None:
         self.indexes.append((keys, options))
 
-    async def insert_one(self, doc: dict[str, Any]) -> None:
-        if any(existing["_id"] == doc["_id"] for existing in self.docs):
-            raise DuplicateKeyError(f"E11000 duplicate key: {doc['_id']}")
+    def _assert_unique(self, doc: dict[str, Any], exclude: dict[str, Any] | None = None) -> None:
+        """단일 키 unique 인덱스(부분 조건·다중키 포함)만 흉내 낸다: agent_rounds 의 주제 선정 하나, glossary_headwords 의 lookup_keys."""
         for keys, options in self.indexes:
-            # 부분 unique 인덱스(단일 키)만 흉내 낸다 (agent_rounds 의 one_topic_selection_round)
             partial = options.get("partialFilterExpression")
             if not options.get("unique") or not isinstance(keys, str) or not _matches(doc, partial or {}):
                 continue
-            if any(_matches(existing, partial or {}) and existing.get(keys) == doc.get(keys) for existing in self.docs):
-                raise DuplicateKeyError(f"E11000 duplicate key: {options.get('name', keys)}")
+            values = _index_values(doc.get(keys))
+            for existing in self.docs:
+                if existing is exclude or not _matches(existing, partial or {}):
+                    continue
+                if _index_values(existing.get(keys)) & values:
+                    raise DuplicateKeyError(f"E11000 duplicate key: {options.get('name', keys)}")
+
+    async def insert_one(self, doc: dict[str, Any]) -> None:
+        if any(existing["_id"] == doc["_id"] for existing in self.docs):
+            raise DuplicateKeyError(f"E11000 duplicate key: {doc['_id']}")
+        self._assert_unique(doc)
         self.docs.append(copy.deepcopy(doc))
+
+    @staticmethod
+    def _apply_update(doc: dict[str, Any], update: dict[str, Any], inserting: bool = False) -> None:
+        """$set(점 경로), $setOnInsert, $addToSet, $inc 만 지원한다."""
+        for path, value in update.get("$set", {}).items():
+            _set_path(doc, path, copy.deepcopy(value))
+        if inserting:
+            for path, value in update.get("$setOnInsert", {}).items():
+                _set_path(doc, path, copy.deepcopy(value))
+        for path, value in update.get("$addToSet", {}).items():
+            items = doc.setdefault(path, [])
+            for each in value["$each"] if isinstance(value, dict) and "$each" in value else [value]:
+                if each not in items:
+                    items.append(copy.deepcopy(each))
+        for path, amount in update.get("$inc", {}).items():
+            doc[path] = doc.get(path, 0) + amount
+
+    def _upserted(self, query: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+        doc = {key: copy.deepcopy(value) for key, value in query.items() if not isinstance(value, dict)}
+        self._apply_update(doc, update, inserting=True)
+        return doc
 
     async def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
         return next((copy.deepcopy(doc) for doc in self.docs if _matches(doc, query)), None)
@@ -331,18 +398,44 @@ class FakeAsyncCollection:
     ) -> _WriteResult:
         for index, doc in enumerate(self.docs):
             if _matches(doc, query):
+                self._assert_unique(replacement, exclude=doc)
                 self.docs[index] = copy.deepcopy(replacement)
                 return _WriteResult(1)
         if upsert:
-            self.docs.append(copy.deepcopy(replacement))
+            await self.insert_one(replacement)
         return _WriteResult(0)
 
-    async def update_one(self, query: dict[str, Any], update: dict[str, Any]) -> _WriteResult:
+    async def update_one(self, query: dict[str, Any], update: dict[str, Any], upsert: bool = False) -> _WriteResult:
         for doc in self.docs:
             if _matches(doc, query):
-                doc.update(copy.deepcopy(update["$set"]))
+                self._apply_update(doc, update)
+                self._assert_unique(doc, exclude=doc)
                 return _WriteResult(1)
+        if upsert:
+            await self.insert_one(self._upserted(query, update))
         return _WriteResult(0)
+
+    async def update_many(self, query: dict[str, Any], update: dict[str, Any]) -> _WriteResult:
+        matched = 0
+        for doc in self.docs:
+            if _matches(doc, query):
+                self._apply_update(doc, update)
+                matched += 1
+        return _WriteResult(matched)
+
+    async def find_one_and_update(
+        self, query: dict[str, Any], update: dict[str, Any], upsert: bool = False, return_document: Any = None
+    ) -> dict[str, Any] | None:
+        """갱신 뒤 문서를 돌려준다 (ReturnDocument.AFTER 만 흉내 낸다. glossary_counters)."""
+        for doc in self.docs:
+            if _matches(doc, query):
+                self._apply_update(doc, update)
+                return copy.deepcopy(doc)
+        if upsert:
+            doc = self._upserted(query, update)
+            await self.insert_one(doc)
+            return copy.deepcopy(doc)
+        return None
 
     async def aggregate(self, pipeline: list[dict[str, Any]]) -> FakeAsyncCursor:
         """$match 하나와 $group(_id: None, 필드: {$sum: "$a.b"}) 하나만 지원한다 (AgentCallRepository.sum_usage)."""
@@ -439,8 +532,8 @@ _KIND_MARKERS = {
     "JSON 으로 옮기는 변환기": "FACT_TRANSFORM",
     "마지막 독자": "FINAL_READ",
     "전문성 수준을 판정": "ASSESS_LEVEL",
-    "조판 담당": "POLISH_FORMAT",
     "교정자": "POLISH_TONE",
+    "glossary extractor": "GLOSSARY",
 }
 
 ScriptOutcome = str | LLMResponse | Exception | Callable[[dict[str, Any]], "str | LLMResponse | Exception"]
@@ -468,7 +561,6 @@ def default_scripts() -> dict[str, Any]:
             citations=[LLMCitation(url=FACT_CITATION, title="docs.example.com")],
         ),
         "FACT_TRANSFORM": fact_transform_output(fact_claim()),
-        "POLISH_FORMAT": polish_output(),
         "POLISH_TONE": polish_output(),
         "FINAL_READ": final_read_output(),
         "ASSESS_LEVEL": assess_level_output(),
@@ -610,7 +702,12 @@ class PipelineHarness:
         self.llm = ScriptedLLMClient(default_scripts() | (scripts or {}), delay_s)
         self.settings = Settings(
             _env_file=None,
-            **({"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2} | settings_overrides),
+            # prompt_version=v3: 가짜 벤더(fake, fake-a/b/c)는 v4 가족 디렉터리가 없다. 오케스트레이션은 버전과 무관하고,
+            # v4 템플릿 해소는 실제 벤더 이름을 쓰는 tests/agents/prompts/test_registry.py 가 검증한다
+            **(
+                {"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2, "prompt_version": "v3"}
+                | settings_overrides
+            ),
         )
         self.rounds = round_repository or PublishingRoundRepository(self.database)
         self.drafts = PostDraftRepository(self.database)
@@ -618,6 +715,15 @@ class PipelineHarness:
         self.calls = AgentCallRepository(self.database)
         self.publisher = publisher or FakePostBE()
         self.routes = ModelRouteRepository(self.database)
+        self.glossary_repository = GlossaryRepository(self.database)
+        self.provenance_repository = PostProvenanceRepository(self.database)
+        self.derived = DerivedRecordsWriter(
+            draft_repository=self.drafts,
+            round_repository=self.rounds,
+            agent_call_repository=self.calls,
+            glossary_repository=self.glossary_repository,
+            provenance_repository=self.provenance_repository,
+        )
         self.round_service = RoundService(
             self.rounds,
             self.drafts,
@@ -625,6 +731,8 @@ class PipelineHarness:
             publisher=self.publisher,
             route_repository=self.routes,
             providers=["fake", *FAKE_VENDORS.values()],
+            derived_writer=self.derived,
+            prompt_version=self.settings.prompt_version,
         )
         self.call_service = AgentCallService(
             self.calls,
@@ -640,6 +748,7 @@ class PipelineHarness:
             publisher=self.publisher,
             settings=self.settings,
             sleep=_no_sleep,
+            derived_writer=self.derived,
         )
         self.decisions = DraftDecisionService(
             draft_repository=self.drafts,
@@ -647,6 +756,14 @@ class PipelineHarness:
             topic_registry_repository=self.topics,
             round_service=self.round_service,
             settings=self.settings,
+            derived_writer=self.derived,
+        )
+        self.glossary = GlossaryService(
+            repository=self.glossary_repository,
+            settings=self.settings,
+            agent_call_service=self.call_service,
+            draft_repository=self.drafts,
+            round_repository=self.rounds,
         )
         self.draft_pipeline = DraftPipelineService(
             draft_repository=self.drafts,
@@ -655,6 +772,7 @@ class PipelineHarness:
             gate=ValidationGate(min_chars=self.settings.draft_min_chars, max_chars=self.settings.draft_max_chars),
             publisher=self.publishing,
             settings=self.settings,
+            glossary_service=self.glossary,
         )
         self.topic_selection = TopicSelectionService(
             round_repository=self.rounds,
@@ -673,10 +791,10 @@ class PipelineHarness:
             settings=self.settings,
         )
 
-    async def seed_round(self, round_id: str = "round-1") -> PublishingRound:
-        """주제가 확정된 IN_PROGRESS 라운드와 TOPIC_LOCKED 글 3편, RESERVED 레지스트리 3건."""
-        await self.seed_routes()
-        publishing_round = make_round(round_id, routing=make_routing())
+    async def seed_round(self, round_id: str = "round-1", *, with_glossary: bool = False) -> PublishingRound:
+        """주제가 확정된 IN_PROGRESS 라운드와 TOPIC_LOCKED 글 3편, RESERVED 레지스트리 3건. with_glossary 면 GLOSSARY 라우트도."""
+        await self.seed_routes(with_glossary)
+        publishing_round = make_round(round_id, routing=make_routing(with_glossary))
         attempt = TopicAttempt(attempt_number=1)
         for index, slot in enumerate(AgentSlot):
             topic = make_topic(title=f"주제 {slot}", keywords=[f"k{index}a", f"k{index}b", f"k{index}c"])
@@ -699,8 +817,8 @@ class PipelineHarness:
             )
         return publishing_round
 
-    async def seed_routes(self) -> None:
-        await self.routes.replace_all(route_documents())
+    async def seed_routes(self, with_glossary: bool = False) -> None:
+        await self.routes.replace_all(route_documents(with_glossary))
 
     async def draft(self, slot: AgentSlot = AgentSlot.A, round_id: str = "round-1") -> PostDraft:
         draft = await self.drafts.get(f"{round_id}:{slot}")

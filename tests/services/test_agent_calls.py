@@ -8,13 +8,13 @@ from pydantic import BaseModel
 
 from app.agents.builders import render_messages
 from app.agents.contracts import FactSpotCheckOutput, FinalReadOutput, StructureRules, WriteDraftInput
-from app.agents.personas import get_persona
 from app.clients.llm.base import LLMCitation, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.core.config import Settings
 from app.core.exceptions import BudgetExceededError, LLMOutputError, LLMRetriesExhaustedError, LLMTransportError
 from app.models.agent_call import AgentCall, ChatMessage
 from app.models.enums import AgentSlot, CallKind
+from app.models.level import DEFAULT_LEVEL_CRITERIA
 from app.services.agent_calls import AgentCallService, output_schema_of
 from tests.factories import draft_output, make_call, make_call_model, make_draft, make_topic
 from tests.fakes import FakeAgentCallRepository, FakeLLMClient
@@ -287,22 +287,69 @@ async def test_old_receipt_with_persona_id_still_loads_and_replays():
 async def test_compare_write_prompts_rebuilds_the_input_per_version_and_measures_density():
     harness = Harness([draft_output(), draft_output()])
     write_input = WriteDraftInput(
-        persona=get_persona("architect"),
         topic=make_topic(core_mechanism="", out_of_scope=[]),
         structure_rules=StructureRules(min_chars=1, max_chars=100),
+        level_criteria=DEFAULT_LEVEL_CRITERIA,
     )
     call = make_call()
-    call.messages = render_messages(write_input, "v2")
+    call.messages = render_messages(write_input, "v2", call.model_binding)
+    drafts: list[tuple[str, int]] = []
 
     rows = await harness.service.compare_write_prompts(
-        call, versions=["v2", "v3"], runs=1, core_mechanism="메커니즘", out_of_scope=["범위 밖"]
+        call,
+        versions=["v2", "v3"],
+        runs=1,
+        core_mechanism="메커니즘",
+        out_of_scope=["범위 밖"],
+        on_draft=lambda prompt_version, run, output: drafts.append((prompt_version, run)),
     )
 
     assert [(row[0], row[1], row[3]) for row in rows] == [("v2", 1, None), ("v3", 1, None)]
+    assert drafts == [("v2", 1), ("v3", 1)]
     assert rows[0][2] is not None and rows[0][2].paragraphs == 4
     sent_v3 = harness.llm.calls[1].messages
     assert "topic.core_mechanism" in sent_v3[0].content and '"core_mechanism": "메커니즘"' in sent_v3[1].content
     assert len(harness.calls.calls) == 0
+
+
+async def test_compare_write_prompts_fills_level_criteria_missing_from_old_inputs():
+    harness = Harness([draft_output()])
+    call = make_call()
+    stored = {
+        "persona": {"persona_id": "architect"},  # v3 입력. 읽을 때 버려진다
+        "topic": make_topic(core_mechanism="", out_of_scope=[]).model_dump(mode="json"),
+        "structure_rules": StructureRules(min_chars=1, max_chars=100).model_dump(),
+        "evidence": None,
+    }
+    call.messages = [ChatMessage(role="user", content="입력(JSON):\n" + json.dumps(stored, ensure_ascii=False))]
+
+    rows = await harness.service.compare_write_prompts(call, versions=["v3"], runs=1)
+
+    assert [(row[0], row[3]) for row in rows] == [("v3", None)]
+    sent = harness.llm.calls[0].messages[1].content
+    assert '"level_criteria"' in sent and '"persona"' not in sent
+
+
+async def test_compare_write_prompts_can_raise_the_output_limit_and_reports_truncation():
+    truncated = LLMResponse(text="", usage=LLMUsage(prompt_tokens=10, completion_tokens=5), truncated=True)
+    harness = Harness([truncated])
+    call = make_call()
+    call.messages = render_messages(
+        WriteDraftInput(
+            topic=make_topic(core_mechanism="", out_of_scope=[]),
+            structure_rules=StructureRules(min_chars=1, max_chars=100),
+            level_criteria=DEFAULT_LEVEL_CRITERIA,
+        ),
+        "v3",
+        call.model_binding,
+    )
+
+    rows = await harness.service.compare_write_prompts(call, versions=["v3"], runs=1, max_output_tokens=4000)
+
+    assert harness.llm.calls[0].params.max_output_tokens == 4000
+    assert (
+        rows[0][2] is None and rows[0][3] is not None and rows[0][3].startswith("truncated at max_output_tokens=4000")
+    )
 
 
 async def test_probe_fact_check_searches_transforms_and_checks_urls_without_receipts():

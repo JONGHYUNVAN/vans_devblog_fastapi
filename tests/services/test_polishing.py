@@ -5,7 +5,7 @@ import pytest
 from app.core.exceptions import LLMTransportError
 from app.models.enums import AgentSlot, PostStatus, RevisionCause
 from app.services.pipeline_views import build_escalation_summary
-from app.services.polishing import _Document, _fix_phrases, _format_violation, _only_breaks_differ, _tone_violation
+from app.services.polishing import _Document, _fix_phrases, _tone_violation
 from app.services.publishing import build_peer_review_note
 from tests.factories import assess_level_output, draft_output, final_read_output, polish_output, review_output
 from tests.fakes import PipelineHarness
@@ -57,19 +57,6 @@ def test_document_lists_only_top_level_paragraphs():
     assert [paragraph.text for paragraph in paragraphs] == ["본문", "끝"]
 
 
-def test_only_breaks_differ_allows_splitting_a_paragraph_but_not_other_edits():
-    assert _only_breaks_differ("문장 하나. 문장 둘.", "문장 하나.\n\n문장 둘.")
-    assert _only_breaks_differ("문장 하나.\n문장 둘.", "문장 하나. 문장 둘.")
-    assert not _only_breaks_differ("문장 하나. 문장 둘.", "문장 하나.문장 둘.")  # 공백만 지운 것은 뜻이 바뀔 수 있다
-    assert not _only_breaks_differ("막지 않는다", "막는다")
-    assert not _only_breaks_differ("a  b", "a b")
-
-
-def test_format_patch_cannot_break_inline_code_across_a_blank_line():
-    # 코드 스팬 안의 공백을 빈 줄로 바꾸면 글자는 같아도 코드가 쪼개진다
-    assert _format_violation("`a b` 다", "`a\n\nb` 다") is not None
-
-
 @pytest.mark.parametrize(
     ("before", "after"),
     [
@@ -116,12 +103,6 @@ def test_tone_safeguards_allow_a_sentence_rewrite_that_keeps_protected_tokens():
     assert _tone_violation(before, after) is None
 
 
-def test_format_patch_cannot_split_bold_or_link_text():
-    assert _format_violation("**굵은 글** 이다", "**굵은\n\n글** 이다") == "서식 변경"
-    assert _format_violation("[링크 글](https://a.test) 이다", "[링크\n\n글](https://a.test) 이다") == "서식 변경"
-    assert _format_violation("첫 문장이다. 둘째 문장이다.", "첫 문장이다.\n\n둘째 문장이다.") is None
-
-
 def test_fix_phrases_leaves_inline_code_alone():
     assert _fix_phrases("값을 확인하십시오. `하십시오` 는 그대로다") == "값을 확인한다. `하십시오` 는 그대로다"
     assert _fix_phrases("버그라고 볼 수 있다. 장애인 상황이다.") == "버그다. 장애이다."
@@ -165,21 +146,6 @@ async def test_only_the_violating_patch_is_discarded():
     assert {each.reason for each in draft.polish.discarded} == {"보존 대상 변경", "없는 문단"}
 
 
-async def test_format_patch_splits_a_paragraph_without_moving_later_indexes():
-    split = "첫 문장이다.\n\n둘째 문장이다."
-    harness, draft = await _drive(
-        POLISH_FORMAT=[polish_output((FIRST, split))],
-        POLISH_TONE=lambda call_input: polish_output(
-            (call_input["paragraphs"][SECOND]["index"], "값을 확인한다. `retry` 를 2번 호출하지 않는다.")
-        ),
-    )
-
-    assert split in draft.current_version.content_markdown
-    assert draft.polish is not None
-    assert draft.polish.model_ids == ["fake-a-1"]  # 줄바꿈은 벤더 제약이 없고, 문체 패치는 내용이 같아 적용되지 않았다
-    assert harness.llm.all_kinds.count("POLISH_TONE") == 1
-
-
 async def test_no_patches_make_no_new_version():
     plain = BODY.replace("값을 확인하십시오.", "값을 확인한다.")
     _, draft = await _drive(WRITE_DRAFT=[draft_output(plain)])
@@ -190,14 +156,11 @@ async def test_no_patches_make_no_new_version():
 
 
 async def test_failed_polish_calls_are_skipped_and_never_stop_the_post():
-    _, draft = await _drive(
-        POLISH_FORMAT=[LLMTransportError("503"), LLMTransportError("503")],
-        POLISH_TONE=[KeyError("no-such-provider")],
-    )
+    _, draft = await _drive(POLISH_TONE=[LLMTransportError("503"), LLMTransportError("503")])
 
     assert draft.status == PostStatus.READY_TO_PUBLISH
     assert draft.polish is not None
-    assert draft.polish.skipped == ["POLISH_FORMAT: LLMRetriesExhaustedError", "POLISH_TONE: KeyError"]
+    assert draft.polish.skipped == ["POLISH_TONE: LLMRetriesExhaustedError"]
 
 
 async def test_polished_body_that_fails_the_gate_at_the_end_is_discarded(monkeypatch):

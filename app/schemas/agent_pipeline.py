@@ -26,6 +26,7 @@ from app.models.enums import (
     RoundAbortReason,
     RoundStatus,
 )
+from app.models.glossary import GlossaryRecord
 from app.models.model_binding import ModelBinding
 from app.models.post_draft import (
     Arbitration,
@@ -153,6 +154,7 @@ class DraftHistory(BaseModel):
     final_read: FinalRead | None
     level_assessment: LevelAssessment | None
     polish: PolishRecord | None
+    glossary: GlossaryRecord | None  # 용어 추출 결과 (설계 08 문서)
     user_level: PostLevel | None
     publication_intent: PublicationIntent | None
     publication: Publication | None

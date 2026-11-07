@@ -139,6 +139,7 @@ class CallKind(StrEnum):
     ASSESS_LEVEL = "ASSESS_LEVEL"
     POLISH_FORMAT = "POLISH_FORMAT"
     POLISH_TONE = "POLISH_TONE"
+    GLOSSARY = "GLOSSARY"  # 발행본에서 전제 밖 용어를 뽑고 기존 표제어·뜻과 맞춘다 (설계 08 문서 2절)
 
 
 class PostReviewStage(StrEnum):
@@ -147,7 +148,32 @@ class PostReviewStage(StrEnum):
     POLISH = "POLISH"
     FINAL_READ = "FINAL_READ"
     ASSESS_LEVEL = "ASSESS_LEVEL"
+    GLOSSARY = "GLOSSARY"  # 용어 추출. 실패해도 건너뛴다 (08 문서 D-64)
     DONE = "DONE"
+
+
+class GlossaryStatus(StrEnum):
+    """표제어·뜻의 승인 상태 (설계 08 문서 2.1절). 표시는 APPROVED 만."""
+
+    PROPOSED = "PROPOSED"  # 추출이 제안. 표시하지 않는다
+    APPROVED = "APPROVED"  # 사람 승인. 표시한다
+    REJECTED = "REJECTED"  # 사람 거절. 표시하지 않는다
+    MERGED = "MERGED"  # 표제어만. merged_into 를 따라간다
+
+
+class ProvenanceStageKind(StrEnum):
+    """제작 기록의 단계 (설계 08 문서 3.3절)."""
+
+    TOPIC = "TOPIC"  # 주제 제안
+    WRITE = "WRITE"  # 작성 (v1)
+    REVIEW = "REVIEW"  # 렌즈별 리뷰
+    FACT_CHECK = "FACT_CHECK"  # 사실 확인 (검색 + 변환)
+    ARBITRATION = "ARBITRATION"  # 중재 (검색 포함)
+    REVISION = "REVISION"  # 수정 (v2…)
+    POLISH = "POLISH"
+    FINAL_READ = "FINAL_READ"
+    ASSESS_LEVEL = "ASSESS_LEVEL"
+    GLOSSARY = "GLOSSARY"
 
 
 class FinalReadKind(StrEnum):

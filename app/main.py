@@ -22,7 +22,7 @@ from app.dependencies import (
     get_index_setup_service,
     open_clients,
 )
-from app.routers import agent_rounds, code_graph, health, internal, kis, search, sync
+from app.routers import agent_rounds, code_graph, glossary, health, internal, kis, post_provenance, search, sync
 from app.services.code_graph import AnalysisTracker
 from app.services.runner import PipelineRunner
 
@@ -130,6 +130,8 @@ app.include_router(sync.router)
 app.include_router(internal.router)
 app.include_router(kis.router)
 app.include_router(agent_rounds.router)
+app.include_router(post_provenance.router)
+app.include_router(glossary.router)
 app.include_router(code_graph.router)
 
 

@@ -35,21 +35,28 @@ from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.code_graph import CodeGraphRepository
 from app.repositories.code_graph_repo_config import CodeGraphRepoConfigRepository
+from app.repositories.glossary import GlossaryRepository
 from app.repositories.model_route import ModelRouteRepository
 from app.repositories.popular_search import PopularSearchRepository
 from app.repositories.post import PostRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_index import PostIndexRepository
+from app.repositories.post_provenance import PostProvenanceRepository
+from app.repositories.post_ref import PostRefRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
 from app.services.code_graph import AnalysisTracker, CodeGraphRepoConfigService, CodeGraphService, RunInBackground
+from app.services.derived_records import DerivedRecordsWriter
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService, DraftPublisher
+from app.services.glossary import GlossaryService
+from app.services.glossary_views import GlossaryViewService
 from app.services.health import HealthService
 from app.services.index_setup import IndexSetupService
 from app.services.indexing import IndexingService
 from app.services.kis import KISService
 from app.services.pipeline_views import PipelineViewService
+from app.services.provenance import ProvenanceService
 from app.services.publishing import PublishingService, UnconfiguredDraftPublisher
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
@@ -256,11 +263,13 @@ def ensure_code_graph_indexes(database: Database) -> None:
 
 
 async def ensure_agent_indexes(database: AsyncDatabase) -> None:
-    """에이전트 파이프라인 컬렉션 4개의 인덱스를 만든다. 있으면 그대로 둔다. lifespan 이 부른다."""
+    """에이전트 파이프라인 컬렉션의 인덱스를 만든다(용어 사전·제작 기록 포함). 있으면 그대로 둔다. lifespan 이 부른다."""
     await PublishingRoundRepository(database).ensure_indexes()
     await PostDraftRepository(database).ensure_indexes()
     await AgentCallRepository(database).ensure_indexes()
     await TopicRegistryRepository(database).ensure_indexes()
+    await GlossaryRepository(database).ensure_indexes()
+    await PostProvenanceRepository(database).ensure_indexes()
 
 
 def available_providers(settings: Settings) -> list[str]:
@@ -310,6 +319,55 @@ def build_publisher(settings: Settings) -> PostBEPublisher | None:
     )
 
 
+def build_derived_records_writer(database: AsyncDatabase) -> DerivedRecordsWriter:
+    """발행된 글의 post_glossary·post_provenance 따라 쓰기 (설계 08 문서). 발행·결정·정리·CLI 가 같이 쓴다."""
+    return DerivedRecordsWriter(
+        draft_repository=PostDraftRepository(database),
+        round_repository=PublishingRoundRepository(database),
+        agent_call_repository=AgentCallRepository(database),
+        glossary_repository=GlossaryRepository(database),
+        provenance_repository=PostProvenanceRepository(database),
+    )
+
+
+def build_glossary_service(database: AsyncDatabase, settings: Settings) -> GlossaryService:
+    """러너(추출 단계)와 CLI `agents glossary` 가 같이 쓴다. LLM 레지스트리는 키 있는 벤더만 든다."""
+    return GlossaryService(
+        repository=GlossaryRepository(database),
+        settings=settings,
+        agent_call_service=build_agent_call_service(database, settings),
+        draft_repository=PostDraftRepository(database),
+        round_repository=PublishingRoundRepository(database),
+    )
+
+
+def build_glossary_view_service(database: AsyncDatabase, settings: Settings) -> GlossaryViewService:
+    return GlossaryViewService(repository=GlossaryRepository(database), post_ref_repository=PostRefRepository(database))
+
+
+def build_provenance_service(database: AsyncDatabase, settings: Settings) -> ProvenanceService:
+    return ProvenanceService(
+        repository=PostProvenanceRepository(database),
+        draft_repository=PostDraftRepository(database),
+        round_repository=PublishingRoundRepository(database),
+        agent_call_repository=AgentCallRepository(database),
+    )
+
+
+def get_glossary_view_service(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> GlossaryViewService:
+    return build_glossary_view_service(database, settings)
+
+
+def get_provenance_service(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ProvenanceService:
+    return build_provenance_service(database, settings)
+
+
 def build_draft_decision_service(database: AsyncDatabase, settings: Settings) -> DraftDecisionService:
     """라우터와 CLI 결정 명령이 같은 조립을 쓴다."""
     return DraftDecisionService(
@@ -318,6 +376,7 @@ def build_draft_decision_service(database: AsyncDatabase, settings: Settings) ->
         topic_registry_repository=TopicRegistryRepository(database),
         round_service=build_round_service(database, settings),
         settings=settings,
+        derived_writer=build_derived_records_writer(database),
     )
 
 
@@ -330,6 +389,8 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
         route_repository=ModelRouteRepository(database),
         providers=available_providers(settings),
         main_categories=settings.agent_main_category_values,
+        prompt_version=settings.prompt_version,
+        derived_writer=build_derived_records_writer(database),
     )
 
 
@@ -362,9 +423,17 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             topic_registry_repository=topic_registry_repository,
             publisher=publisher,
             settings=settings,
+            derived_writer=build_derived_records_writer(database),
         )
         if publisher is not None
         else UnconfiguredDraftPublisher()
+    )
+    glossary_service = GlossaryService(
+        repository=GlossaryRepository(database),
+        settings=settings,
+        agent_call_service=agent_call_service,
+        draft_repository=draft_repository,
+        round_repository=round_repository,
     )
     return PipelineRunner(
         round_repository=round_repository,
@@ -386,6 +455,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             publisher=draft_publisher,
             settings=settings,
             link_checker=LinkChecker(),
+            glossary_service=glossary_service,
         ),
         settings=settings,
     )

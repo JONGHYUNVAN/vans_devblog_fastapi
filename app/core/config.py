@@ -74,8 +74,17 @@ class Settings(BaseSettings):
     review_timeout_s: int = 300
     draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
     scan_interval_s: int = 15
-    prompt_version: str = "v3"
+    prompt_version: str = "v4"  # 2026-11-07 compare-prompts 2차 비교 뒤 올렸다(D-62). 되돌리기는 PROMPT_VERSION=v3
     llm_concurrency_per_provider: int = 2
+
+    # 용어 사전 (설계 08 문서 2.3절). 사전이 full_list_max 를 넘기 전까지는 표제어 전체를 추출 호출 입력에 넣는다
+    glossary_full_list_max: int = 300
+    glossary_min_terms: int = 8
+    glossary_max_terms: int = 12
+    glossary_surface_max_chars: int = 40  # 본문 표면형 길이 상한. 넘으면 그 후보를 버린다
+    glossary_terminology_max: int = (
+        150  # 작성자 표기 표준으로 넘길 승인 표제어 수 상한 (2.7절, 아직 프롬프트에 넣지 않는다)
+    )
 
     # 코드 그래프 (code_graph_design/README.md G-11). 분석 대상 저장소 설정은 Mongo code_graph_repos 다 (G-35)
     code_graph_download_timeout_s: int = 30

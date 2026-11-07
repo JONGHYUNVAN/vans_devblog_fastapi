@@ -1,0 +1,48 @@
+{
+  "key": "token",
+  "term_ko": "토큰",
+  "term_en": "token",
+  "aliases": [],
+  "senses": [
+    {
+      "sense_key": "s00001",
+      "number": 1,
+      "domains": [
+        {
+          "slug": "auth",
+          "label": "인증"
+        }
+      ],
+      "term_ko": "토큰",
+      "definition": "서버가 서명해 발급하는 인증용 문자열이다.",
+      "distinguisher": "언어 모델 토큰이 아니라 인증용 서명 문자열",
+      "posts": [
+        {
+          "post_id": "6734a1b2c3d4e5f6a7b8c9d0",
+          "title": "무상태 서버와 토큰",
+          "main_category": "nestjs"
+        }
+      ]
+    },
+    {
+      "sense_key": "s00002",
+      "number": 2,
+      "domains": [
+        {
+          "slug": "llm",
+          "label": "언어 모델"
+        }
+      ],
+      "term_ko": "토큰",
+      "definition": "언어 모델이 글을 자르는 입력 단위다.",
+      "distinguisher": "인증 토큰이 아니라 언어 모델의 입력 단위",
+      "posts": [
+        {
+          "post_id": "6734a1b2c3d4e5f6a7b8c9d1",
+          "title": "언어 모델 토큰",
+          "main_category": "nestjs"
+        }
+      ]
+    }
+  ]
+}

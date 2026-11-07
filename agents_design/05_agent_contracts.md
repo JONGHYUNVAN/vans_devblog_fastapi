@@ -6,19 +6,19 @@
 
 `PersonaProfile`은 설정 파일(YAML 또는 Python 상수)로 두고 `persona_id`로 참조한다. 아래는 초기 구성이며, 어떤 모델이 어떤 페르소나를 맡는지는 `ModelBinding`이 정한다.
 
-| persona_id | 표시 이름 | 작성자 성향 (`writer_bias`) | 주 렌즈 |
+| persona_id | 표시 이름(영역 라벨) | 탐색 도메인 (`writer_bias`, `propose_topic` 전용) | 주 렌즈 |
 |---|---|---|---|
-| `architect` | 구조적 아키텍트 | 클린 아키텍처, 리팩토링, 디자인 패턴. 단계적 전개, 가독성 높은 서사 | `LOGIC_READABILITY` |
-| `systems_engineer` | 시스템 엔지니어 | DB 튜닝, 인프라, 대용량 처리. 표·다이어그램·팩트 기반 정리, 레퍼런스 종합 | `FACT_STRUCTURE` |
-| `troubleshooter` | 실용주의 트러블슈터 | 공개된 장애 사례 분석, 트렌드 비평, 공개된 측정 결과 해석. 직설적·위트 있는 톤, 관행에 의문 제기. 근거 없이 겪은 일처럼 쓰지 않는다 | `CRITICAL_PRACTICAL` |
+| `architect` | 아키텍처와 경계 | 모듈 경계, 의존 방향, 상태 생애주기, 도메인 모델링. 구조 변경이 결합·불변식 위반을 어떻게 푸는지 | `LOGIC_READABILITY` |
+| `systems_engineer` | 시스템 내부 동작 | 실행 계획, 동시성 제어, 락 경합, I/O·메모리 비용, 런타임 스펙. 공식 문서·측정값이 뒷받침하는 내부 동작 | `FACT_STRUCTURE` |
+| `troubleshooter` | 엣지 케이스와 실패 모드 | 공개 장애 사례, 엣지 케이스, 기본 설정의 함정, 반례로 관행 비판. 근거 없이 겪은 일처럼 쓰지 않는다 | `CRITICAL_PRACTICAL` |
 
 ```python
 class PersonaProfile(BaseModel):
     persona_id: str
     display_name: str
-    writer_bias: str                 # 작성자 프롬프트에 들어가는 성향 서술
+    writer_bias: str                 # propose_topic 의 탐색 도메인(영어, $writer_bias). v4 부터 작성·수정 프롬프트에는 들어가지 않는다
     primary_lens: ReviewLens
-    tone_markers: list[str]          # 톤 보존 규칙에서 "건드리지 말 것"으로 리뷰어에게 전달할 특징
+    # tone_markers 는 v4 에서 뺐다(D-62). display_name 은 한국어 영역 라벨로 라운드 응답·CLI 에만 보인다
 ```
 
 ### 렌즈 정의 (리뷰어 프롬프트의 평가 기준)
@@ -66,9 +66,9 @@ class ProposeTopicOutput(BaseModel):
 
 ```python
 class WriteDraftInput(BaseModel):
-    persona: PersonaProfile
-    topic: TopicProposal
+    topic: TopicProposal                 # v4: persona 없음. 작성자는 확정된 주제만 본다 (D-62)
     structure_rules: StructureRules      # 필수 섹션, 앵커 규칙, 길이 범위, 코드 블록 규칙
+    level_criteria: LevelCriteria        # topic.target_level 이 요구하는 깊이 기준
 ```
 
 출력:
@@ -86,8 +86,7 @@ class DraftOutput(BaseModel):
 
 ```python
 class ReviseDraftInput(BaseModel):
-    persona: PersonaProfile
-    topic: TopicProposal
+    topic: TopicProposal                 # v4: persona 없음
     structure_rules: StructureRules
     previous: DraftOutput                # 직전 제출 버전. 게이트에 떨어진 본문도 여기 들어간다
     reviews: list[ReviewForAuthor]       # 마지막 리뷰 완료 버전의 open_blocking_items 와, 그 버전이 FULL 리뷰였으면 비차단 항목. 리뷰 완료 버전이 없으면(v1 게이트 재작성) 빈 목록
@@ -149,7 +148,8 @@ class ReviewInput(BaseModel):
     secondary_lens: ReviewLens | None
     topic: TopicForReviewer              # 독자층·목차 (저자 정보 없음, rationale 없음)
     content_markdown: str
-    tone_preservation: TonePreservationRule   # 지적 가능/불가 목록 + author persona 의 tone_markers (익명화)
+    level_criteria: LevelCriteria        # topic.target_level 이 뜻하는 깊이. 미달은 MINOR 로만 적는다 (D-54, Q-19)
+    tone_preservation: TonePreservationRule   # 지적 가능/불가 목록. v4 부터 author_tone_markers 는 비어 있다
     # author_slot, model, persona display name 은 넣지 않는다
 ```
 
@@ -235,7 +235,8 @@ class ArbitrateOutput(BaseModel):
 | `FACT_TRANSFORM` | `FactTransformInput` | `FactCheckOutput`·`FactSpotCheckOutput`(리뷰 출력 + `claims[]`) |
 | `FINAL_READ` | `FinalReadInput`(제목, 주제, 본문) | `findings[]{kind, section_id, quote, comment}`, `overall` |
 | `ASSESS_LEVEL` | `AssessLevelInput`(제목, 본문, 기준표. 목표 수준 없음) | `level`, `evidence[]{criterion, quote}`, `reasoning` |
-| `POLISH_FORMAT`·`POLISH_TONE` | 번호 붙은 문단(문체는 `tone_markers` 도) | `patches[]{index, text}` |
+| `POLISH_TONE` | 번호 붙은 문단. `POLISH_FORMAT` 은 v4 에서 뺐다(D-62) | `patches[]{index, text}` |
+| `GLOSSARY` | `GlossaryInput`(제목·독자·전제 지식·메인 카테고리·키워드·발행본·앵커·`known_headwords[]`·`allowed_domains[]`·개수 범위). 08 문서 2.3절 | `GlossaryOutput.candidates[]{term_ko, term_en, surface, section_id, same_as, sense_key, sense_candidates[], new_sense{domains[], definition, distinguisher}}`. 스키마 위반만 재시도, 나머지는 코드가 항목 단위로 버린다 |
 
 수준 기준표는 `models/level.py` 의 기본값이고 `agent_routes` 의 `LEVEL_CRITERIA` 문서로 바꿀 수 있다. 항목 수가 아니라 한 결정의 인과를 얼마나 깊게 설명하는지로 본다.
 
@@ -252,7 +253,7 @@ class StructureRules(BaseModel):
     forbidden_syntax: list[str] = ["HTML 태그(섹션 앵커 제외)", "이미지", "각주", "mermaid 코드 블록"]
 ```
 
-`required_sections` 는 글 수준으로 정한다. 입문(100)은 `tradeoff` 를 요구하지 않고 범위 선언을 `conclusion` 에 쓴다. 수준이 없는 옛 글은 원래 규칙이다. 작성자 프롬프트에는 앵커를 넣고 수정 시 ID를 유지하라는 지시가 들어간다. 허용 문법은 04 문서 8절 변환표뿐이고, `forbidden_syntax`는 게이트에서 실패한다. 완전한 Python 모듈은 펜스 언어를 `python` 으로, 잘린 조각은 `python-snippet` 으로 적는다. `python` 은 `ast.parse`, `json` 은 `json.loads` 대상이고, 모든 코드 블록은 비어 있지 않고 펜스 짝이 맞아야 한다.
+`required_sections` 는 글 수준으로 정한다. 입문(100)은 `tradeoff` 를 요구하지 않고 범위 선언을 마지막 섹션에 쓴다. `conclusion` 은 v4 부터 필수가 아니다(D-62). 수준이 없는 옛 글은 원래 규칙이다. 작성자 프롬프트에는 앵커를 넣고 수정 시 ID를 유지하라는 지시가 들어간다. 허용 문법은 04 문서 8절 변환표뿐이고, `forbidden_syntax`는 게이트에서 실패한다. 완전한 Python 모듈은 펜스 언어를 `python` 으로, 잘린 조각은 `python-snippet` 으로 적는다. `python` 은 `ast.parse`, `json` 은 `json.loads` 대상이고, 모든 코드 블록은 비어 있지 않고 펜스 짝이 맞아야 한다.
 
 ## 4. 톤 보존 규칙 (`TonePreservationRule`)
 
@@ -262,10 +263,10 @@ class TonePreservationRule(BaseModel):
         "사실 오류", "논리 결함", "코드 버그·컨벤션 위반",
         "이해를 방해하는 문장 구조", "의미 없는 완충 문구·상투적 도입/마무리",
     ]
-    must_not_flag: list[str] = [
-        "유머·위트", "1인칭 화법", "문장 리듬·길이 선호", "어조(직설·시니컬 포함)", "불릿 대신 서술을 택한 것 자체",
+    must_not_flag: list[str] = [         # v4 문구는 영어다(contracts.py). 유머·위트는 페르소나와 함께 뺐다
+        "1인칭 화법", "문장 리듬·길이 선호", "어조(직설 포함)", "불릿 대신 서술을 택한 것 자체",
     ]
-    author_tone_markers: list[str]       # 페르소나의 tone_markers (페르소나 이름은 제거)
+    author_tone_markers: list[str] = []  # v4 부터 항상 비어 있다. 옛 영수증 호환용
 ```
 
 ## 5. 피어 리뷰 요약 노트 템플릿

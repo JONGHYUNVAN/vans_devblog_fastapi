@@ -32,8 +32,8 @@ stateDiagram-v2
     IN_ARBITRATION --> REVISING : 인용 또는 다른 미해소, iteration < MAX
     IN_ARBITRATION --> ESCALATED : 인용 또는 다른 미해소, iteration == MAX
     IN_ARBITRATION --> FAILED : 재시도 소진
-    POST_REVIEW --> POST_REVIEW : 다듬기·전체 읽기 (단계마다 저장)
-    POST_REVIEW --> READY_TO_PUBLISH : 수준 평가 완료
+    POST_REVIEW --> POST_REVIEW : 다듬기·전체 읽기·수준 평가 (단계마다 저장)
+    POST_REVIEW --> READY_TO_PUBLISH : 용어 추출 완료 (실패·건너뜀 포함)
     POST_REVIEW --> ESCALATED : 전체 읽기 차단 결함
     POST_REVIEW --> FAILED : 전체 읽기·평가 재시도 소진
     ESCALATED --> READY_TO_PUBLISH : 사람: 그대로 발행
@@ -68,8 +68,8 @@ stateDiagram-v2
 | 2 | `TOPIC_LOCKED` | 글 코루틴 | – | `DRAFTING` | 이어서 `WRITE_DRAFT` 호출. iteration 은 0 |
 | 3 | `DRAFTING` | 작성자 응답 파싱 성공 | 스키마 유효 | `VALIDATING` | 버전 추가, `passed_validation=False`. 새 버전의 `origin_cause`는 `revision_cause`로 정하고, `revision_cause`와 승인을 지운다 |
 | 4 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW` | 응답 실패 | 증가 후 시도 수 `< MAX_LLM_RETRIES` | 변화 없음 | 호출 서비스 안에서 백오프 뒤 다시 호출한다. 글은 저장하지 않는다 |
-| 5 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW`(다듬기 제외) | 응답 실패 | 증가 후 시도 수 `== MAX_LLM_RETRIES` | `FAILED` | `FailureRecord(LLM_RETRIES_EXHAUSTED)`. 병렬 단계는 다른 호출이 끝나기를 기다려 성공한 결과를 저장한 뒤 `FAILED`. 사유가 여럿이면 `BUDGET_EXCEEDED`를 남긴다 |
-| 5a | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW`(다듬기 제외) | 호출 전 예산 검사 | 글 사용량 + 추정치 `> token_limit` | `FAILED` | `FailureRecord(BUDGET_EXCEEDED)`. 호출하지 않는다. 병렬 단계는 5행처럼 성공분을 저장 |
+| 5 | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW`(다듬기·용어 추출 제외) | 응답 실패 | 증가 후 시도 수 `== MAX_LLM_RETRIES` | `FAILED` | `FailureRecord(LLM_RETRIES_EXHAUSTED)`. 병렬 단계는 다른 호출이 끝나기를 기다려 성공한 결과를 저장한 뒤 `FAILED`. 사유가 여럿이면 `BUDGET_EXCEEDED`를 남긴다 |
+| 5a | `DRAFTING`, `IN_REVIEW`, `IN_SPOT_CHECK`, `IN_ARBITRATION`, `POST_REVIEW`(다듬기·용어 추출 제외) | 호출 전 예산 검사 | 글 사용량 + 추정치 `> token_limit` | `FAILED` | `FailureRecord(BUDGET_EXCEEDED)`. 호출하지 않는다. 병렬 단계는 5행처럼 성공분을 저장 |
 | 6a | `VALIDATING` | 게이트 통과 | `origin_cause == HUMAN` | `READY_TO_PUBLISH` | `passed_validation=True`, `validation_retries=0`. 사람이 개입해 고친 버전은 에이전트 재리뷰 없이 발행 대기 |
 | 6b | `VALIDATING` | 게이트 통과 | `origin_cause != HUMAN`, 리뷰 완료 이전 버전 없음 | `IN_REVIEW` | `passed_validation=True`, `validation_retries=0`. 렌즈마다 FULL 리뷰 호출. 사실 확인 렌즈는 검색과 변환 두 호출이다 |
 | 7 | `VALIDATING` | 게이트 통과 | `origin_cause != HUMAN`, 리뷰 완료 이전 버전 있음 | `IN_SPOT_CHECK` | `passed_validation=True`, `validation_retries=0`. 그 버전의 `open_blocking_items` 에 본인 항목이 남은 리뷰어와 사실 확인 렌즈만 SPOT_CHECK |
@@ -94,7 +94,8 @@ stateDiagram-v2
 | 22b | `POST_REVIEW`(`POLISH`) | 다듬기 끝 | 패치 없음, 호출 실패, 또는 게이트 실패 | `POST_REVIEW`(`FINAL_READ`) | 새 버전 없음. 다듬기 실패는 글을 멈추지 않는다. 사유는 `PolishRecord` |
 | 22c | `POST_REVIEW`(`FINAL_READ`) | 전체 읽기 응답 | 차단 종류 없음 | `POST_REVIEW`(`ASSESS_LEVEL`) | 관찰은 `final_read` 에 남는다 |
 | 22d | `POST_REVIEW`(`FINAL_READ`) | 전체 읽기 응답 | `BODY_CODE_CONTRADICTION`·`CORE_MECHANISM_MISSING` 존재 | `ESCALATED` | `FINAL_READ_FLAGGED`. 수준 평가를 하지 않는다. 사람은 23~25행으로 정한다 |
-| 22e | `POST_REVIEW`(`ASSESS_LEVEL`) | 평가 응답 | – | `READY_TO_PUBLISH` | `level_assessment` 저장. 막지 않는다 |
+| 22e | `POST_REVIEW`(`ASSESS_LEVEL`) | 평가 응답 | – | `POST_REVIEW`(`GLOSSARY`) | `level_assessment` 저장. 막지 않는다 |
+| 22f | `POST_REVIEW`(`GLOSSARY`) | 용어 추출 끝 | 성공, 호출 실패, 라우트 없음 모두 | `READY_TO_PUBLISH` | `glossary`(GlossaryRecord) 저장. 실패는 `skipped` 에 사유만 남긴다. 글을 멈추지 않는다 (08 문서 D-64) |
 | 23 | `ESCALATED` | `PUBLISH_AS_IS` | `passed_validation` 버전이 있음. 없으면 409 | `READY_TO_PUBLISH` | `approved_by` 기록. 발행본은 마지막 `passed_validation` 버전. `publish_attempts=0`, `publication_intent` 삭제. `PUBLISH_UNCERTAIN` 이면 블로그에 글이 없음을 사람이 확인한 뒤에만 고른다 |
 | 23a | `ESCALATED` | `CONFIRM_PUBLISHED(external_post_id)` | `escalation_reason == PUBLISH_UNCERTAIN` | `PUBLISHED` | 사람이 블로그에서 찾은 게시글 id로 `Publication` 저장, 레지스트리 `PUBLISHED`. Post BE 를 다시 호출하지 않는다 |
 | 24 | `ESCALATED` | `REVISE(instruction)` | – | `REVISING` | `cause=HUMAN`, `human_instruction` 저장. `publish_attempts=0`, `publication_intent` 삭제. `PUBLISH_UNCERTAIN` 이면 블로그에 글이 없음을 사람이 확인한 뒤에만 고른다. 통과 시 6a 행으로 바로 `READY_TO_PUBLISH` |

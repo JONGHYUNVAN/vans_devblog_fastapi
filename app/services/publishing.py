@@ -12,7 +12,6 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from app.agents.contracts import StructureRules
-from app.agents.personas import get_persona
 from app.clients.publisher.base import PostCreatePayload, Publisher
 from app.core.config import Settings
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError, PublishFailedError, PublishUncertainError
@@ -30,6 +29,7 @@ from app.models.publishing_round import PublishingRound
 from app.models.tiptap import markdown_to_tiptap
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
+from app.services.derived_records import DerivedRecordsWriter
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def build_peer_review_note(draft: PostDraft, publishing_round: PublishingRound) 
         "",
         "## 이 글은 어떻게 만들어졌나",
         "",
-        f"이 글은 **{_display(publishing_round, draft)}**가 작성하고 {lens_labels} 관점의 교차 리뷰를 거쳐 완성되었습니다.",
+        f"이 글은 **{_writer_model(draft, publishing_round)}** 모델이 작성하고 {lens_labels} 관점의 교차 리뷰를 거쳐 완성되었습니다.",
         "",
         f"- 버전: v1 → v{version.version_number}",
         f"- 발행을 막은 사항: CRITICAL {severity_counts[IssueSeverity.CRITICAL]}, MAJOR {severity_counts[IssueSeverity.MAJOR]}",
@@ -132,12 +132,16 @@ class PublishingService:
         publisher: Publisher,
         settings: Settings,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        derived_writer: DerivedRecordsWriter | None = None,
     ) -> None:
         self._drafts = draft_repository
         self._topics = topic_registry_repository
         self._publisher = publisher
         self._settings = settings
         self._sleep = sleep
+        self._derived = (
+            derived_writer  # 발행 뒤 post_glossary·post_provenance 따라 쓰기 (설계 08 문서). 없으면 정리가 쓴다
+        )
         self._in_flight: set[asyncio.Task[None]] = set()  # 호출부터 결과 반영까지. cancel 되지 않게 shield 한다
 
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
@@ -206,6 +210,11 @@ class PublishingService:
             await self._record_external_post_id(draft.draft_id, result.external_post_id)
             raise
         await self._topics.set_status(draft.draft_id, TopicRegistryStatus.PUBLISHED, publication.published_at)
+        if self._derived is not None:
+            try:
+                await self._derived.write(draft, built_by="publish")
+            except Exception:  # 발행은 끝났다. 파생 문서는 정리(reconcile)가 마저 쓴다 (설계 08 문서 2.2절)
+                logger.exception("draft %s derived records deferred to reconcile", draft.draft_id)
 
     async def _record_external_post_id(self, draft_id: str, external_post_id: str) -> None:
         while True:
@@ -265,8 +274,10 @@ def _is_rejected(resolution: ItemResolution | None) -> bool:
     )
 
 
-def _display(publishing_round: PublishingRound, draft: PostDraft) -> str:
-    return get_persona(publishing_round.slot_bindings[draft.author_slot].persona_id).display_name
+def _writer_model(draft: PostDraft, publishing_round: PublishingRound) -> str:
+    """첫 버전을 쓴 모델. 옛 글은 슬롯 바인딩의 모델이다. v4 부터 페르소나가 글을 규정하지 않아 머리말에도 모델을 적는다."""
+    writer = next((version.model_id for version in draft.versions if version.model_id), None)
+    return writer or publishing_round.slot_bindings[draft.author_slot].model_id
 
 
 def _model_line(draft: PostDraft, publishing_round: PublishingRound) -> str:
@@ -275,8 +286,7 @@ def _model_line(draft: PostDraft, publishing_round: PublishingRound) -> str:
     전체 읽기·수준 평가는 본문을 바꾸지 않아 적지 않는다(agent_calls 에 남는다). 옛 글은 슬롯 바인딩에서 찾는다.
     """
     bindings = publishing_round.slot_bindings
-    writer = next((version.model_id for version in draft.versions if version.model_id), None)
-    writer = writer or bindings[draft.author_slot].model_id
+    writer = _writer_model(draft, publishing_round)
     parts = [f"{writer} 작성"]
     reviewers: dict[ReviewLens, str] = {}
     for review in draft.reviews:

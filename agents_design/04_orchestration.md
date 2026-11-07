@@ -14,7 +14,7 @@
 |---|---|---|
 | 주제 확정 | 전체 잠금을 `TopicAttempt`에 저장 → 글 3편·레지스트리 3건 `RESERVED`를 없을 때만 insert(`$setOnInsert`) → ★ 라운드 `IN_PROGRESS` + `draft_ids` (조건 `status==TOPIC_SELECTION`) | 라운드가 아직 `TOPIC_SELECTION`이면 코루틴이 저장된 잠금으로 같은 ID를 다시 쓴다. 이미 있는 문서는 건드리지 않으므로 중단이 정리한 문서를 되살리지 않는다. 글 코루틴은 `IN_PROGRESS` 라운드의 글만 돌리므로 앞쪽만 써진 글은 돌지 않는다 |
 | 라운드 중단 | ★ 라운드 `ABORTED` (조건: `COMPLETED`·`ABORTED` 아님) → `PUBLISHED` 외 글 `reject_by_abort` → 그 라운드의 `PUBLISHED` 아닌 레지스트리 `RELEASED` | 정리가 `ABORTED` 라운드의 남은 글·레지스트리를 마저 정리한다. 확정 도중 중단이라 뒤늦게 만들어진 글·레지스트리도 여기서 거둔다 |
-| 발행 성공 | ★ 글 `PUBLISHED` + `Publication` (조건 `status==READY_TO_PUBLISH`) → 레지스트리 `PUBLISHED` | 정리가 `PUBLISHED` 글의 레지스트리를 맞춘다 |
+| 발행 성공 | ★ 글 `PUBLISHED` + `Publication` (조건 `status==READY_TO_PUBLISH`) → 레지스트리 `PUBLISHED` → `post_glossary` `$setOnInsert`(글에 `glossary` 가 있을 때) → `glossary_senses.post_ids` `$addToSet` → `post_provenance` `$setOnInsert` → 글 `publication.derived_at` (08 문서 2.2절) | 정리가 `PUBLISHED` 글의 레지스트리를 맞추고, `derived_at` 이 없는 글의 파생 문서를 마저 쓴다(`DerivedRecordsWriter.write_missing`) |
 | 글 폐기 (`REJECT`, `discard`) | ★ 글 `REJECTED` → 레지스트리 `RELEASED` | 같은 정리 |
 | 라운드 완료 | 글이 종결될 때마다(코루틴이든 사람 결정이든) `close_if_complete`: ★ `status==IN_PROGRESS`이고 3편 모두 종결이면 `COMPLETED` | 정리가 다시 확인한다. 중단이 먼저 `ABORTED`를 썼으면 조건이 맞지 않아 쓰지 않는다 |
 
@@ -91,7 +91,7 @@ DraftPipelineService.drive(draft_id):
 | 검사 | 실패 시 |
 |---|---|
 | 출력 JSON 스키마(`DraftOutput`) 유효 | 파싱 실패 → 호출 재시도 (게이트가 아니라 호출 실패로 취급) |
-| 필수 앵커(`intro`, `body-1`, `tradeoff`, `conclusion`) 존재, 중복 없음 | 게이트 실패 |
+| 필수 앵커(`intro`, `body-1`, `tradeoff`. 입문은 `tradeoff` 제외. `conclusion` 은 v4 부터 선택, D-62) 존재, 중복 없음 | 게이트 실패 |
 | 코드 블록 1개 이상, 펜스(` ``` `) 열림·닫힘 짝 맞음, 각 블록에 언어 태그, 비어 있지 않음(공백 제외 1자 이상), 바로 위 `code-N` 앵커 | 게이트 실패 |
 | 코드 블록 구문 검사(경량, subprocess 없음): 태그가 `python` 이면 `ast.parse` (`python-snippet` 은 제외), `json` 이면 `json.loads` | 실패하면 게이트 실패. 그 외 언어(TS, C#, SQL 등)는 빈 블록·펜스 짝만 검사한다 |
 | 본문 길이 `DRAFT_MIN_CHARS` 이상 `DRAFT_MAX_CHARS` 이하. 앵커와 코드를 포함한다 | 게이트 실패 |
@@ -156,7 +156,7 @@ if v 가 SPOT_CHECK 버전:
 
 ### 작성자의 수정
 
-직전 리뷰 완료 버전 `v`의 `open_blocking_items(v)`마다 `ACCEPTED`, `REJECTED_WITH_REASON`, `OUT_OF_SCOPE` 중 하나가 있어야 한다. `OUT_OF_SCOPE`는 차단 항목에만 쓰고 사유가 필수다. 범위 밖 지적은 본문을 넓히지 않고 범위 선언(`tradeoff`, 없으면 `conclusion`)에 남긴다. 작성자는 차단 지적마다 먼저 범위 안인지 판단한다(`UPHOLD_REVIEWER` 판정을 받은 항목은 `ACCEPTED`만 허용). 같은 리뷰의 `MINOR`·`NITPICK`은 생략하거나 `ACCEPTED` 또는 `DEFERRED`로 덧붙인다. 생략은 게이트 실패가 아니고, `DEFERRED`는 이 비차단 항목에만 쓴다. 리뷰어 둘의 상충 요구는 작성자가 여기서 정리한다. 사람이 `ESCALATED → REVISE`로 지시한 버전(`origin_cause == HUMAN`)은 에이전트 리뷰가 아니라 `human_instruction`을 따르므로 `ItemResolution`을 요구하지 않고, 게이트 통과 시 바로 `READY_TO_PUBLISH`로 간다.
+직전 리뷰 완료 버전 `v`의 `open_blocking_items(v)`마다 `ACCEPTED`, `REJECTED_WITH_REASON`, `OUT_OF_SCOPE` 중 하나가 있어야 한다. `OUT_OF_SCOPE`는 차단 항목에만 쓰고 사유가 필수다. 범위 밖 지적은 본문을 넓히지 않고 범위 선언(`tradeoff`, 없으면 `conclusion`, 둘 다 없으면 마지막 섹션)에 남긴다. 작성자는 차단 지적마다 먼저 범위 안인지 판단한다(`UPHOLD_REVIEWER` 판정을 받은 항목은 `ACCEPTED`만 허용). 같은 리뷰의 `MINOR`·`NITPICK`은 생략하거나 `ACCEPTED` 또는 `DEFERRED`로 덧붙인다. 생략은 게이트 실패가 아니고, `DEFERRED`는 이 비차단 항목에만 쓴다. 리뷰어 둘의 상충 요구는 작성자가 여기서 정리한다. 사람이 `ESCALATED → REVISE`로 지시한 버전(`origin_cause == HUMAN`)은 에이전트 리뷰가 아니라 `human_instruction`을 따르므로 `ItemResolution`을 요구하지 않고, 게이트 통과 시 바로 `READY_TO_PUBLISH`로 간다.
 
 ### SPOT_CHECK 완료
 
@@ -218,15 +218,16 @@ SPOT_CHECK 에서 사실 확인 렌즈는 미결 항목이 없어도 수정으�
 
 ### 발행 전 단계 (`POST_REVIEW`)
 
-평가가 차단 없음이면 `READY_TO_PUBLISH` 전에 이 단계를 거친다. 다듬기 → 전체 읽기 → 수준 평가 순서이고, 읽기와 평가가 최종 본문을 보도록 다듬기가 먼저다. `post_review_stage` 와 결과를 호출 뒤 한 번에 저장해 재시작·재개 때 끝낸 호출을 되풀이하지 않는다.
+평가가 차단 없음이면 `READY_TO_PUBLISH` 전에 이 단계를 거친다. 다듬기 → 전체 읽기 → 수준 평가 → 용어 추출 순서이고, 읽기와 평가가 최종 본문을 보도록 다듬기가 먼저이며, 표면형이 발행본과 같도록 용어 추출이 마지막이다(08 문서). `post_review_stage` 와 결과를 호출 뒤 한 번에 저장해 재시작·재개 때 끝낸 호출을 되풀이하지 않는다.
 
 진입은 `evaluate` 경로뿐이다. 사람 재수정과 `PUBLISH_AS_IS` 는 사람이 본문을 정했으므로 거치지 않는다(D-17, D-22). 그래서 그 글에는 수준 평가가 없고 `level` 도 비어 있다.
 
 | 단계 | 모델 | 내용 | 실패 |
 |---|---|---|---|
-| 다듬기 | 정규식, `POLISH_FORMAT`(벤더 제약 없음), `POLISH_TONE`(작성 벤더 제외) | 문단 패치만 받는다. 안전장치를 어긴 패치만 버린다. 패치가 없으면 새 버전도 없다 | 건너뛴다. 글을 멈추지 않는다 |
+| 다듬기 | 정규식, `POLISH_TONE`(작성 벤더 제외). `POLISH_FORMAT` 은 v4 에서 뺐다(D-62) | 문단 패치만 받는다. 안전장치를 어긴 패치만 버린다. 패치가 없으면 새 버전도 없다 | 건너뛴다. 글을 멈추지 않는다 |
 | 전체 읽기 | `FINAL_READ`(작성 벤더 제외) | 본문과 코드의 어긋남, 약속한 메커니즘의 전달을 본다. 외부 사실은 보지 않는다. 지적마다 앵커와 본문 인용이 필수다. 차단 종류면 코드가 `ESCALATED(FINAL_READ_FLAGGED)` 로 보낸다 | `FAILED` |
 | 수준 평가 | `ASSESS_LEVEL`(작성 벤더 제외) | 목표 수준을 모른 채 기준표와 본문 인용으로 판정한다. 라벨만 남기고 막지 않는다 | `FAILED` |
+| 용어 추출 | `GLOSSARY`(저가 모델, 벤더 제약 없음. 선택 라우트: 스냅샷에 없으면 건너뛴다) | 발행본에서 전제 밖 용어 후보를 뽑아 기존 표제어·뜻과 맞춘다. 결과는 `PostDraft.glossary`, 새 표제어·뜻은 `PROPOSED` 로 저장 (08 문서 2.2절) | 건너뛴다. `skipped` 에 사유. 글을 멈추지 않는다 |
 
 다듬기 안전장치:
 
@@ -266,6 +267,7 @@ SPOT_CHECK 에서 사실 확인 렌즈는 미결 항목이 없어도 수정으�
 | 기각에는 근거 | 작성자 | `REJECTED_WITH_REASON.reason` 필수. "원래 의도"만으로는 부족하고 기술적·독자 관점 근거 요구 |
 | 중재 결과 복종 | 작성자 | `UPHOLD_REVIEWER` 항목은 다음 버전에서 `ACCEPTED`만 허용. 게이트가 검사 |
 | 신규 CRITICAL 만 | SPOT_CHECK 리뷰어 | 그 외 심각도는 파서가 버리고 로그를 남긴다. 호출은 실패하지 않는다(버릴 항목의 앵커·렌즈는 검사하지 않는다) |
+| 목록 안에서만, 일반 정의만 | 용어 추출 | `same_as` 는 제시된 표제어 키만, 새 뜻은 기존 정의가 이 글에서 틀린 말이 될 때만(영역이 다른 것은 이유가 아니다), 정의는 지어내지 않는다. 표면형은 본문 그대로·코드 밖·한 줄. 어긴 후보는 코드가 항목 단위로 버린다(08 문서 2.3절) |
 
 ## 8. 발행과 패키징
 
@@ -285,7 +287,7 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
 5. 최종 버전 본문 뒤에 요약 노트를 붙여 아래 변환표로 Tiptap JSON을 만들고, 아래 매핑표로 `CreatePostDto`를 채운다.
 6. `status==READY_TO_PUBLISH`인 문서에만 `attempt = publish_attempts + 1`인 발행 의도를 저장한다. 이 쓰기가 실패하면 발행을 호출하지 않는다.
 7. 글을 쓴 슬롯의 벤더 전용 관리자 계정(D-45)으로 `vans_story_be`의 `POST /api/v1/auth/login`에 로그인해 액세스 토큰(기본 900초)을 받고, Bearer 토큰으로 `POST /api/v1/posts`를 호출한다. 토큰은 저장하지 않고 발행마다 받는다. 게시글 작성자는 이 계정이다.
-8. 성공하면 `status==READY_TO_PUBLISH`인 글에만 `Publication`(응답의 게시글 id)과 상태 `PUBLISHED`를 조건 갱신하고, 이어서 레지스트리를 `PUBLISHED`로 쓴다(1절 순서). 검색 색인은 Post BE가 생성 시 스스로 요청한다.
+8. 성공하면 `status==READY_TO_PUBLISH`인 글에만 `Publication`(응답의 게시글 id)과 상태 `PUBLISHED`를 조건 갱신하고, 이어서 레지스트리를 `PUBLISHED`로 쓴다(1절 순서). 검색 색인은 Post BE가 생성 시 스스로 요청한다. 그 뒤 글 단위 파생 문서(`post_glossary`·`post_provenance`, 08 문서)를 따라 쓰고, 여기서 실패하면 로그만 남기고 정리가 마저 쓴다.
 9. 그 조건 갱신이 실패하면 `PUBLISHED`로 쓰지 않고, 상태와 무관하게 반환된 `external_post_id`를 의도에만 남긴다(`reject_by_abort`도 의도를 지우지 않는다). 이 경쟁이 생기는 쓰기는 라운드 중단뿐이다. 자동으로 내리지 않는다. 운영자가 그 ID로 블로그 글을 회수한다.
 10. 결과가 확정된 실패(로그인 단계의 모든 실패, 글 생성 호출의 2xx 아닌 500 미만 응답(4xx·리다이렉트)·연결 거부)면 의도에 `failed_at`을 쓰고 `publish_attempts`를 그 `attempt`로 맞춘다. 상한 미만이면 지수 백오프 뒤 다시 호출하고, 상한이면 `ESCALATED(PUBLISH_FAILED)`다. 로그인에서는 글이 생기지 않으므로 그 단계의 타임아웃·5xx도 여기에 든다.
 11. 글 생성 호출(`POST /api/v1/posts`)의 결과 불명(응답 전 타임아웃·연결 끊김, 5xx)이면 다시 호출하지 않고 `ESCALATED(PUBLISH_UNCERTAIN)`다. Post BE는 글을 저장한 뒤 조회·응답 변환을 하므로 5xx여도 글이 생겼을 수 있다. 글 목록 API는 카테고리·페이지로만 걸러 이 서비스가 이미 게시됐는지 확인할 수 없다.
@@ -341,3 +343,5 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
 | 동시 쓰기 충돌 | `revision` 불일치 → 코루틴은 결과를 버리고 다시 읽는다. 사람·관리자 쓰기는 다시 읽어 전제가 맞으면 재적용하고, 아니면 409 |
 | 관리자 중단 | 1절 순서. 진행 중인 호출은 끊지 않고 결과를 버린다. `IN_PROGRESS`에서는 `PUBLISHED` 외 글만 `REJECTED` |
 | 서버와 `agents run`을 동시에 띄움 | 지원하지 않는다. 같은 글을 두 프로세스가 돌리면 호출이 중복된다(07 문서 Q-04) |
+| 용어 추출 실패(재시도 소진·예산·잘림·라우트 없음) | 건너뛴다. `GlossaryRecord.skipped` 에 사유를 남기고 `READY_TO_PUBLISH`. 보충은 `agents glossary extract`(08 문서 2.5절) |
+| 발행 뒤 파생 문서 쓰기 실패 | 발행은 끝났다. 로그를 남기고 정리가 `derived_at` 없는 `PUBLISHED` 글을 되풀이해 마저 쓴다(08 문서 2.2절) |

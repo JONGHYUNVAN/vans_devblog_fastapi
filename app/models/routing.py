@@ -21,9 +21,10 @@ LEVEL_CRITERIA_DOCUMENT_ID = "LEVEL_CRITERIA"
 ROUTE_ARBITRATE = "ARBITRATE"
 ROUTE_FINAL_READ = "FINAL_READ"
 ROUTE_ASSESS_LEVEL = "ASSESS_LEVEL"
-ROUTE_POLISH_FORMAT = "POLISH_FORMAT"
+ROUTE_POLISH_FORMAT = "POLISH_FORMAT"  # v4 에서 뺐다. 옛 스냅샷·영수증에만 있다
 ROUTE_POLISH_TONE = "POLISH_TONE"
 ROUTE_FACT_TRANSFORM = "FACT_TRANSFORM"
+ROUTE_GLOSSARY = "GLOSSARY"  # 용어 추출. 없으면 단계를 건너뛴다 (설계 08 문서 D-64). 배포된 라우트에 뒤늦게 더해진 유일한 선택 라우트
 
 _DEFAULT_MAX_OUTPUT = 64_000  # 비스트리밍 호출로 받는 상한. 그 이상은 스트리밍이 필요하다
 
@@ -112,6 +113,10 @@ class RoutingSnapshot(BaseModel):
             raise ValueError(f"route {route_id} has no candidate")
         return self.routes[route_id]
 
+    def has_route(self, route_id: str) -> bool:
+        """키 없는 벤더 후보를 뺀 뒤에도 후보가 남아 있는지. 선택 라우트(GLOSSARY)는 없으면 그 단계를 건너뛴다."""
+        return bool(self.routes.get(route_id))
+
 
 def _first_avoiding(snapshot: RoutingSnapshot, route_id: str, avoid: Iterable[str]) -> CallModel | None:
     excluded = set(avoid)
@@ -176,6 +181,11 @@ def select_any(snapshot: RoutingSnapshot, route_id: str) -> CallModel:
     return snapshot.candidates(route_id)[0]
 
 
+def select_optional(snapshot: RoutingSnapshot, route_id: str) -> CallModel | None:
+    """선택 라우트. 없으면 None 이고 호출자가 그 단계를 건너뛴다. 지금은 GLOSSARY 뿐이다."""
+    return snapshot.candidates(route_id)[0] if snapshot.has_route(route_id) else None
+
+
 def build_snapshot(
     documents: Iterable[Mapping[str, Any]],
     providers: Iterable[str],
@@ -227,5 +237,5 @@ def validate_snapshot(snapshot: RoutingSnapshot) -> None:
             select_arbiter(snapshot, writer_vendor, reviewer.provider)
         for route_id in (ROUTE_FINAL_READ, ROUTE_ASSESS_LEVEL, ROUTE_POLISH_TONE):
             select_independent(snapshot, route_id, writer_vendor)
-    select_any(snapshot, ROUTE_POLISH_FORMAT)
     select_any(snapshot, ROUTE_FACT_TRANSFORM)
+    select_optional(snapshot, ROUTE_GLOSSARY)  # 배포된 agent_routes 에 아직 없을 수 있다. 없어도 라운드를 만든다

@@ -121,7 +121,25 @@ class CallKind(StrEnum):
     REVISE_DRAFT = "REVISE_DRAFT"
     REVIEW = "REVIEW"
     ARBITRATE = "ARBITRATE"
+    GLOSSARY = "GLOSSARY"               # 용어 추출 (08 문서 D-64). v3 에서 더한 FACT_CHECK·FACT_TRANSFORM·FINAL_READ·ASSESS_LEVEL·POLISH_TONE 은 models/enums.py
+
+
+class PostReviewStage(StrEnum):
+    POLISH = "POLISH"
+    FINAL_READ = "FINAL_READ"
+    ASSESS_LEVEL = "ASSESS_LEVEL"
+    GLOSSARY = "GLOSSARY"               # 용어 추출. 실패해도 건너뛴다 (08 문서)
+    DONE = "DONE"
+
+
+class GlossaryStatus(StrEnum):          # 표제어·뜻의 승인 상태 (08 문서 2.1절). 표시는 APPROVED 만
+    PROPOSED = "PROPOSED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    MERGED = "MERGED"                   # 표제어만. merged_into 를 따라간다
 ```
+
+`ProvenanceStageKind`(제작 기록의 단계)는 08 문서 3.2절이다.
 
 ## 2. 엔티티 관계
 
@@ -164,8 +182,9 @@ PostDraft (Aggregate Root, 글 수준)        ◄── 리뷰 결과를 써도 
  │    ├─ checklist, overall_feedback, call_id
  │    └─ claims: FactClaim[]                사실 확인 렌즈의 주장과 판정
  ├─ arbitrations: Arbitration[]
- ├─ post_review_stage?                      POST_REVIEW 에서 다음에 할 일. POLISH → FINAL_READ → ASSESS_LEVEL → DONE
+ ├─ post_review_stage?                      POST_REVIEW 에서 다음에 할 일. POLISH → FINAL_READ → ASSESS_LEVEL → GLOSSARY → DONE
  ├─ polish?: PolishRecord                   적용·버린 패치 수와 사유, 건너뛴 호출, 긴 문단, 적용된 모델
+ ├─ glossary?: GlossaryRecord               용어 추출 결과(항목·보류·버림·건너뜀 사유). 발행 때 post_glossary 로 옮긴다 (08 문서 2.1절)
  ├─ final_read?: FinalRead                  findings(kind, section_id, quote, comment), overall
  ├─ level_assessment?: LevelAssessment      level, evidence(criterion, quote), reasoning, criteria_version
  ├─ user_level?                             사용자가 매긴 수준. 평가자와의 일치도 측정에 쓴다
@@ -214,7 +233,7 @@ class RoutingSnapshot(BaseModel):
     """agent_routes 를 라운드 생성 때 뜬 것. 키 없는 벤더 후보는 빠진다. 선택은 models/routing.py 의 순수 함수다."""
 
     routes: dict[str, list[CallModel]]  # PROPOSE_TOPIC:{persona}, WRITE_DRAFT:{persona}, REVISE_DRAFT:{persona}, REVIEW:{lens},
-                                        # ARBITRATE, FINAL_READ, ASSESS_LEVEL, POLISH_FORMAT, POLISH_TONE, FACT_TRANSFORM
+                                        # ARBITRATE, FINAL_READ, ASSESS_LEVEL, POLISH_TONE, FACT_TRANSFORM (POLISH_FORMAT 은 v4 에서 뺐다, D-62)
     slot_personas: dict[AgentSlot, str]
     level_criteria: LevelCriteria
 ```
@@ -389,6 +408,7 @@ class Publication(BaseModel):
     external_post_id: str               # Post BE 게시글 id. 발행 응답 또는 CONFIRM_PUBLISHED 결정에서 온다
     peer_review_note: str               # 하단 부록 마크다운 (05 문서 템플릿으로 생성). 발행 때 본문과 함께 Tiptap 으로 변환한다
     approved_by: str | None             # 승인 토글이 켜져 있을 때 사람 식별자
+    derived_at: datetime | None = None  # 글 단위 파생 문서(post_glossary·post_provenance)를 다 쓴 시각. 없으면 정리가 마저 쓴다 (08 문서 2.2절)
 ```
 
 ### 예산
@@ -429,7 +449,8 @@ class Publication(BaseModel):
 | `finish_polish(record)` | `POST_REVIEW`(`POLISH`) | 변화 없음(`FINAL_READ`) | 패치 없이 다듬기를 끝낸다. 새 버전을 만들지 않는다 |
 | `attach_polished_version(content_markdown, section_ids, record, call_id)` | `POST_REVIEW`(`POLISH`) | 변화 없음(`FINAL_READ`) | 게이트를 통과한 다듬은 본문을 `origin_cause=POLISH`, `passed_validation=True` 인 새 버전으로 붙인다. 승인을 지운다 |
 | `record_final_read(final_read)` | `POST_REVIEW`(`FINAL_READ`) | 변화 없음(`ASSESS_LEVEL`) / `ESCALATED` | 차단 종류가 있으면 `FINAL_READ_FLAGGED` |
-| `record_level_assessment(assessment)` | `POST_REVIEW`(`ASSESS_LEVEL`) | `READY_TO_PUBLISH` | 수준을 라벨로 남긴다. 막지 않는다 |
+| `record_level_assessment(assessment)` | `POST_REVIEW`(`ASSESS_LEVEL`) | 변화 없음(`GLOSSARY`) | 수준을 라벨로 남긴다. 막지 않는다 |
+| `finish_glossary(record)` | `POST_REVIEW`(`GLOSSARY`) | `READY_TO_PUBLISH` | 용어 추출 결과를 남긴다. 호출 실패·라우트 없음으로 건너뛴 기록도 같은 전이다 (08 문서 D-64) |
 | `pass_validation()` | `VALIDATING` | `READY_TO_PUBLISH` / `IN_REVIEW` / `IN_SPOT_CHECK` | `validation_retries=0`. `origin_cause == HUMAN` 이면 바로 `READY_TO_PUBLISH`. 그 외에는 리뷰 완료 이전 버전(`last_reviewed_version`)이 없으면 `IN_REVIEW`, 있으면 `IN_SPOT_CHECK`. `IN_SPOT_CHECK` 인데 미결 항목을 가진 리뷰어가 없으면 `ValueError`(정상 흐름에서는 생기지 않는 방어) |
 | `fail_validation(errors, max_validation_retries)` | `VALIDATING` | `REVISING` (`cause=GATE`) 또는 `FAILED` | 실패 횟수를 1 올린 값이 상한 미만이면 전자, 같으면 `FailureRecord(GATE_RETRIES_EXHAUSTED)`. `iteration` 과 `origin_cause` 는 유지 |
 | `add_review(review)` | `IN_REVIEW`, `IN_SPOT_CHECK` | 변화 없음 | `derived_verdict` 를 저장. 중복이면 무시 |
@@ -469,6 +490,11 @@ class Publication(BaseModel):
 | `agent_calls` | `AgentCall` | `draft_id`, `(round_id, kind)` |
 | `agent_routes` | 호출별 후보, `SLOTS`, `LEVEL_CRITERIA` 문서 | `_id` 만 쓴다 |
 | `agent_topics` | `TopicRegistryEntry` | `(status, keywords)`, `round_id`, `published_at` |
+| `glossary_headwords` | `GlossaryHeadword` (08 문서 2.1절) | `lookup_keys` **unique**(다중키: 한 조회 키는 표제어 하나에만), `status` |
+| `glossary_senses` | `GlossarySense` | `headword_key`, `(status, headword_key)`, `post_ids` |
+| `post_glossary` | `PostGlossary` (글→뜻·표면형) | `_id`(게시글 id), `draft_id` unique, `items.sense_key` |
+| `glossary_counters` | `{_id: "sense", seq}` | `_id` 만. `find_one_and_update($inc)` 로 뜻 키 순번 |
+| `post_provenance` | `PostProvenance` (08 문서 3.2절) | `_id`(게시글 id), `draft_id` unique, `round_id` |
 
 - `PostDraft`에 버전·리뷰를 내장하는 이유: 글 한 편의 전체 이력을 한 번에 읽고, 한 문서 쓰기는 원자적이다. 게이트 실패본이 더해져도 버전은 한 자릿수다.
 - 낙관적 잠금: `PostDraft.revision`과 `PublishingRound.revision`. 조건은 `{"_id": id, "revision": n}`, 갱신은 `{"$set": {...}, "$inc": {"revision": 1}}`. 글 하나는 코루틴 하나만 진행하고 사람 결정은 코루틴이 돌지 않는 상태(승인 대기, `ESCALATED`, `FAILED`)에만 쓰므로, 글 코루틴과의 충돌은 라운드 중단에서만 난다. 코루틴은 결과를 버리고 다시 읽는다. 주제 코루틴의 라운드 저장도 같다. 사람·관리자 쓰기는 충돌하면 다시 읽고, 전제 상태가 여전히 맞으면 재적용하고 아니면 409다.

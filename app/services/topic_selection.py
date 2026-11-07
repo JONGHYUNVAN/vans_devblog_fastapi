@@ -102,6 +102,7 @@ class TopicSelectionService:
                             conflict_feedback=_conflict_feedback(previous, slot),
                         ),
                         self._settings.prompt_version,
+                        proposer_of(publishing_round, slot),
                     ),
                     schema=ProposeTopicOutput,
                     check=topic_proposal_check(

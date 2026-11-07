@@ -57,6 +57,7 @@ from app.core.exceptions import (
     LLMRetriesExhaustedError,
 )
 from app.models.enums import CallKind, FailureCode, PostReviewStage, PostStatus, ReviewLens, ReviewScope, RoundStatus
+from app.models.glossary import GlossaryRecord
 from app.models.post_draft import (
     Arbitration,
     FinalRead,
@@ -73,6 +74,7 @@ from app.models.sections import find_anchors, markdown_links, required_sections_
 from app.repositories.post_draft import PostDraftRepository
 from app.services.agent_calls import AgentCallService
 from app.services.evaluation import derive_verdict, evaluate
+from app.services.glossary import GlossaryService
 from app.services.polishing import PolishingService
 from app.services.round import RoundService
 from app.services.routing import DraftRoutes
@@ -109,6 +111,7 @@ class DraftPipelineService:
         publisher: DraftPublisher,
         settings: Settings,
         link_checker: LinkChecker | None = None,
+        glossary_service: GlossaryService | None = None,
     ) -> None:
         self._drafts = draft_repository
         self._rounds = round_service
@@ -117,6 +120,7 @@ class DraftPipelineService:
         self._publisher = publisher
         self._settings = settings
         self._links = link_checker
+        self._glossary = glossary_service
         self._polisher = PolishingService(agent_call_service=agent_call_service, gate=gate, settings=settings)
         self._rules = StructureRules(min_chars=settings.draft_min_chars, max_chars=settings.draft_max_chars)
 
@@ -187,7 +191,7 @@ class DraftPipelineService:
                     slot=draft.author_slot,
                     binding=model,
                     messages=render_messages(
-                        build_write_draft_input(draft, publishing_round, rules), self._settings.prompt_version
+                        build_write_draft_input(draft, publishing_round, rules), self._settings.prompt_version, model
                     ),
                     schema=DraftOutput,
                     draft=draft,
@@ -206,6 +210,7 @@ class DraftPipelineService:
                             draft, publishing_round, rules, max_iterations=self._settings.max_iterations
                         ),
                         self._settings.prompt_version,
+                        model,
                     ),
                     schema=RevisionOutput,
                     draft=draft,
@@ -262,9 +267,9 @@ class DraftPipelineService:
             draft.apply_evaluation(evaluate(draft, self._settings.max_iterations))
 
     async def _post_review(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        """다듬기 → 전체 읽기 → 수준 평가. 한 걸음에 한 단계만 하고 포인터와 결과를 함께 저장해 재개 때 되풀이하지 않는다.
+        """다듬기 → 전체 읽기 → 수준 평가 → 용어 추출. 한 걸음에 한 단계만 하고 포인터와 결과를 함께 저장해 재개 때 되풀이하지 않는다.
 
-        읽기와 평가가 최종 본문을 보도록 다듬기가 먼저다. 다듬기 실패는 건너뛰고, 읽기·평가의 재시도 소진·예산 초과는 FAILED 다.
+        읽기와 평가가 최종 본문을 보도록 다듬기가 먼저다. 다듬기·용어 추출 실패는 건너뛰고, 읽기·평가의 재시도 소진·예산 초과는 FAILED 다.
         """
         try:
             match draft.post_review_stage:
@@ -274,6 +279,15 @@ class DraftPipelineService:
                     await self._final_read(draft, publishing_round)
                 case PostReviewStage.ASSESS_LEVEL:
                     await self._assess_level(draft, publishing_round)
+                case PostReviewStage.GLOSSARY:
+                    if self._glossary is None:
+                        draft.finish_glossary(
+                            GlossaryRecord(
+                                target_version=draft.current_version.version_number, skipped="no glossary service"
+                            )
+                        )
+                    else:
+                        await self._glossary.extract(draft, publishing_round)
                 case stage:
                     raise ValueError(f"draft {draft.draft_id} is POST_REVIEW at stage {stage}")
         except _STEP_FAILURES as exc:
@@ -281,11 +295,12 @@ class DraftPipelineService:
 
     async def _final_read(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
         version = draft.current_version
+        model = DraftRoutes(publishing_round, draft).final_reader
         result = await self._calls.call(
             kind=CallKind.FINAL_READ,
             round_id=draft.round_id,
-            binding=DraftRoutes(publishing_round, draft).final_reader,
-            messages=render_messages(build_final_read_input(draft), self._settings.prompt_version),
+            binding=model,
+            messages=render_messages(build_final_read_input(draft), self._settings.prompt_version, model),
             schema=FinalReadOutput,
             check=final_read_check(version.content_markdown, find_anchors(version.content_markdown)),
             draft=draft,
@@ -302,11 +317,14 @@ class DraftPipelineService:
 
     async def _assess_level(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
         version = draft.current_version
+        model = DraftRoutes(publishing_round, draft).level_assessor
         result = await self._calls.call(
             kind=CallKind.ASSESS_LEVEL,
             round_id=draft.round_id,
-            binding=DraftRoutes(publishing_round, draft).level_assessor,
-            messages=render_messages(build_assess_level_input(draft, publishing_round), self._settings.prompt_version),
+            binding=model,
+            messages=render_messages(
+                build_assess_level_input(draft, publishing_round), self._settings.prompt_version, model
+            ),
             schema=AssessLevelOutput,
             check=level_assessment_check(version.content_markdown),
             draft=draft,
@@ -364,7 +382,7 @@ class DraftPipelineService:
                 lens=lens,
                 binding=model,
                 messages=render_messages(
-                    build_review_input(draft, publishing_round, lens), self._settings.prompt_version
+                    build_review_input(draft, publishing_round, lens), self._settings.prompt_version, model
                 ),
                 schema=ReviewOutput,
                 check=review_output_check(section_ids, assignment.lenses),
@@ -384,7 +402,7 @@ class DraftPipelineService:
                 lens=lens,
                 binding=model,
                 messages=render_messages(
-                    build_spot_check_input(draft, publishing_round, lens), self._settings.prompt_version
+                    build_spot_check_input(draft, publishing_round, lens), self._settings.prompt_version, model
                 ),
                 schema=SpotCheckOutput,
                 check=spot_check_output_check(section_ids, expected_ids, assignment.lenses),
@@ -454,13 +472,15 @@ class DraftPipelineService:
         searched = await self._calls.search(
             round_id=draft.round_id,
             binding=model,
-            messages=render_messages(fact_input, self._settings.prompt_version),
+            messages=render_messages(fact_input, self._settings.prompt_version, model),
             draft=draft,
             lens=lens,
             target_version=version.version_number,
         )
         transform_messages = render_messages(
-            build_fact_transform_input(draft, lens, searched.text, searched.citations), self._settings.prompt_version
+            build_fact_transform_input(draft, lens, searched.text, searched.citations),
+            self._settings.prompt_version,
+            routes.fact_transformer,
         )
         section_ids = find_anchors(version.content_markdown)
         if scope == ReviewScope.FULL:
@@ -531,7 +551,9 @@ class DraftPipelineService:
             searched = await self._calls.search(
                 round_id=draft.round_id,
                 binding=model,
-                messages=render_messages(build_arbitrate_search_input(draft, item), self._settings.prompt_version),
+                messages=render_messages(
+                    build_arbitrate_search_input(draft, item), self._settings.prompt_version, model
+                ),
                 draft=draft,
                 target_version=version_number,
                 item_id=item.item_id,
@@ -542,7 +564,9 @@ class DraftPipelineService:
             kind=CallKind.ARBITRATE,
             round_id=draft.round_id,
             binding=model,
-            messages=render_messages(build_arbitrate_input(draft, item, evidence), self._settings.prompt_version),
+            messages=render_messages(
+                build_arbitrate_input(draft, item, evidence), self._settings.prompt_version, model
+            ),
             schema=ArbitrateOutput,
             draft=draft,
             target_version=version_number,

@@ -3,6 +3,7 @@
 import json
 
 from app.agents.builders import (
+    _scope_declaration,
     build_arbitrate_input,
     build_propose_topic_input,
     build_review_input,
@@ -14,6 +15,7 @@ from app.agents.builders import (
 from app.agents.contracts import StructureRules
 from app.agents.personas import PERSONAS
 from app.models.enums import AgentSlot, ArbitrationOutcome, IssueSeverity, PostStatus, ReviewLens, RevisionCause
+from app.models.model_binding import CallModel
 from app.models.post_draft import PostDraft
 from app.models.publishing_round import LockedTopic, TopicAttempt
 from app.services.evaluation import evaluate
@@ -75,14 +77,30 @@ def test_propose_topic_input_adds_other_slots_locked_topics_to_avoid_list():
     assert result.categories == publishing_round.categories
 
 
-def test_write_draft_input_uses_author_persona_and_rules():
+def test_write_draft_input_has_no_persona_and_carries_level_criteria():
     draft = make_draft(B)
 
     result = build_write_draft_input(draft, ROUND, RULES)
 
-    assert result.persona.persona_id == "systems_engineer"
+    assert "persona" not in result.model_dump()
     assert result.topic == draft.topic
-    assert result.structure_rules.required_sections == ["intro", "body-1", "tradeoff", "conclusion"]
+    assert result.level_criteria.version == "v1"
+    assert result.structure_rules.required_sections == ["intro", "body-1", "tradeoff"]
+
+
+def test_scope_declaration_prefers_tradeoff_then_conclusion_then_the_last_prose_section():
+    assert (
+        _scope_declaration("<!-- sec:intro -->\n서론\n<!-- sec:tradeoff -->\n범위\n<!-- sec:conclusion -->\n끝\n")
+        == "범위"
+    )
+    assert _scope_declaration("<!-- sec:intro -->\n서론\n<!-- sec:conclusion -->\n끝\n") == "끝"
+    assert (
+        _scope_declaration(
+            "<!-- sec:intro -->\n서론\n<!-- sec:body-1 -->\n본론\n<!-- sec:code-1 -->\n```python\nx\n```\n"
+        )
+        == "본론"
+    )
+    assert _scope_declaration("본문만") == ""
 
 
 def test_revise_input_after_full_review_carries_blocking_and_minor_items_without_model_names():
@@ -159,14 +177,15 @@ def test_revise_input_includes_human_instruction_for_human_revision_and_its_gate
     )
 
 
-def test_review_input_is_blind_and_carries_author_tone_markers():
+def test_review_input_is_blind_and_carries_level_criteria():
     draft = make_draft(A)
     write_next_version(draft)
 
     result = build_review_input(draft, ROUND, LENSES[C])
 
     assert (result.scope, result.lens, result.secondary_lens) == ("FULL", ReviewLens.CRITICAL_PRACTICAL, None)
-    assert result.tone_preservation.author_tone_markers == PERSONAS["architect"].tone_markers
+    assert result.tone_preservation.author_tone_markers == []
+    assert result.level_criteria.version == "v1"
     dumped = result.model_dump_json()
     assert "persona" not in result.model_dump()
     assert "author_slot" not in dumped and "display_name" not in dumped and "fake-1" not in dumped
@@ -221,15 +240,31 @@ def test_arbitrate_input_extracts_sections_reason_and_note():
     assert result.reviewer_unresolved_note == "아직 고쳐지지 않았다"
 
 
-def test_render_messages_substitutes_persona_and_dumps_input_json():
+def test_render_messages_picks_the_family_template_and_dumps_input_json():
     draft = make_draft(C)
+    claude = CallModel(provider="anthropic", model_id="claude-opus-5-5", max_output_tokens=1000)
+    grok = CallModel(provider="xai", model_id="grok-4.7", max_output_tokens=1000)
 
-    messages = render_messages(build_write_draft_input(draft, ROUND, RULES), "v1")
+    for_claude = render_messages(build_write_draft_input(draft, ROUND, RULES), "v4", claude)
+    for_grok = render_messages(build_write_draft_input(draft, ROUND, RULES), "v4", grok)
 
-    assert [message.role for message in messages] == ["system", "user"]
-    assert "실용주의 트러블슈터" in messages[0].content and "$" not in messages[0].content
-    payload = json.loads(messages[1].content.removeprefix("입력(JSON):\n"))
-    assert payload["topic"]["title"] == draft.topic.title
+    assert [message.role for message in for_claude] == ["system", "user"]
+    assert for_claude[0].content.startswith("<task>") and for_grok[0].content.startswith("### Objective")
+    assert "$" not in for_claude[0].content and '"persona"' not in for_claude[1].content
+    payload = json.loads(for_claude[1].content.removeprefix("입력(JSON):\n"))
+    assert payload["topic"]["title"] == draft.topic.title and payload["level_criteria"]["version"] == "v1"
+
+
+def test_render_messages_substitutes_the_search_domain_and_falls_back_to_flat_templates():
+    fake = CallModel(provider="fake", model_id="fake-1", max_output_tokens=1000)
+    claude = CallModel(provider="anthropic", model_id="claude-opus-5-5", max_output_tokens=1000)
+    propose = build_propose_topic_input(ROUND, C, attempt_number=1, avoid_entries=[], conflict_feedback=None)
+
+    flat = render_messages(propose, "v3", fake)  # 모르는 벤더는 가족 디렉터리가 없어 버전 루트의 평면 템플릿을 쓴다
+    family = render_messages(propose, "v4", claude)
+
+    assert "Public failure postmortems" in flat[0].content and "$" not in flat[0].content
+    assert "Public failure postmortems" in family[0].content and "$" not in family[0].content
 
 
 def test_revise_input_drops_items_closed_by_uphold_author_and_lists_their_verdict():
