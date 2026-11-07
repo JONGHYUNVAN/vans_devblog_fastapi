@@ -263,15 +263,29 @@ def _check_register(markdown: str, style: StyleParameters, expected: str | None 
 
 
 # ---------- 코드 블록 주석 (D-85) ----------
+_C_STYLE = ("//", "/*", "*", "*/")
+# 라운드 b48cf759 의 A 글(Java 8블록 중 3블록 주석 0줄)이 python·typescript 만 보던 검사를 통과했다. 블로그가 다루는 언어를 다 넣는다
 _COMMENT_MARKERS = {
     "python": ("#", '"""', "'''"),
-    "typescript": ("//", "/*", "*", "*/"),
-    "ts": ("//", "/*", "*", "*/"),
-    "tsx": ("//", "/*", "*", "*/"),
-    "javascript": ("//", "/*", "*", "*/"),
-    "js": ("//", "/*", "*", "*/"),
+    "typescript": _C_STYLE,
+    "ts": _C_STYLE,
+    "tsx": _C_STYLE,
+    "javascript": _C_STYLE,
+    "js": _C_STYLE,
+    "java": _C_STYLE,
+    "kotlin": _C_STYLE,
+    "kt": _C_STYLE,
+    "go": _C_STYLE,
+    "rust": _C_STYLE,
+    "csharp": _C_STYLE,
+    "cs": _C_STYLE,
+    "sql": ("--", "/*", "*", "*/"),
+    "bash": ("#",),
+    "sh": ("#",),
+    "yaml": ("#",),
+    "yml": ("#",),
 }
-_PATH_HEADER = re.compile(r"[\w./-]+\.(py|ts|tsx|js|jsx|mjs)\b")
+_PATH_HEADER = re.compile(r"[\w./-]+\.(py|ts|tsx|js|jsx|mjs|java|kt|kts|go|rs|cs|sql|sh|ya?ml)\b")
 
 
 def _comment_markers(language: str | None) -> tuple[str, ...] | None:

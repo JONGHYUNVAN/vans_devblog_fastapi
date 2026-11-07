@@ -356,3 +356,12 @@ def test_expected_register_accepts_polite_body_and_default_gate_has_no_expectati
 
 def test_expected_register_ignores_too_short_bodies():
     assert not GATE_POLITE.check_style(body(extra="\n<!-- sec:body-2 -->\n한 문장뿐이다."))
+
+
+def test_java_and_sql_blocks_are_checked_for_comments_too():
+    java = "\n".join(f"int v{index} = {index};" for index in range(15))
+    assert any("설명 주석" in error for error in GATE.check_style(body(code=java, language="java")))
+    assert not GATE.check_style(body(code="// 왜: 순서가 중요하다\n" + java, language="java"))
+    sql = "\n".join(f"SELECT {index} AS v{index};" for index in range(15))
+    assert any("설명 주석" in error for error in GATE.check_style(body(code=sql, language="sql")))
+    assert not GATE.check_style(body(code="-- 왜: 인덱스가 이 순서를 탄다\n" + sql, language="sql"))
