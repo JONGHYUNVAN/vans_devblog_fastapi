@@ -5,6 +5,7 @@
 메시지 렌더링은 결정론적이다: 시스템 메시지는 템플릿, 사용자 메시지는 입력 모델의 JSON 이다.
 """
 
+from collections.abc import Mapping
 from string import Template
 
 from pydantic import BaseModel
@@ -37,12 +38,13 @@ from app.agents.contracts import (
     WriteDraftInput,
 )
 from app.agents.personas import PersonaProfile, get_persona
-from app.agents.prompts.registry import load_template, prompt_family
+from app.agents.prompts.registry import prompt_family, resolve_template
 from app.models.agent_call import ChatMessage
 from app.models.enums import AgentSlot, ArbitrationOutcome, ReviewLens, ReviewScope, RevisionCause
 from app.models.glossary import DOMAINS
 from app.models.level import DEFAULT_LEVEL_CRITERIA, LevelCriteria
 from app.models.model_binding import CallModel
+from app.models.pipeline import Parameters, PromptSet
 from app.models.post_draft import DraftVersion, PostDraft, ReviewItem
 from app.models.publishing_round import PublishingRound
 from app.models.sections import CODE_ANCHOR_PATTERN, changed_sections, find_anchors, section_text
@@ -65,8 +67,11 @@ _TEMPLATE_BY_INPUT: dict[type[BaseModel], str] = {
 }
 
 
-def persona_of(publishing_round: PublishingRound, slot: AgentSlot) -> PersonaProfile:
-    return get_persona(publishing_round.slot_bindings[slot].persona_id)
+def persona_of(
+    publishing_round: PublishingRound, slot: AgentSlot, personas: Mapping[str, PersonaProfile] | None = None
+) -> PersonaProfile:
+    """슬롯의 페르소나. personas 는 라운드 버전 문서의 것이고, 없으면 코드 기본 상수다."""
+    return get_persona(publishing_round.slot_bindings[slot].persona_id, personas)
 
 
 def level_criteria_of(publishing_round: PublishingRound) -> LevelCriteria:
@@ -88,6 +93,7 @@ def build_propose_topic_input(
     attempt_number: int,
     avoid_entries: list[TopicRegistryEntry],
     conflict_feedback: str | None,
+    personas: Mapping[str, PersonaProfile] | None = None,
 ) -> ProposeTopicInput:
     """avoid_entries 는 레지스트리의 최근 항목이다. 재제안이면 이번 라운드에서 이미 잠긴 주제를 더한다."""
     avoid = [AvoidTopic(title=entry.title, keywords=entry.keywords) for entry in avoid_entries]
@@ -99,7 +105,7 @@ def build_propose_topic_input(
             if locked_slot != slot
         ]
     return ProposeTopicInput(
-        persona=persona_of(publishing_round, slot),
+        persona=persona_of(publishing_round, slot, personas),
         theme_keyword=publishing_round.theme_keyword,
         avoid_topics=avoid,
         attempt_number=attempt_number,
@@ -187,12 +193,17 @@ def build_revise_draft_input(
     )
 
 
-def _tone_rule() -> TonePreservationRule:
-    """v4: 어조 마커가 없다. 리뷰어는 must_not_flag 만 지킨다."""
-    return TonePreservationRule()
+def _tone_rule(parameters: Parameters | None) -> TonePreservationRule:
+    """v4: 어조 마커가 없다. 리뷰어는 must_not_flag 만 지킨다. 목록은 버전 문서의 조절 값이고 없으면 계약 기본값이다."""
+    if parameters is None:
+        return TonePreservationRule()
+    tone = parameters.review.tone_preservation
+    return TonePreservationRule(may_flag=list(tone.may_flag), must_not_flag=list(tone.must_not_flag))
 
 
-def build_review_input(draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens) -> ReviewInput:
+def build_review_input(
+    draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens, parameters: Parameters | None = None
+) -> ReviewInput:
     """FULL 리뷰. 저자 슬롯·모델·페르소나 이름과 주제의 rationale 은 넣지 않는다."""
     assignment = draft.assignment_of(lens)
     return ReviewInput(
@@ -201,11 +212,13 @@ def build_review_input(draft: PostDraft, publishing_round: PublishingRound, lens
         topic=TopicForReviewer.from_topic(draft.topic),
         content_markdown=draft.current_version.content_markdown,
         level_criteria=level_criteria_of(publishing_round),
-        tone_preservation=_tone_rule(),
+        tone_preservation=_tone_rule(parameters),
     )
 
 
-def build_spot_check_input(draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens) -> SpotCheckInput:
+def build_spot_check_input(
+    draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens, parameters: Parameters | None = None
+) -> SpotCheckInput:
     """SPOT_CHECK. my_previous_items 는 직전 리뷰 완료 버전의 미결 차단 항목 중 이 리뷰어가 낸 것이다."""
     if draft.last_reviewed_version is None:
         raise ValueError(f"draft {draft.draft_id} has no reviewed version to spot-check against")
@@ -222,12 +235,16 @@ def build_spot_check_input(draft: PostDraft, publishing_round: PublishingRound, 
         current_content=current.content_markdown,
         my_previous_items=[ReviewItemForReviewer.from_item(item) for item in my_items],
         resolutions=[resolution for resolution in current.resolutions if resolution.item_id in my_ids],
-        tone_preservation=_tone_rule(),
+        tone_preservation=_tone_rule(parameters),
     )
 
 
 def build_fact_check_input(
-    draft: PostDraft, publishing_round: PublishingRound, lens: ReviewLens, link_status: list[LinkStatus]
+    draft: PostDraft,
+    publishing_round: PublishingRound,
+    lens: ReviewLens,
+    link_status: list[LinkStatus],
+    parameters: Parameters | None = None,
 ) -> FactCheckInput:
     """사실 확인 검색 호출. SPOT_CHECK 는 수정으로 바뀐 섹션의 주장만 다시 뽑는다 (D-09 의 범위를 사실 확인에만 넓힌다)."""
     current = draft.current_version
@@ -247,7 +264,7 @@ def build_fact_check_input(
         my_previous_items=[ReviewItemForReviewer.from_item(item) for item in my_items],
         resolutions=[resolution for resolution in current.resolutions if resolution.item_id in my_ids],
         link_status=link_status,
-        tone_preservation=_tone_rule(),
+        tone_preservation=_tone_rule(parameters),
     )
 
 
@@ -370,12 +387,13 @@ def build_glossary_input(
     )
 
 
-def render_messages(model: BaseModel, prompt_version: str, call_model: CallModel) -> list[ChatMessage]:
+def render_messages(model: BaseModel, prompts: PromptSet, call_model: CallModel) -> list[ChatMessage]:
     """시스템 메시지는 입력 종류와 프롬프트 가족(호출 모델로 정한다)의 템플릿, 사용자 메시지는 입력 JSON.
 
-    치환은 propose_topic 의 $writer_bias 뿐이다. 입력에 persona 가 없는 작성·수정 호출에서 v3 이전 템플릿의 $display_name 은 빈 글이 된다.
+    prompts 는 라운드 버전 문서의 것이다(09 문서 D-73). 치환은 propose_topic 의 $writer_bias 뿐이다.
+    입력에 persona 가 없는 작성·수정 호출에서 v3 이전 템플릿의 $display_name 은 빈 글이 된다.
     """
-    template = Template(load_template(_TEMPLATE_BY_INPUT[type(model)], prompt_version, prompt_family(call_model)))
+    template = Template(resolve_template(prompts, _TEMPLATE_BY_INPUT[type(model)], prompt_family(call_model)))
     persona = getattr(model, "persona", None)
     system = template.safe_substitute(
         display_name=persona.display_name if persona else "",

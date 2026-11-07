@@ -13,7 +13,6 @@ from app.models.enums import (
     TopicRegistryStatus,
 )
 from app.repositories.post_draft import PostDraftRepository
-from app.services.draft_decision import DraftDecisionService
 from tests.factories import draft_output, make_call, review_output
 from tests.fakes import PipelineHarness
 
@@ -50,18 +49,14 @@ async def test_approve_records_approver_and_rejects_other_states():
 
 
 async def test_approve_is_refused_when_the_approval_toggle_is_off():
-    harness = PipelineHarness(_fast_track())
-    draft = await _ready(harness)
-    decisions = DraftDecisionService(
-        draft_repository=harness.drafts,
-        agent_call_repository=harness.calls,
-        topic_registry_repository=harness.topics,
-        round_service=harness.round_service,
-        settings=harness.settings.model_copy(update={"publish_requires_approval": False}),
-    )
+    # 승인 토글은 라운드가 고정한 버전의 조절 값이다(09 문서). 토글이 꺼진 버전의 라운드는 발행까지 바로 가므로 글은 손으로 READY_TO_PUBLISH 에 둔다
+    harness = PipelineHarness(_fast_track(), publish_requires_approval=False)
+    await harness.seed_round()
+    draft = await harness.draft(A)
+    await harness.set_status(draft, PostStatus.READY_TO_PUBLISH)
 
     with pytest.raises(InvalidTransitionError, match="toggle is off"):
-        await decisions.approve(draft.draft_id, approved_by="사람")
+        await harness.decisions.approve(draft.draft_id, approved_by="사람")
     assert (await harness.draft(A)).approved_by is None
 
 

@@ -18,6 +18,7 @@ from app.core.exceptions import ServiceUnavailableError
 from app.models.agent_call import AgentCall, TokenUsage
 from app.models.code_graph import CodeGraph
 from app.models.enums import AgentSlot, PostStatus
+from app.models.pipeline import Parameters
 from app.models.popular_search import PopularSearch
 from app.models.post import Post, PostSearchCriteria, PostSearchPage
 from app.models.post_draft import PostDraft
@@ -27,6 +28,7 @@ from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.glossary import GlossaryRepository
 from app.repositories.model_route import ModelRouteRepository
+from app.repositories.pipeline_version import PipelineVersionRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_provenance import PostProvenanceRepository
 from app.repositories.topic_registry import TopicRegistryRepository
@@ -35,11 +37,11 @@ from app.services.derived_records import DerivedRecordsWriter
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService
 from app.services.glossary import GlossaryService
+from app.services.pipeline_versions import PipelineVersionService
 from app.services.publishing import PublishingService
 from app.services.round import RoundService
 from app.services.runner import PipelineRunner
 from app.services.topic_selection import TopicSelectionService
-from app.services.validation import ValidationGate
 from tests.factories import (
     FACT_CITATION,
     FAKE_VENDORS,
@@ -49,6 +51,7 @@ from tests.factories import (
     fact_transform_output,
     final_read_output,
     make_call,
+    make_pipeline_version,
     make_round,
     make_routing,
     make_topic,
@@ -682,10 +685,37 @@ async def _no_sleep(seconds: float) -> None:
     return None
 
 
+# 하네스 overrides 가운데 파이프라인 버전의 조절 값(Parameters)으로 가는 이름. 옛 Settings 의 평면 이름은 중첩 키로 옮긴다
+_FLAT_PARAMETER_PATHS = {
+    "publish_requires_approval": ("publish", "requires_approval"),
+    "glossary_full_list_max": ("glossary", "full_list_max"),
+    "glossary_min_terms": ("glossary", "min_terms"),
+    "glossary_max_terms": ("glossary", "max_terms"),
+    "glossary_surface_max_chars": ("glossary", "surface_max_chars"),
+    "glossary_terminology_max": ("glossary", "terminology_max"),
+}
+
+
+def split_overrides(overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(조절 값, Settings) 로 나눈다. 조절 값의 평면 이름은 중첩 dict 로 바꾼다."""
+    parameters: dict[str, Any] = {}
+    settings: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key in _FLAT_PARAMETER_PATHS:
+            group, field = _FLAT_PARAMETER_PATHS[key]
+            parameters.setdefault(group, {})[field] = value
+        elif key in Parameters.model_fields:
+            parameters[key] = value
+        else:
+            settings[key] = value
+    return parameters, settings
+
+
 class PipelineHarness:
     """FakeAsyncDatabase 위에 실제 리포지토리·서비스를 조립한다. LLM 은 ScriptedLLMClient, Post BE 는 FakePostBE 다.
 
-    settings 기본: 본문 길이 하한 1, 호출 재시도 2, 백오프 없음, 승인 토글 켬.
+    파이프라인 버전 v1(가짜 벤더 라우트, 기본 페르소나, 스텁 프롬프트)을 넣어 둔다(with_version=False 면 넣지 않는다).
+    조절 값 기본: 본문 길이 하한 1, 호출 재시도 2, 승인 토글 켬. overrides 는 Parameters 필드(평면 이름 포함)나 Settings 필드다.
     """
 
     def __init__(
@@ -696,19 +726,22 @@ class PipelineHarness:
         database: FakeAsyncDatabase | None = None,
         round_repository: PublishingRoundRepository | None = None,
         publisher: Publisher | None = None,
-        **settings_overrides: Any,
+        with_version: bool = True,
+        **overrides: Any,
     ) -> None:
         self.database = database or FakeAsyncDatabase()
         self.llm = ScriptedLLMClient(default_scripts() | (scripts or {}), delay_s)
-        self.settings = Settings(
-            _env_file=None,
-            # prompt_version=v3: 가짜 벤더(fake, fake-a/b/c)는 v4 가족 디렉터리가 없다. 오케스트레이션은 버전과 무관하고,
-            # v4 템플릿 해소는 실제 벤더 이름을 쓰는 tests/agents/prompts/test_registry.py 가 검증한다
-            **(
-                {"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2, "prompt_version": "v3"}
-                | settings_overrides
-            ),
+        parameters, settings = split_overrides(overrides)
+        self.settings = Settings(_env_file=None, **settings)
+        self.version = make_pipeline_version(
+            **({"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2} | parameters)
         )
+        self.version_repository = PipelineVersionRepository(self.database)
+        if with_version:
+            # __init__ 은 동기라 리포지토리 대신 가짜 컬렉션에 바로 넣는다. 테스트가 시작할 때 v1 이 최신이다
+            self.database.agent_pipeline_versions.docs.append(self.version.model_dump(by_alias=True))
+            self.database.agent_pipeline_counters.docs.append({"_id": "version", "seq": self.version.seq})
+        self.versions = PipelineVersionService(self.version_repository, created_by="test")
         self.rounds = round_repository or PublishingRoundRepository(self.database)
         self.drafts = PostDraftRepository(self.database)
         self.topics = TopicRegistryRepository(self.database)
@@ -729,10 +762,10 @@ class PipelineHarness:
             self.drafts,
             self.topics,
             publisher=self.publisher,
+            version_service=self.versions,
             route_repository=self.routes,
             providers=["fake", *FAKE_VENDORS.values()],
             derived_writer=self.derived,
-            prompt_version=self.settings.prompt_version,
         )
         self.call_service = AgentCallService(
             self.calls,
@@ -747,6 +780,7 @@ class PipelineHarness:
             topic_registry_repository=self.topics,
             publisher=self.publisher,
             settings=self.settings,
+            version_service=self.versions,
             sleep=_no_sleep,
             derived_writer=self.derived,
         )
@@ -756,6 +790,7 @@ class PipelineHarness:
             topic_registry_repository=self.topics,
             round_service=self.round_service,
             settings=self.settings,
+            version_service=self.versions,
             derived_writer=self.derived,
         )
         self.glossary = GlossaryService(
@@ -764,14 +799,14 @@ class PipelineHarness:
             agent_call_service=self.call_service,
             draft_repository=self.drafts,
             round_repository=self.rounds,
+            version_service=self.versions,
         )
         self.draft_pipeline = DraftPipelineService(
             draft_repository=self.drafts,
             round_service=self.round_service,
             agent_call_service=self.call_service,
-            gate=ValidationGate(min_chars=self.settings.draft_min_chars, max_chars=self.settings.draft_max_chars),
             publisher=self.publishing,
-            settings=self.settings,
+            version_service=self.versions,
             glossary_service=self.glossary,
         )
         self.topic_selection = TopicSelectionService(
@@ -780,7 +815,7 @@ class PipelineHarness:
             topic_registry_repository=self.topics,
             round_service=self.round_service,
             agent_call_service=self.call_service,
-            settings=self.settings,
+            version_service=self.versions,
         )
         self.runner = PipelineRunner(
             round_repository=self.rounds,
@@ -788,13 +823,19 @@ class PipelineHarness:
             round_service=self.round_service,
             topic_selection_service=self.topic_selection,
             draft_pipeline_service=self.draft_pipeline,
+            version_service=self.versions,
             settings=self.settings,
         )
 
     async def seed_round(self, round_id: str = "round-1", *, with_glossary: bool = False) -> PublishingRound:
-        """주제가 확정된 IN_PROGRESS 라운드와 TOPIC_LOCKED 글 3편, RESERVED 레지스트리 3건. with_glossary 면 GLOSSARY 라우트도."""
+        """주제가 확정된 IN_PROGRESS 라운드와 TOPIC_LOCKED 글 3편, RESERVED 레지스트리 3건. with_glossary 면 GLOSSARY 라우트도.
+
+        라운드는 하네스의 버전 v1 을 고정한다(09 문서 D-73).
+        """
         await self.seed_routes(with_glossary)
-        publishing_round = make_round(round_id, routing=make_routing(with_glossary))
+        publishing_round = make_round(
+            round_id, routing=make_routing(with_glossary), pipeline_version_id=self.version.version_id
+        )
         attempt = TopicAttempt(attempt_number=1)
         for index, slot in enumerate(AgentSlot):
             topic = make_topic(title=f"주제 {slot}", keywords=[f"k{index}a", f"k{index}b", f"k{index}c"])
@@ -804,7 +845,7 @@ class PipelineHarness:
         publishing_round.lock_topics()
         await self.rounds.add(publishing_round)
         for slot in AgentSlot:
-            draft = self.round_service.build_draft(publishing_round, slot, self.settings.draft_token_limit)
+            draft = self.round_service.build_draft(publishing_round, slot, self.version.parameters.draft_token_limit)
             await self.drafts.add_if_missing(draft)
             await self.topics.add_if_missing(
                 TopicRegistryEntry(

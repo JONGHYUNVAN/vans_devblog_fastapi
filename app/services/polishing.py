@@ -7,13 +7,14 @@
 import logging
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from functools import partial
 
 from app.agents.builders import render_messages
 from app.agents.contracts import ParagraphForPolish, PolishOutput, PolishToneInput
-from app.core.config import Settings
 from app.models.enums import CallKind
+from app.models.pipeline import PipelineVersion, PolishParameters
 from app.models.post_draft import DiscardedPatch, PolishRecord, PostDraft
 from app.models.publishing_round import PublishingRound
 from app.models.sections import ANCHOR_PATTERN, find_anchors
@@ -24,22 +25,16 @@ from app.services.validation import ValidationGate
 
 logger = logging.getLogger(__name__)
 
-_LONG_PARAGRAPH_CHARS = 300  # 정규식이 고칠 수 없어 사람에게 알린다
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _URL = re.compile(r"https?://[^\s)\]]+")
 _LATIN = re.compile(r"[A-Za-z][A-Za-z0-9_+./-]*")
 _NEGATION = re.compile(r"[않못없]|아니|(?<![가-힣])안(?= )|말아|말고")
-_LENGTH_SLACK_CHARS = 30  # 문체 패치의 길이 변화 허용폭. 이보다 크게 바뀌면 설명을 더하거나 뺀 것으로 본다
-_LENGTH_SLACK_RATIO = 0.25
 _PARAGRAPH_TOKENS = frozenset({"paragraph_open", "inline", "paragraph_close"})
 _PLAIN_INLINE = frozenset({"text", "softbreak", "hardbreak"})
-# 정규식으로 고치는 어미. 인라인 코드 밖에서만 적용한다
-_PHRASE_FIXES = (
-    (re.compile(r"하십시오"), "한다"),
-    (re.compile(r"(?<=\S)라고 볼 수 있다"), "다"),
-    (re.compile(r"(?<=\S)인 상황이다"), "이다"),
-)
+# 정규식 어미 치환·허용폭·긴 문단 기준의 기본값. 실행 때는 라운드 버전 문서의 polish 조절 값을 쓴다 (09 문서 2.4절)
+_DEFAULTS = PolishParameters()
+_PHRASE_FIXES = tuple((re.compile(pattern), replacement) for pattern, replacement in _DEFAULTS.phrase_fixes)
 
 
 @dataclass
@@ -115,41 +110,52 @@ def _preserved_violation(before: str, after: str) -> str | None:
     return "서식 변경" if _inline_markup(before) != _inline_markup(after) else None
 
 
-def _tone_violation(before: str, after: str) -> str | None:
-    if abs(len(after) - len(before)) > max(_LENGTH_SLACK_CHARS, len(before) * _LENGTH_SLACK_RATIO):
+def _tone_violation(
+    before: str,
+    after: str,
+    *,
+    slack_chars: int = _DEFAULTS.length_slack_chars,
+    slack_ratio: float = _DEFAULTS.length_slack_ratio,
+) -> str | None:
+    if abs(len(after) - len(before)) > max(slack_chars, len(before) * slack_ratio):
         return "길이 변화"
     return _preserved_violation(before, after)
 
 
-def _fix_phrases(text: str) -> str:
+def _fix_phrases(text: str, fixes: Iterable[tuple[re.Pattern[str], str]] = _PHRASE_FIXES) -> str:
     pieces = re.split(f"({_INLINE_CODE.pattern})", text)
     for index in range(0, len(pieces), 2):  # 홀수 칸이 인라인 코드다
-        for pattern, replacement in _PHRASE_FIXES:
+        for pattern, replacement in fixes:
             pieces[index] = pattern.sub(replacement, pieces[index])
     return "".join(pieces)
 
 
 class PolishingService:
-    def __init__(self, *, agent_call_service: AgentCallService, gate: ValidationGate, settings: Settings) -> None:
+    def __init__(self, *, agent_call_service: AgentCallService) -> None:
         self._calls = agent_call_service
-        self._gate = gate
-        self._settings = settings
 
-    async def polish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
-        """다듬기 단계를 끝낸다. 호출 실패는 그 호출만 건너뛴다. 돌아오면 post_review_stage 는 항상 FINAL_READ 다."""
+    async def polish(self, draft: PostDraft, publishing_round: PublishingRound, version: PipelineVersion) -> None:
+        """다듬기 단계를 끝낸다. 호출 실패는 그 호출만 건너뛴다. 돌아오면 post_review_stage 는 항상 FINAL_READ 다.
+
+        정규식 표·허용폭·게이트 임계는 라운드 버전 문서의 조절 값이다.
+        """
+        parameters = version.parameters
+        polish = parameters.polish
+        gate = ValidationGate.from_parameters(parameters)
         base = draft.current_version
         level = draft.topic.target_level
         record = PolishRecord(base_version=base.version_number)
-        routes = DraftRoutes(publishing_round, draft)
+        routes = DraftRoutes(publishing_round, draft, version.personas)
         document = _Document.parse(base.content_markdown)
         last_call_id = ""
 
-        patches = [(each.index, _fix_phrases(each.text)) for each in document.paragraphs()]
-        self._apply(document, "regex", patches, _preserved_violation, level, record)
+        fixes = [(re.compile(pattern), replacement) for pattern, replacement in polish.phrase_fixes]
+        patches = [(each.index, _fix_phrases(each.text, fixes)) for each in document.paragraphs()]
+        self._apply(document, "regex", patches, _preserved_violation, level, record, gate)
         record.long_paragraphs = [
             f"{each.text[:40]}… ({len(each.text)}자)"
             for each in document.paragraphs()
-            if len(each.text) >= _LONG_PARAGRAPH_CHARS
+            if len(each.text) >= polish.long_paragraph_chars
         ]
 
         try:
@@ -158,12 +164,12 @@ class PolishingService:
                 kind=CallKind.POLISH_TONE,
                 round_id=draft.round_id,
                 binding=model,
-                messages=render_messages(
-                    PolishToneInput(paragraphs=document.paragraphs()), self._settings.prompt_version, model
-                ),
+                messages=render_messages(PolishToneInput(paragraphs=document.paragraphs()), version.prompts, model),
                 schema=PolishOutput,
                 draft=draft,
                 target_version=base.version_number,
+                max_attempts=parameters.max_llm_retries,
+                pipeline_version=version.version_id,
             )
         except Exception as exc:  # 다듬기 실패는 글을 멈추지 않는다(재시도 소진·예산 초과·벤더 거부 전부)
             logger.warning("draft %s skipped %s: %s", draft.draft_id, CallKind.POLISH_TONE, exc)
@@ -173,9 +179,10 @@ class PolishingService:
                 document,
                 "tone",
                 [(each.index, each.text) for each in result.output.patches],
-                _tone_violation,
+                partial(_tone_violation, slack_chars=polish.length_slack_chars, slack_ratio=polish.length_slack_ratio),
                 level,
                 record,
+                gate,
             )
             if applied:
                 last_call_id = result.call_id
@@ -185,7 +192,7 @@ class PolishingService:
         if record.applied == 0:
             draft.finish_polish(record)
             return
-        errors = self._gate.check_markdown(polished, level)
+        errors = gate.check_markdown(polished, level)
         if errors:
             record.gate_errors = errors
             record.applied = 0
@@ -207,6 +214,7 @@ class PolishingService:
         violation: Callable[[str, str], str | None],
         level: int | None,
         record: PolishRecord,
+        gate: ValidationGate,
     ) -> int:
         """패치를 문단 순서로 하나씩 적용한다. 안전장치나 게이트를 어기면 그 패치만 버린다. 적용한 수를 돌려준다."""
         applied = 0
@@ -221,7 +229,7 @@ class PolishingService:
             reason = violation(before, text)
             if reason is None:
                 document.pieces[position] = text
-                errors = self._gate.check_markdown(document.text(), level)
+                errors = gate.check_markdown(document.text(), level)
                 if errors:
                     document.pieces[position] = before
                     reason = f"게이트: {errors[0].split(':')[0]}"

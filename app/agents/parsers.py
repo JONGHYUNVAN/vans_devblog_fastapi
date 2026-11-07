@@ -5,7 +5,7 @@ call 의 check 인자로 넘기고(위반은 LLMOutputError 로 재시도), 통�
 """
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from urllib.parse import urlparse
 
 from app.agents.contracts import (
@@ -28,20 +28,22 @@ from app.models.topic import CategoryOption
 logger = logging.getLogger(__name__)
 
 _EVIDENCE_REQUIRED_LEVEL = 400  # 측정값과 운영 기록 없이는 고를 수 없다
-_MAX_LEVEL_WITHOUT_EVIDENCE = {
-    "troubleshooter": 200
-}  # 근거가 없으면 공개 사례 분석만 쓴다. 지어낸 경험담은 입력 단계에서 막는다
+# 주장 판정 → 지적 심각도의 기본값. 라운드 버전 문서의 fact_check.severity 가 같은 값으로 덮는다 (09 문서 2.4절)
+_DEFAULT_CLAIM_SEVERITY: dict[ClaimStatus, IssueSeverity] = {
+    ClaimStatus.REFUTED: IssueSeverity.CRITICAL,
+    ClaimStatus.UNVERIFIABLE: IssueSeverity.MINOR,
+}
 
 
 def topic_proposal_check(
-    categories: Iterable[CategoryOption], *, persona_id: str = "", has_evidence: bool = False
+    categories: Iterable[CategoryOption], *, level_cap: int | None = None, has_evidence: bool = False
 ) -> Callable[[ProposeTopicOutput], None]:
     """제안마다 카테고리 쌍이 라운드 목록에 있고, 핵심 메커니즘·다루지 않을 것·수준·전제가 있어야 한다.
 
-    근거(evidence)가 없는 라운드는 400 을 고를 수 없고, 트러블슈터는 200 까지다.
+    근거(evidence)가 없는 라운드는 400 을 고를 수 없고, level_cap(페르소나의 max_level_without_evidence) 이 있으면 거기까지다.
     """
     pairs = {(category.main_category_id, category.sub_category_id) for category in categories}
-    persona_cap = None if has_evidence else _MAX_LEVEL_WITHOUT_EVIDENCE.get(persona_id)
+    persona_cap = None if has_evidence else level_cap
 
     def check(output: ProposeTopicOutput) -> None:
         for index, proposal in enumerate(output.proposals, start=1):
@@ -218,20 +220,25 @@ def normalize_claims(claims: Iterable[FactClaimOutput], citations: list[Citation
 
 
 def claim_items(
-    claims: Iterable[FactClaim], *, review_id: str, lens: ReviewLens, scope: ReviewScope, start: int = 1
+    claims: Iterable[FactClaim],
+    *,
+    review_id: str,
+    lens: ReviewLens,
+    scope: ReviewScope,
+    start: int = 1,
+    severity: Mapping[ClaimStatus, IssueSeverity] | None = None,
 ) -> list[ReviewItem]:
-    """심각도는 코드가 정한다: REFUTED 는 CRITICAL, UNVERIFIABLE 은 MINOR(오탐률을 재기 전까지 막지 않는다), SUPPORTED 는 지적이 아니다.
+    """심각도는 코드가 정한다: 기본은 REFUTED → CRITICAL, UNVERIFIABLE → MINOR(오탐률을 재기 전까지 막지 않는다), SUPPORTED 는 지적이 아니다.
 
-    SPOT_CHECK 는 신규 CRITICAL 만 지적으로 남기고 UNVERIFIABLE 은 리뷰의 claims 에만 남는다.
+    severity 는 라운드 버전 문서의 표(fact_check.severity)다. SPOT_CHECK 는 신규 CRITICAL 만 지적으로 남기고 나머지는 리뷰의 claims 에만 남는다.
     """
+    table = severity if severity is not None else _DEFAULT_CLAIM_SEVERITY
     items = []
     for claim in claims:
-        if claim.status == ClaimStatus.REFUTED:
-            severity = IssueSeverity.CRITICAL
-        elif claim.status == ClaimStatus.UNVERIFIABLE and scope == ReviewScope.FULL:
-            severity = IssueSeverity.MINOR
-        else:
+        level = table.get(claim.status)
+        if level is None or (scope == ReviewScope.SPOT_CHECK and level != IssueSeverity.CRITICAL):
             continue
+        severity_of_claim = level
         source = f" (출처: {claim.source_url})" if claim.source_url else ""
         items.append(
             ReviewItem(
@@ -239,7 +246,7 @@ def claim_items(
                 source_review_id=review_id,
                 section_id=claim.section_id,
                 lens=lens,
-                severity=severity,
+                severity=severity_of_claim,
                 comment=f"[{claim.status}] {claim.claim} — {claim.note}{source}",
                 is_new_in_version=scope == ReviewScope.SPOT_CHECK,
                 from_fact_check=True,

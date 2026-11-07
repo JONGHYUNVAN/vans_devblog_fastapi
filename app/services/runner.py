@@ -15,6 +15,7 @@ from app.models.enums import FailureCode, RoundAbortReason, RoundStatus
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.services.draft_pipeline import DraftPipelineService
+from app.services.pipeline_versions import NoPipelineVersionError, PipelineVersionService
 from app.services.round import RoundService
 from app.services.topic_selection import TopicSelectionService
 
@@ -35,6 +36,7 @@ class PipelineRunner:
         round_service: RoundService,
         topic_selection_service: TopicSelectionService,
         draft_pipeline_service: DraftPipelineService,
+        version_service: PipelineVersionService,
         settings: Settings,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -43,6 +45,7 @@ class PipelineRunner:
         self._round_service = round_service
         self._topic_selection = topic_selection_service
         self._draft_pipeline = draft_pipeline_service
+        self._versions = version_service  # 승인 대기 판단(publish.requires_approval)은 라운드 버전의 조절 값이다
         self._settings = settings
         self._sleep = sleep
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -80,8 +83,14 @@ class PipelineRunner:
         for publishing_round in await self._rounds.list_by_status(RoundStatus.TOPIC_SELECTION):
             self._spawn(publishing_round.round_id, self._drive_round(publishing_round.round_id))
         for publishing_round in await self._rounds.list_by_status(RoundStatus.IN_PROGRESS):
+            try:
+                parameters = await self._versions.parameters_for(publishing_round)
+            except NoPipelineVersionError as exc:
+                # 버전이 없으면 그 라운드는 진행할 수 없다. 로그를 남기고 건너뛴다 (09 문서 2.7절)
+                logger.error("round %s skipped: %s", publishing_round.round_id, exc)
+                continue
             for draft in await self._drafts.list_by_round(publishing_round.round_id):
-                if draft.is_active and not draft.awaits_approval(self._settings.publish_requires_approval):
+                if draft.is_active and not draft.awaits_approval(parameters.publish.requires_approval):
                     self._spawn(draft.draft_id, self._drive_draft(draft.draft_id))
 
     def _spawn(self, key: str, coroutine: Coroutine[Any, Any, None]) -> None:

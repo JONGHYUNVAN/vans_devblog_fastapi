@@ -26,6 +26,7 @@
       "max_output_tokens": 1000
     }
   },
+  "pipeline_version_id": null,
   "draft_ids": [
     "round-1:A",
     "round-1:B",

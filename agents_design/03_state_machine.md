@@ -162,6 +162,8 @@ stateDiagram-v2
 
 ## 5. 상수
 
+`PUBLISH_POST_LEVEL`·`AGENT_MAIN_CATEGORIES`·시간·동시성 외의 값은 1a 부터 환경 변수가 아니라 라운드가 고정한 파이프라인 버전 문서의 `parameters` 다(09 문서 2.4절. 이름은 소문자로 같다). 기본값은 아래 표와 같다.
+
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `PUBLISH_POST_LEVEL` | false | 평가 수준을 `CreatePostDto.level` 로 보낸다. Post BE 가 DTO 에 없는 필드를 거부하므로 그쪽 배포 뒤에 켠다 |

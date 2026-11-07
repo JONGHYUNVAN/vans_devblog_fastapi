@@ -10,7 +10,7 @@ import pytest
 
 from app.clients.publisher.base import PostCategory
 from app.core.config import Settings, get_settings
-from app.dependencies import get_async_database, get_round_service
+from app.dependencies import build_pipeline_version_service, get_async_database, get_round_service
 from app.main import app
 from app.models.enums import (
     AgentSlot,
@@ -26,6 +26,7 @@ from app.models.post_draft import FailureRecord
 from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.model_route import ModelRouteRepository
+from app.repositories.pipeline_version import PipelineVersionRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.evaluation import evaluate
@@ -38,6 +39,7 @@ from tests.factories import (
     make_arbitration,
     make_call,
     make_draft,
+    make_pipeline_version,
     make_registry_entry,
     make_round,
     reject,
@@ -104,6 +106,7 @@ def database() -> FakeAsyncDatabase:
     app.dependency_overrides[get_async_database] = lambda: database
     asyncio.run(_seed(database))
     asyncio.run(ModelRouteRepository(database).replace_all(route_documents()))
+    asyncio.run(PipelineVersionRepository(database).add(make_pipeline_version()))  # 라운드 생성·승인 토글의 버전 v1
     return database
 
 
@@ -137,7 +140,7 @@ def test_create_round_400_without_post_be_and_201_with_categories(client, databa
             PublishingRoundRepository(database),
             PostDraftRepository(database),
             TopicRegistryRepository(database),
-            prompt_version="v3",  # 가짜 벤더는 v4 가족 디렉터리가 없다
+            version_service=build_pipeline_version_service(database),
             publisher=FakePostBE(
                 categories=[
                     PostCategory(id=row["id"], parent_id=row["parentId"], value=row["value"], label=row["label"])

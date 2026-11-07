@@ -38,7 +38,10 @@ class AgentCall(BaseModel):
     slot: AgentSlot | None = None  # 작성자 호출과 옛 리뷰만. 리뷰는 lens, 나머지는 슬롯과 무관하다
     lens: ReviewLens | None = None  # 어느 렌즈의 호출인지. 모델·렌즈별 지표에 쓴다
     model_binding: CallModel  # 호출 시점 스냅샷. 옛 영수증의 persona_id 는 읽을 때 버린다
-    prompt_template_version: str
+    # 메시지를 렌더링한 프롬프트의 출처. 1a 부터는 파이프라인 버전 id(pipeline_version, "v1" 꼴)이고,
+    # 옛 영수증의 prompt_template_version 은 저장소 프롬프트 디렉터리 이름(v3·v4)이라 둘을 나눈다 (설계 09 문서 D-73)
+    prompt_template_version: str | None = None
+    pipeline_version: str | None = None
     # 어느 단계의 호출인지
     target_version: int | None = None
     topic_attempt: int | None = None

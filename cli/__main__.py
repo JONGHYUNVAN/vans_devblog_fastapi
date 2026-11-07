@@ -20,6 +20,7 @@ from app.dependencies import (
     build_glossary_service,
     build_glossary_view_service,
     build_pipeline_runner,
+    build_pipeline_version_service,
     build_pipeline_view_service,
     build_provenance_service,
     build_round_service,
@@ -33,8 +34,20 @@ from app.dependencies import (
 )
 from app.models.enums import EscalationDecisionKind, RoundStatus
 from app.models.model_binding import CallModel
+from app.models.pipeline import PromptSet, content_hash_of
 from app.schemas.agent_pipeline import RoundProgress
 from app.schemas.sync import SyncOptions
+from app.services.pipeline_validation import errors_of, validate_version
+from app.services.pipeline_versions import (
+    DEFAULT_PROMPTS_DIR,
+    PipelineVersionService,
+    build_baseline_version,
+    describe,
+    export_version,
+    meta_of,
+    prompts_from_reference,
+    read_directory,
+)
 from app.services.pipeline_views import build_draft_public
 
 cli = typer.Typer(help="VansDevBlog 검색 서비스 운영 명령", no_args_is_help=True)
@@ -144,12 +157,18 @@ def start_round(
             help="실제 프로젝트 근거 파일(git 이력, code-graph context, 측정 기록). 없으면 400 을 고를 수 없다"
         ),
     ] = None,
+    pipeline_version: Annotated[
+        str | None,
+        typer.Option(help="최신이 아닌 파이프라인 버전으로 돌린다(차기 프롬프트 시험, 09 문서 Q-42). 없으면 최신"),
+    ] = None,
 ) -> None:
     """Post BE 카테고리를 읽어 라운드를 TOPIC_SELECTION 으로 만든다. 진행은 러너(서버 또는 `agents run`)가 한다."""
 
     async def _start(database, settings):
         publishing_round = await build_round_service(database, settings).start_round(
-            theme_keyword=theme, evidence=evidence_file.read_text(encoding="utf-8") if evidence_file else None
+            theme_keyword=theme,
+            evidence=evidence_file.read_text(encoding="utf-8") if evidence_file else None,
+            pipeline_version_id=pipeline_version,
         )
         typer.echo(
             json.dumps({"round_id": publishing_round.round_id, "status": publishing_round.status}, ensure_ascii=False)
@@ -343,31 +362,37 @@ def compare_prompts(
         ),
     ] = None,
 ) -> None:
-    """저장된 WRITE_DRAFT 입력을 프롬프트 버전별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다. 가족은 영수증의 모델을 따른다."""
+    """저장된 WRITE_DRAFT 입력을 프롬프트 집합별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다. 가족은 영수증의 모델을 따른다.
 
-    def _save(prompt_version: str, run: int, output) -> None:
+    --version 은 파이프라인 버전 id(v3), 내보내기 디렉터리(pipeline/next/), 저장소 프롬프트 디렉터리 이름(v4) 중 하나다. 들여오지 않고 써 볼 수 있다.
+    """
+
+    def _save(label: str, run: int, output) -> None:
         if out_dir is None:
             return
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{prompt_version}-{run}.md"
+        path = out_dir / f"{label.replace('/', '_').replace(chr(92), '_')}-{run}.md"
         path.write_text(f"# {output.title}\n\n> {output.summary}\n\n{output.content_markdown}", encoding="utf-8")
         typer.echo(f"saved {path}")
 
     async def _compare(database, settings):
         service = build_agent_call_service(database, settings)
+        prompt_sets = {
+            reference: await _prompts_of(build_pipeline_version_service(database), reference) for reference in version
+        }
         rows = await service.compare_write_prompts(
             await service.get(call_id),
-            versions=version,
+            prompt_sets=prompt_sets,
             runs=runs,
             core_mechanism=core_mechanism,
             out_of_scope=out_of_scope,
             on_draft=_save,
             max_output_tokens=max_output_tokens,
         )
-        for prompt_version, run, density, error in rows:
+        for label, run, density, error in rows:
             _echo(
                 {
-                    "version": prompt_version,
+                    "version": label,
                     "run": run,
                     "error": error,
                     "density": density.model_dump(mode="json") if density else None,
@@ -375,6 +400,16 @@ def compare_prompts(
             )
 
     _run_agents(_compare)
+
+
+async def _prompts_of(service: PipelineVersionService, reference: str | None) -> PromptSet:
+    """프롬프트 집합 참조 → 템플릿. None 이면 최신 버전, 버전 id 면 그 버전, 아니면 디렉터리(내보내기 또는 저장소 프롬프트)다."""
+    if reference is None:
+        return (await service.require_latest()).prompts
+    try:
+        return (await service.get(reference)).prompts
+    except NotFoundError:
+        return prompts_from_reference(reference)
 
 
 @agents.command()
@@ -386,6 +421,9 @@ def fact_check(
     transform_provider: Annotated[str, typer.Option(help="JSON 변환 벤더")] = "anthropic",
     transform_model: Annotated[str, typer.Option(help="JSON 변환 모델")] = "claude-haiku-5-5",
     max_output_tokens: Annotated[int, typer.Option(min=1)] = 16000,
+    pipeline: Annotated[
+        str | None, typer.Option(help="프롬프트를 가져올 파이프라인 버전 id 또는 디렉터리. 없으면 최신 버전")
+    ] = None,
 ) -> None:
     """마크다운 파일 하나를 사실 확인해 주장을 찍는다. 잘못된 API 를 심은 글로 재현율·오탐을 잰다. 영수증·상태는 바꾸지 않는다."""
 
@@ -394,7 +432,7 @@ def fact_check(
             file.read_text(encoding="utf-8"),
             binding=CallModel(provider=provider, model_id=model, effort=effort, max_output_tokens=max_output_tokens),
             transformer=CallModel(provider=transform_provider, model_id=transform_model, max_output_tokens=8000),
-            prompt_version=settings.prompt_version,
+            prompts=await _prompts_of(build_pipeline_version_service(database), pipeline),
         )
         _echo(
             {
@@ -408,7 +446,11 @@ def fact_check(
 
 @agents.command()
 def seed_routes(file: Path) -> None:
-    """호출별 모델 라우트(JSON 배열, 예시는 agents_design/routes.example.json)를 넣는다. 진행 중인 라운드는 스냅샷을 쓴다."""
+    """옛 agent_routes 에 라우트(JSON 배열, 예시는 agents_design/routes.example.json)를 넣는다.
+
+    라운드는 이제 파이프라인 버전 문서의 routes 를 쓴다(09 문서). 라우트를 바꾸려면 `agents pipeline edit-routes` 다.
+    이 명령은 `agents pipeline bootstrap --routes mongo` 의 입력으로만 남는다.
+    """
 
     async def _seed(database, settings):
         documents = json.loads(file.read_text(encoding="utf-8"))
@@ -571,8 +613,198 @@ def code_graph_flow(
     _echo(result.model_dump(mode="json", exclude={"mermaid"}))
 
 
-if __name__ == "__main__":
-    cli()
+# ---------- 파이프라인 버전 (설계 09 문서 5절) ----------
+
+pipeline = typer.Typer(
+    help="파이프라인 버전: 프롬프트·라우트·페르소나·조절 값을 Mongo 버전 문서로 넣는다 (설계 agents_design/09 문서)",
+    no_args_is_help=True,
+)
+agents.add_typer(pipeline, name="pipeline")
+
+
+def _run_pipeline(coroutine_factory):
+    """PipelineVersionService 를 조립해 코루틴을 돌린다. 검증 실패·잘못된 입력(ValueError)은 메시지와 종료 코드 1."""
+
+    async def _main(database, settings):
+        return await coroutine_factory(build_pipeline_version_service(database), database, settings)
+
+    try:
+        return _run_agents(_main)
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+def _echo_findings(findings) -> bool:
+    """검증 결과를 찍고 오류가 있으면 True."""
+    for line in describe(findings):
+        typer.echo(line, err=True)
+    return bool(errors_of(findings))
+
+
+@pipeline.command("bootstrap")
+def pipeline_bootstrap(
+    routes: Annotated[str, typer.Option(help="라우트 출처: mongo(옛 agent_routes) 또는 JSON 파일 경로")] = "mongo",
+    prompts_dir: Annotated[
+        str, typer.Option(help="저장소 프롬프트 디렉터리 이름(app/agents/prompts/ 아래) 또는 경로")
+    ] = DEFAULT_PROMPTS_DIR,
+    note: Annotated[str, typer.Option()] = "",
+    dry_run: Annotated[bool, typer.Option(help="넣지 않고 검증 결과와 해시만 찍는다")] = False,
+) -> None:
+    """첫 버전 v1 을 만든다(이행 1a). 지금 라우트·저장소 프롬프트·코드 상수를 그대로 옮긴다. 이미 버전이 있으면 거절한다."""
+
+    async def _bootstrap(service: PipelineVersionService, database, settings):
+        documents = (
+            await build_round_service(database, settings).list_route_documents()
+            if routes == "mongo"
+            else json.loads(Path(routes).read_text(encoding="utf-8"))
+        )
+        if dry_run:
+            body = build_baseline_version(prompts_dir, documents)
+            findings = validate_version(body)
+            _echo(
+                {
+                    "dry_run": True,
+                    "content_hash": content_hash_of(body),
+                    "routes": sorted(body.routes),
+                    "prompt_families": {family: sorted(templates) for family, templates in body.prompts.items()},
+                    "parameters": body.parameters.model_dump(mode="json"),
+                }
+            )
+            return _echo_findings(findings)
+        version = await service.bootstrap(route_documents=documents, prompts_dir=prompts_dir, note=note)
+        _echo(meta_of(version))
+        return False
+
+    if _run_pipeline(_bootstrap):
+        raise typer.Exit(1)
+
+
+@pipeline.command("validate")
+def pipeline_validate(
+    target: Annotated[str, typer.Argument(help="내보내기 디렉터리 또는 버전 id")],
+    all_referenced: Annotated[
+        bool, typer.Option("--all-referenced", help="최신 버전과 진행 중 라운드가 가리키는 버전도 함께 검증한다(R-12)")
+    ] = False,
+) -> None:
+    """09 문서 4절 규칙으로 검증한다. 오류가 있으면 종료 코드 1."""
+
+    async def _validate(service: PipelineVersionService, database, settings):
+        failed = False
+        if Path(target).is_dir():
+            body = read_directory(target)
+            typer.echo(f"{target}: {content_hash_of(body)}")
+            failed |= _echo_findings(validate_version(body))
+        else:
+            version = await service.get(target)
+            typer.echo(f"{version.version_id}: {version.content_hash}")
+            failed |= _echo_findings(validate_version(version.body(), expected_hash=version.content_hash))
+        if all_referenced:
+            seen: set[str] = set()
+            latest = await service.latest()
+            referenced = [latest] if latest is not None else []
+            round_service = build_round_service(database, settings)
+            for status in (RoundStatus.TOPIC_SELECTION, RoundStatus.IN_PROGRESS):
+                for publishing_round in await round_service.list_rounds(status):
+                    referenced.append(await service.for_round(publishing_round))
+            for version in referenced:
+                if version.version_id in seen:
+                    continue
+                seen.add(version.version_id)
+                typer.echo(f"{version.version_id}: {version.content_hash}")
+                failed |= _echo_findings(validate_version(version.body(), expected_hash=version.content_hash))
+        return failed
+
+    if _run_pipeline(_validate):
+        raise typer.Exit(1)
+
+
+@pipeline.command("export")
+def pipeline_export(
+    out_dir: Annotated[Path, typer.Option(help="pipeline.json 과 prompts/ 를 쓸 디렉터리(예: pipeline/baseline)")],
+    version: Annotated[str | None, typer.Argument(help="버전 id. 없으면 최신")] = None,
+) -> None:
+    """버전을 디렉터리로 내보낸다. git 으로 리뷰·보관하는 형식이다."""
+
+    async def _export(service: PipelineVersionService, database, settings):
+        target = await service.require_latest() if version is None else await service.get(version)
+        for path in export_version(target, out_dir, meta=meta_of(target)):
+            typer.echo(str(path))
+        return False
+
+    _run_pipeline(_export)
+
+
+@pipeline.command("import")
+def pipeline_import(
+    directory: Annotated[Path, typer.Argument(help="내보내기 디렉터리")],
+    note: Annotated[str, typer.Option()] = "",
+    label: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """디렉터리를 읽어 검증하고 새 버전으로 넣는다. 부모는 최신이다. 최신과 같은 해시면 거절한다. 다음 라운드부터 쓰인다."""
+
+    async def _import(service: PipelineVersionService, database, settings):
+        _echo(meta_of(await service.import_directory(directory, note=note, label=label)))
+        return False
+
+    _run_pipeline(_import)
+
+
+@pipeline.command("edit-prompt")
+def pipeline_edit_prompt(
+    family: Annotated[str, typer.Argument(help="claude | gemini | grok | haiku | common")],
+    name: Annotated[str, typer.Argument(help="템플릿 이름(write_draft 등)")],
+    file: Annotated[Path, typer.Option(help="새 템플릿 본문 파일")],
+    note: Annotated[str, typer.Option()] = "",
+) -> None:
+    """최신 버전을 부모로 템플릿 하나만 바꾼 자식 버전을 만든다. 재배포 없이 다음 라운드부터 쓰인다."""
+
+    async def _edit(service: PipelineVersionService, database, settings):
+        _echo(meta_of(await service.edit_prompt(family, name, file.read_text(encoding="utf-8"), note=note)))
+        return False
+
+    _run_pipeline(_edit)
+
+
+@pipeline.command("edit-param")
+def pipeline_edit_param(
+    assignments: Annotated[
+        list[str], typer.Argument(help="key.path=value (값은 JSON. 예: publish.requires_approval=false)")
+    ],
+    note: Annotated[str, typer.Option()] = "",
+) -> None:
+    """조절 값만 바꾼 자식 버전을 만든다."""
+    parsed: dict[str, Any] = {}
+    for assignment in assignments:
+        key, separator, raw = assignment.partition("=")
+        if not separator:
+            typer.echo(f"{assignment}: key=value 꼴이어야 한다", err=True)
+            raise typer.Exit(1)
+        try:
+            parsed[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed[key] = raw
+
+    async def _edit(service: PipelineVersionService, database, settings):
+        _echo(meta_of(await service.edit_parameters(parsed, note=note)))
+        return False
+
+    _run_pipeline(_edit)
+
+
+@pipeline.command("edit-routes")
+def pipeline_edit_routes(
+    file: Annotated[Path, typer.Option(help="라우트 JSON 배열(agents_design/routes.example.json 형식)")],
+    note: Annotated[str, typer.Option()] = "",
+) -> None:
+    """routes·SLOTS·LEVEL_CRITERIA 만 바꾼 자식 버전을 만든다. 옛 seed-routes 의 자리다."""
+
+    async def _edit(service: PipelineVersionService, database, settings):
+        documents = json.loads(file.read_text(encoding="utf-8"))
+        _echo(meta_of(await service.edit_routes(documents, note=note)))
+        return False
+
+    _run_pipeline(_edit)
 
 
 # ---------- 용어 사전·제작 기록 (설계 08 문서 2.5절, 3.4절) ----------
@@ -845,3 +1077,7 @@ def provenance_show(post_id: str) -> None:
         _echo((await build_provenance_service(database, settings).get_public(post_id)).model_dump(mode="json"))
 
     _run_agents(_show)
+
+
+if __name__ == "__main__":
+    cli()

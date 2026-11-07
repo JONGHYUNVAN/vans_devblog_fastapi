@@ -149,7 +149,8 @@ class PostGlossary(BaseModel):
     round_id: str
     content_version: int
     call_id: str | None = None
-    prompt_template_version: str | None = None
+    prompt_template_version: str | None = None  # 옛 영수증의 프롬프트 디렉터리 이름. 1a 부터는 pipeline_version
+    pipeline_version: str | None = None
     items: list[PostGlossaryItem] = Field(default_factory=list)
     pending: list[PendingTerm] = Field(default_factory=list)
     extracted_at: datetime = Field(default_factory=_now)

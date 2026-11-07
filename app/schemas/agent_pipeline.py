@@ -91,6 +91,7 @@ class RoundPublic(BaseModel):
     status: RoundStatus
     theme_keyword: str | None
     slot_bindings: dict[AgentSlot, ModelBinding]
+    pipeline_version_id: str | None = None  # 생성 때 고정한 파이프라인 버전 (09 문서 D-73). 1a 전 라운드는 None
     draft_ids: list[str]
     topic_attempts: int
     abort_reason: RoundAbortReason | None

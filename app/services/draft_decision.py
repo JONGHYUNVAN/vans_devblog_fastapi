@@ -18,6 +18,7 @@ from app.repositories.agent_call import AgentCallRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.derived_records import DerivedRecordsWriter
+from app.services.pipeline_versions import PipelineVersionService
 from app.services.publishing import build_peer_review_note
 from app.services.round import RoundService
 
@@ -33,6 +34,7 @@ class DraftDecisionService:
         topic_registry_repository: TopicRegistryRepository,
         round_service: RoundService,
         settings: Settings,
+        version_service: PipelineVersionService,
         derived_writer: DerivedRecordsWriter | None = None,
     ) -> None:
         self._drafts = draft_repository
@@ -40,13 +42,18 @@ class DraftDecisionService:
         self._topics = topic_registry_repository
         self._rounds = round_service
         self._settings = settings
+        self._versions = version_service  # 승인 토글·머리말 문구는 라운드 버전의 조절 값이다
         self._derived = derived_writer
 
     async def approve(self, draft_id: str, *, approved_by: str) -> PostDraft:
         """발행 승인. 그 버전에 대한 것이다. 다음 스캔이 글 코루틴을 띄워 발행한다. 토글이 꺼져 있거나 이미 승인됐으면 409."""
 
         async def mutate(draft: PostDraft) -> None:
-            draft.record_approval(approved_by, self._settings.publish_requires_approval)
+            publishing_round = await self._rounds.get(draft.round_id)
+            if publishing_round is None:
+                raise NotFoundError(f"round {draft.round_id} does not exist")
+            parameters = await self._versions.parameters_for(publishing_round)
+            draft.record_approval(approved_by, parameters.publish.requires_approval)
 
         return await self._apply(draft_id, mutate)
 
@@ -139,10 +146,14 @@ class DraftDecisionService:
         if intent is None and version is None:
             raise InvalidRequestError(f"draft {draft.draft_id} has no version that could have been published")
         publishing_round = await self._rounds.get(draft.round_id)
+        note = ""
+        if publishing_round is not None:
+            parameters = await self._versions.parameters_or_default(publishing_round)
+            note = build_peer_review_note(draft, publishing_round, parameters.publish.note)
         return Publication(
             published_at=datetime.now(UTC),
             final_version=intent.final_version if intent is not None else version.version_number,  # type: ignore[union-attr]
             external_post_id=external_post_id,
-            peer_review_note=build_peer_review_note(draft, publishing_round) if publishing_round else "",
+            peer_review_note=note,
             approved_by=draft.approved_by,
         )

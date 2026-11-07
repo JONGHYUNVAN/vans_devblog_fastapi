@@ -1,21 +1,15 @@
-"""슬롯별 주제 탐색 도메인과 기본 리뷰 렌즈 (설계 05 문서 1절, v4: 페르소나·말투 강제 제거).
+"""기본 페르소나 프로필 3종 (설계 05 문서 1절). 모델은 models/persona.py 다.
 
-v3 까지는 작성·수정 프롬프트가 "너는 {display_name}이다. 성향: {writer_bias}" 로 인격을 부여하고 리뷰어에게 tone_markers 를
-보존하라고 했다. v4 는 작성자가 확정된 topic 만 보게 하고, writer_bias 는 propose_topic 에서 세 슬롯의 주제가 겹치지 않게 하는
-탐색 도메인으로만 쓴다. 어떤 모델이 어떤 페르소나를 맡는지는 ModelBinding 이 정한다.
+실행 중에는 파이프라인 버전 문서의 personas 를 읽고(09 문서 2.2절), 이 상수는 기준 버전을 만드는 입력(bootstrap)과 테스트의 기본값이다.
+어떤 모델이 어떤 페르소나를 맡는지는 ModelBinding 이 정한다.
 """
 
-from pydantic import BaseModel
+from collections.abc import Mapping
 
 from app.models.enums import ReviewLens
+from app.models.persona import PersonaProfile
 
-
-class PersonaProfile(BaseModel):
-    persona_id: str
-    display_name: str  # 한국어 영역 라벨. 라운드 응답·CLI 표시용. 프롬프트·발행 본문에는 넣지 않는다
-    writer_bias: str  # propose_topic 의 탐색 도메인(영어). $writer_bias 로 치환된다
-    primary_lens: ReviewLens
-
+__all__ = ["PERSONAS", "PersonaProfile", "get_persona"]
 
 PERSONAS: dict[str, PersonaProfile] = {
     "architect": PersonaProfile(
@@ -44,13 +38,15 @@ PERSONAS: dict[str, PersonaProfile] = {
             "and critical analysis of conventional practices through concrete counterexamples."
         ),
         primary_lens=ReviewLens.CRITICAL_PRACTICAL,
+        max_level_without_evidence=200,  # 근거가 없으면 공개 사례 분석만 쓴다. 지어낸 경험담은 입력 단계에서 막는다
     ),
 }
 
 
-def get_persona(persona_id: str) -> PersonaProfile:
-    """없는 persona_id 는 바인딩 설정 오류라 ValueError."""
+def get_persona(persona_id: str, personas: Mapping[str, PersonaProfile] | None = None) -> PersonaProfile:
+    """personas(버전 문서의 것)에서 찾는다. 없으면 기본 상수다. 없는 persona_id 는 바인딩 설정 오류라 ValueError."""
+    table = personas if personas is not None else PERSONAS
     try:
-        return PERSONAS[persona_id]
+        return table[persona_id]
     except KeyError as exc:
         raise ValueError(f"unknown persona {persona_id}") from exc

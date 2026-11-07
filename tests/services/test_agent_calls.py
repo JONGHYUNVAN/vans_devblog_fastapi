@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.agents.builders import render_messages
 from app.agents.contracts import FactSpotCheckOutput, FinalReadOutput, StructureRules, WriteDraftInput
+from app.agents.prompts.registry import load_prompt_files
 from app.clients.llm.base import LLMCitation, LLMResponse, LLMUsage
 from app.clients.llm.registry import LLMClientRegistry
 from app.core.config import Settings
@@ -35,13 +36,8 @@ class Harness:
         self.llm = FakeLLMClient(outcomes)
         self.calls = FakeAgentCallRepository()
         self.sleeps: list[float] = []
-        self.settings = Settings(
-            _env_file=None,
-            max_llm_retries=max_llm_retries,
-            review_timeout_s=300,
-            draft_timeout_s=600,
-            prompt_version="v1",
-        )
+        self.max_llm_retries = max_llm_retries  # 라운드 버전의 max_llm_retries. call 마다 넘긴다 (1a)
+        self.settings = Settings(_env_file=None, review_timeout_s=300, draft_timeout_s=600)
 
         async def sleep(seconds: float) -> None:
             self.sleeps.append(seconds)
@@ -63,7 +59,7 @@ class Harness:
             messages=MESSAGES,
             schema=Answer,
             draft=draft,
-            **overrides,
+            **({"max_attempts": self.max_llm_retries, "pipeline_version": "v1"} | overrides),
         )
         return result.output
 
@@ -90,7 +86,7 @@ async def test_call_returns_parsed_model_and_records_receipt():
     )
     assert (receipt.output_raw, receipt.usage.prompt_tokens, receipt.usage.completion_tokens) == (GOOD, 100, 50)
     assert receipt.messages == MESSAGES
-    assert receipt.prompt_template_version == "v1"
+    assert (receipt.pipeline_version, receipt.prompt_template_version) == ("v1", None)
     assert receipt.model_binding == make_call_model()
     [sent] = harness.llm.calls
     assert [m.content for m in sent.messages] == [m.content for m in MESSAGES]
@@ -292,12 +288,12 @@ async def test_compare_write_prompts_rebuilds_the_input_per_version_and_measures
         level_criteria=DEFAULT_LEVEL_CRITERIA,
     )
     call = make_call()
-    call.messages = render_messages(write_input, "v2", call.model_binding)
+    call.messages = render_messages(write_input, load_prompt_files("v2"), call.model_binding)
     drafts: list[tuple[str, int]] = []
 
     rows = await harness.service.compare_write_prompts(
         call,
-        versions=["v2", "v3"],
+        prompt_sets={"v2": load_prompt_files("v2"), "v3": load_prompt_files("v3")},
         runs=1,
         core_mechanism="메커니즘",
         out_of_scope=["범위 밖"],
@@ -323,7 +319,7 @@ async def test_compare_write_prompts_fills_level_criteria_missing_from_old_input
     }
     call.messages = [ChatMessage(role="user", content="입력(JSON):\n" + json.dumps(stored, ensure_ascii=False))]
 
-    rows = await harness.service.compare_write_prompts(call, versions=["v3"], runs=1)
+    rows = await harness.service.compare_write_prompts(call, prompt_sets={"v3": load_prompt_files("v3")}, runs=1)
 
     assert [(row[0], row[3]) for row in rows] == [("v3", None)]
     sent = harness.llm.calls[0].messages[1].content
@@ -340,11 +336,13 @@ async def test_compare_write_prompts_can_raise_the_output_limit_and_reports_trun
             structure_rules=StructureRules(min_chars=1, max_chars=100),
             level_criteria=DEFAULT_LEVEL_CRITERIA,
         ),
-        "v3",
+        load_prompt_files("v3"),
         call.model_binding,
     )
 
-    rows = await harness.service.compare_write_prompts(call, versions=["v3"], runs=1, max_output_tokens=4000)
+    rows = await harness.service.compare_write_prompts(
+        call, prompt_sets={"v3": load_prompt_files("v3")}, runs=1, max_output_tokens=4000
+    )
 
     assert harness.llm.calls[0].params.max_output_tokens == 4000
     assert (
@@ -377,7 +375,7 @@ async def test_probe_fact_check_searches_transforms_and_checks_urls_without_rece
         "<!-- sec:body-1 -->\n본문",
         binding=make_call_model(effort="high"),
         transformer=make_call_model(),
-        prompt_version="v3",
+        prompts=load_prompt_files("v3"),
     )
 
     assert [(each.status, each.source_url) for each in claims] == [("UNVERIFIABLE", None)]

@@ -14,6 +14,7 @@ from app.agents.builders import (
 )
 from app.agents.contracts import StructureRules
 from app.agents.personas import PERSONAS
+from app.agents.prompts.registry import load_prompt_files
 from app.models.enums import AgentSlot, ArbitrationOutcome, IssueSeverity, PostStatus, ReviewLens, RevisionCause
 from app.models.model_binding import CallModel
 from app.models.post_draft import PostDraft
@@ -36,6 +37,7 @@ from tests.factories import (
 
 A, B, C = AgentSlot.A, AgentSlot.B, AgentSlot.C
 RULES = StructureRules(min_chars=10, max_chars=1000)
+V4 = load_prompt_files("v4")
 ROUND = make_round(
     slot_bindings={
         A: make_round().slot_bindings[A].model_copy(update={"persona_id": "architect"}),
@@ -245,8 +247,8 @@ def test_render_messages_picks_the_family_template_and_dumps_input_json():
     claude = CallModel(provider="anthropic", model_id="claude-opus-5-5", max_output_tokens=1000)
     grok = CallModel(provider="xai", model_id="grok-4.7", max_output_tokens=1000)
 
-    for_claude = render_messages(build_write_draft_input(draft, ROUND, RULES), "v4", claude)
-    for_grok = render_messages(build_write_draft_input(draft, ROUND, RULES), "v4", grok)
+    for_claude = render_messages(build_write_draft_input(draft, ROUND, RULES), V4, claude)
+    for_grok = render_messages(build_write_draft_input(draft, ROUND, RULES), V4, grok)
 
     assert [message.role for message in for_claude] == ["system", "user"]
     assert for_claude[0].content.startswith("<task>") and for_grok[0].content.startswith("### Objective")
@@ -260,8 +262,10 @@ def test_render_messages_substitutes_the_search_domain_and_falls_back_to_flat_te
     claude = CallModel(provider="anthropic", model_id="claude-opus-5-5", max_output_tokens=1000)
     propose = build_propose_topic_input(ROUND, C, attempt_number=1, avoid_entries=[], conflict_feedback=None)
 
-    flat = render_messages(propose, "v3", fake)  # 모르는 벤더는 가족 디렉터리가 없어 버전 루트의 평면 템플릿을 쓴다
-    family = render_messages(propose, "v4", claude)
+    flat = render_messages(
+        propose, load_prompt_files("v3"), fake
+    )  # 모르는 벤더는 가족이 없어 common(평면)으로 내려간다
+    family = render_messages(propose, V4, claude)
 
     assert "Public failure postmortems" in flat[0].content and "$" not in flat[0].content
     assert "Public failure postmortems" in family[0].content and "$" not in family[0].content

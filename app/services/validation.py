@@ -10,14 +10,9 @@ import re
 from collections import Counter
 
 from app.models.enums import ArbitrationOutcome, ResolutionStatus, ReviewScope, RevisionCause
+from app.models.pipeline import Parameters, StructureParameters
 from app.models.post_draft import DraftVersion, PostDraft
-from app.models.sections import (
-    ANCHOR_PATTERN,
-    CODE_ANCHOR_PATTERN,
-    find_anchors,
-    markdown_links,
-    required_sections_for,
-)
+from app.models.sections import ANCHOR_PATTERN, CODE_ANCHOR_PATTERN, find_anchors, markdown_links
 from app.models.tiptap import code_language, markdown_to_tiptap, parse_markdown
 
 logger = logging.getLogger(__name__)
@@ -27,12 +22,32 @@ _TREE_SITTER_GRAMMARS = {"typescript": "typescript", "ts": "typescript", "tsx": 
 
 
 class ValidationGate:
-    """validate 는 실패 사유 목록을 돌려준다. 비어 있으면 통과다. 상태 전이(pass/fail_validation)는 호출자가 한다."""
+    """validate 는 실패 사유 목록을 돌려준다. 비어 있으면 통과다. 상태 전이(pass/fail_validation)는 호출자가 한다.
 
-    def __init__(self, *, min_chars: int, max_chars: int, min_code_blocks: int = 1) -> None:
+    임계값과 구조 규칙은 라운드 버전 문서의 조절 값이다(from_parameters). 글마다 라운드가 다를 수 있어 조립 때 한 번이 아니라 걸음마다 만든다.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_chars: int,
+        max_chars: int,
+        min_code_blocks: int = 1,
+        structure: StructureParameters | None = None,
+    ) -> None:
         self._min_chars = min_chars
         self._max_chars = max_chars
         self._min_code_blocks = min_code_blocks
+        self._structure = structure if structure is not None else StructureParameters()
+
+    @classmethod
+    def from_parameters(cls, parameters: Parameters) -> "ValidationGate":
+        return cls(
+            min_chars=parameters.draft_min_chars,
+            max_chars=parameters.draft_max_chars,
+            min_code_blocks=parameters.min_code_blocks,
+            structure=parameters.structure,
+        )
 
     def validate(self, draft: PostDraft) -> list[str]:
         version = draft.current_version
@@ -47,7 +62,7 @@ class ValidationGate:
 
     def check_markdown(self, markdown: str, level: int | None) -> list[str]:
         """본문만 보는 검사. 리뷰 해소와 무관한 순수 함수다."""
-        errors = _check_anchors(find_anchors(markdown), required_sections_for(level))
+        errors = _check_anchors(find_anchors(markdown), self._structure.required_sections_for(level))
         errors += _check_code_blocks(markdown, self._min_code_blocks)
         errors += _check_length(markdown, self._min_chars, self._max_chars)
         errors += _check_convertible(markdown)

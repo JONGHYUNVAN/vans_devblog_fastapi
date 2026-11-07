@@ -28,7 +28,7 @@ def _views(harness: PipelineHarness) -> PipelineViewService:
         round_service=harness.round_service,
         draft_repository=harness.drafts,
         agent_call_repository=harness.calls,
-        settings=harness.settings,
+        version_service=harness.versions,
     )
 
 

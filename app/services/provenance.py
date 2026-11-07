@@ -82,6 +82,14 @@ def _succeeded(call: AgentCall) -> bool:
     return call.output_parsed_ok and call.error is None
 
 
+def _template_versions(calls: Iterable[AgentCall]) -> list[str]:
+    return sorted({call.prompt_template_version for call in calls if call.prompt_template_version})
+
+
+def _pipeline_versions(calls: Iterable[AgentCall]) -> list[str]:
+    return sorted({call.pipeline_version for call in calls if call.pipeline_version})
+
+
 def _summarize(call: AgentCall) -> ProvenanceCall:
     return ProvenanceCall(
         call_id=call.call_id,
@@ -90,6 +98,7 @@ def _summarize(call: AgentCall) -> ProvenanceCall:
         model_id=call.model_binding.model_id,
         effort=call.model_binding.effort,
         prompt_template_version=call.prompt_template_version,
+        pipeline_version=call.pipeline_version,
         attempt_number=call.attempt_number,
         succeeded=_succeeded(call),
         error=call.error,
@@ -195,7 +204,8 @@ def _build_stage(
         target_version=target_version,
         item_id=item_id,
         models=models,
-        prompt_template_versions=sorted({call.prompt_template_version for call in calls}),
+        prompt_template_versions=_template_versions(calls),
+        pipeline_versions=_pipeline_versions(calls),
         calls=[_summarize(call) for call in calls],
         usage=_usage_sum(calls),
         outcome=_outcome(kind, call_ids, draft, publishing_round),
@@ -261,7 +271,8 @@ def build_provenance(
         iteration=draft.iteration,
         level=draft.level_assessment.level if draft.level_assessment is not None else None,
         user_level=draft.user_level,
-        prompt_template_versions=sorted({call.prompt_template_version for call in own}),
+        prompt_template_versions=_template_versions(own),
+        pipeline_versions=_pipeline_versions(own),
         stages=stages,
         usage_total=_usage_sum(own),
         call_count=len(own),
@@ -298,6 +309,7 @@ def build_provenance_public(record: PostProvenance) -> ProvenancePublic:
         level=record.level,
         user_level=record.user_level,
         prompt_template_versions=record.prompt_template_versions,
+        pipeline_versions=record.pipeline_versions,
         stages=[
             ProvenanceStagePublic(
                 stage=stage.stage,
@@ -308,6 +320,7 @@ def build_provenance_public(record: PostProvenance) -> ProvenancePublic:
                 item_id=stage.item_id,
                 models=[ProvenanceModelPublic(**model.model_dump()) for model in stage.models],
                 prompt_template_versions=stage.prompt_template_versions,
+                pipeline_versions=stage.pipeline_versions,
                 calls=[
                     ProvenanceCallPublic(
                         call_id=call.call_id,
@@ -316,6 +329,7 @@ def build_provenance_public(record: PostProvenance) -> ProvenancePublic:
                         model_id=call.model_id,
                         effort=call.effort,
                         prompt_template_version=call.prompt_template_version,
+                        pipeline_version=call.pipeline_version,
                         attempt_number=call.attempt_number,
                         succeeded=call.succeeded,
                         prompt_tokens=call.usage.prompt_tokens,

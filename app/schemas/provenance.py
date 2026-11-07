@@ -19,7 +19,8 @@ class ProvenanceCallPublic(BaseModel):
     provider: str
     model_id: str
     effort: str | None
-    prompt_template_version: str
+    prompt_template_version: str | None
+    pipeline_version: str | None
     attempt_number: int
     succeeded: bool
     prompt_tokens: int
@@ -37,6 +38,7 @@ class ProvenanceStagePublic(BaseModel):
     item_id: str | None
     models: list[ProvenanceModelPublic]
     prompt_template_versions: list[str]
+    pipeline_versions: list[str]
     calls: list[ProvenanceCallPublic]
     prompt_tokens: int
     completion_tokens: int
@@ -67,6 +69,7 @@ class ProvenancePublic(BaseModel):
     level: PostLevel | None
     user_level: PostLevel | None
     prompt_template_versions: list[str]
+    pipeline_versions: list[str]
     stages: list[ProvenanceStagePublic]
     prompt_tokens: int
     completion_tokens: int

@@ -3,9 +3,12 @@
 라우팅 도입 전에 만든 라운드는 스냅샷이 없다. 그 라운드의 슬롯 바인딩으로 같은 동작의 스냅샷을 만들어 쓴다.
 """
 
+from collections.abc import Mapping
+
 from app.agents.personas import get_persona
 from app.models.enums import AgentSlot, ReviewLens
 from app.models.model_binding import CallModel, ModelBinding
+from app.models.persona import PersonaProfile
 from app.models.post_draft import PostDraft
 from app.models.publishing_round import PublishingRound
 from app.models.routing import (
@@ -30,12 +33,14 @@ from app.models.routing import (
     write_route,
 )
 
+Personas = Mapping[str, PersonaProfile] | None  # 라운드 버전 문서의 personas. None 이면 코드 기본 상수
+
 
 def _call_model(binding: ModelBinding) -> CallModel:
     return CallModel(provider=binding.provider, model_id=binding.model_id, max_output_tokens=binding.max_output_tokens)
 
 
-def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding]) -> RoutingSnapshot:
+def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding], personas: Personas = None) -> RoutingSnapshot:
     """슬롯 바인딩 → 스냅샷. 리뷰 라우트는 그 렌즈를 주 렌즈로 가진 슬롯의 모델을 먼저 둔다."""
     models = {slot: _call_model(binding) for slot, binding in slot_bindings.items()}
     everyone = list(models.values())
@@ -47,7 +52,9 @@ def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding]) -> RoutingSnap
         routes[revise_route(persona_id)] = [models[slot]]
     for lens in ReviewLens:
         owners = [
-            slot for slot, binding in slot_bindings.items() if get_persona(binding.persona_id).primary_lens == lens
+            slot
+            for slot, binding in slot_bindings.items()
+            if get_persona(binding.persona_id, personas).primary_lens == lens
         ]
         routes[review_route(lens)] = [models[slot] for slot in owners] + everyone
     for route_id in (
@@ -63,20 +70,20 @@ def legacy_snapshot(slot_bindings: dict[AgentSlot, ModelBinding]) -> RoutingSnap
     )
 
 
-def snapshot_of(publishing_round: PublishingRound) -> RoutingSnapshot:
-    return publishing_round.routing or legacy_snapshot(publishing_round.slot_bindings)
+def snapshot_of(publishing_round: PublishingRound, personas: Personas = None) -> RoutingSnapshot:
+    return publishing_round.routing or legacy_snapshot(publishing_round.slot_bindings, personas)
 
 
-def proposer_of(publishing_round: PublishingRound, slot: AgentSlot) -> CallModel:
-    snapshot = snapshot_of(publishing_round)
+def proposer_of(publishing_round: PublishingRound, slot: AgentSlot, personas: Personas = None) -> CallModel:
+    snapshot = snapshot_of(publishing_round, personas)
     return select_proposer(snapshot, snapshot.slot_personas[slot])
 
 
 class DraftRoutes:
     """글 하나에서 호출 종류별로 고른 모델. 스냅샷과 글의 배정만 읽으므로 재시작해도 같다."""
 
-    def __init__(self, publishing_round: PublishingRound, draft: PostDraft) -> None:
-        self._snapshot = snapshot_of(publishing_round)
+    def __init__(self, publishing_round: PublishingRound, draft: PostDraft, personas: Personas = None) -> None:
+        self._snapshot = snapshot_of(publishing_round, personas)
         self._persona_id = self._snapshot.slot_personas[draft.author_slot]
         self._writer = select_writer(self._snapshot, self._persona_id)
         self._lenses = [assignment.primary_lens for assignment in draft.reviewer_assignments]

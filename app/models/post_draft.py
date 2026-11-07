@@ -5,6 +5,7 @@
 판정 규칙은 services/evaluation.py 의 순수 함수이고, apply_evaluation 은 그 결과(EvaluationOutcome)로 전이만 한다.
 """
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Self
 
@@ -772,11 +773,21 @@ class PostDraft(BaseModel):
         self._advance_post_review(PostReviewStage.FINAL_READ)
         return version
 
-    def record_final_read(self, final_read: FinalRead) -> None:
-        """전체 읽기 결과. 차단 종류가 있으면 수정 루프가 아니라 사람에게 간다 (READY_TO_PUBLISH 에는 되돌릴 결정이 없다)."""
+    def record_final_read(
+        self, final_read: FinalRead, *, blocking_kinds: Iterable[FinalReadKind] | None = None
+    ) -> None:
+        """전체 읽기 결과. 차단 종류가 있으면 수정 루프가 아니라 사람에게 간다 (READY_TO_PUBLISH 에는 되돌릴 결정이 없다).
+
+        blocking_kinds 는 라운드 버전 문서의 조절 값(final_read.blocking_kinds)이다. 없으면 열거형의 기본 구분이다.
+        """
         self._require_stage(PostReviewStage.FINAL_READ)
         self.final_read = final_read
-        if final_read.is_blocking:
+        if blocking_kinds is None:
+            blocking = final_read.is_blocking
+        else:
+            kinds = set(blocking_kinds)
+            blocking = any(finding.kind in kinds for finding in final_read.findings)
+        if blocking:
             self.post_review_stage = PostReviewStage.DONE
             self.escalate(EscalationReason.FINAL_READ_FLAGGED)
         else:

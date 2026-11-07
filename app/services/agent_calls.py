@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -46,6 +46,7 @@ from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
 from app.models.enums import AgentSlot, CallKind, ReviewLens
 from app.models.level import DEFAULT_LEVEL_CRITERIA
 from app.models.model_binding import CallModel
+from app.models.pipeline import Parameters, PromptSet
 from app.models.post_draft import FactClaim, PostDraft
 from app.models.routing import raised_output_limit
 from app.models.sections import find_anchors
@@ -56,6 +57,9 @@ logger = logging.getLogger(__name__)
 
 _BACKOFF_BASE_S = 1.0
 _RATE_LIMIT_COOLDOWN_S = 30.0  # 429 뒤 그 벤더의 동시 호출을 1건으로 줄여 두는 시간 (설계 04 문서 9절)
+_DEFAULT_MAX_ATTEMPTS = (
+    Parameters().max_llm_retries
+)  # 호출자가 라운드 버전의 값을 넘기지 않을 때(도구·테스트)의 재시도 수
 _SEARCH_TOKEN_ESTIMATE = 30_000  # 검색 결과는 입력 토큰으로 잡히는데 메시지 문자 수에 없다. 예산 추정에 더한다
 # 본문 전체를 새로 쓰지 않는 호출은 REVIEW_TIMEOUT_S, 나머지와 검색 호출은 DRAFT_TIMEOUT_S 다
 _SHORT_KINDS = frozenset(
@@ -150,10 +154,13 @@ class AgentCallService:
         target_version: int | None = None,
         topic_attempt: int | None = None,
         item_id: str | None = None,
+        max_attempts: int | None = None,
+        pipeline_version: str | None = None,
     ) -> CallResult[T]:
         """messages 를 binding 의 모델에 보내 schema 로 파싱한 결과와 그 시도의 call_id 를 돌려준다.
 
         draft 가 None 이면 주제 제안 호출이라 예산을 검사하지 않는다 (설계 02 문서 3절).
+        max_attempts 는 라운드 버전의 max_llm_retries, pipeline_version 은 그 버전 id 다(영수증에 남는다, 09 문서 D-73).
         check 는 입력 문맥이 필요한 검사(agents/parsers)다. 파싱된 모델을 받아 위반이면 LLMOutputError 를 던진다.
         네트워크·5xx·429·타임아웃(LLMTransportError)은 지수 백오프 뒤 같은 메시지로,
         계약 위반(ValidationError·LLMOutputError)은 직전 출력과 안내를 붙여 다시 부른다.
@@ -181,6 +188,8 @@ class AgentCallService:
             target_version=target_version,
             topic_attempt=topic_attempt,
             item_id=item_id,
+            max_attempts=max_attempts,
+            pipeline_version=pipeline_version,
         )
         return CallResult(output=output, call_id=call_id)
 
@@ -194,6 +203,8 @@ class AgentCallService:
         lens: ReviewLens | None = None,
         target_version: int | None = None,
         item_id: str | None = None,
+        max_attempts: int | None = None,
+        pipeline_version: str | None = None,
     ) -> SearchResult:
         """웹 검색을 켜고 글로 받는다. 구조화 출력과 검색을 한 호출에 묶는 것은 벤더마다 달라, 변환은 다음 호출이 맡는다."""
 
@@ -220,6 +231,8 @@ class AgentCallService:
             target_version=target_version,
             topic_attempt=None,
             item_id=item_id,
+            max_attempts=max_attempts,
+            pipeline_version=pipeline_version,
         )
         return SearchResult(text=output.text, call_id=call_id, citations=output.citations)
 
@@ -239,6 +252,8 @@ class AgentCallService:
         target_version: int | None,
         topic_attempt: int | None,
         item_id: str | None,
+        max_attempts: int | None,
+        pipeline_version: str | None,
     ) -> tuple[R, str]:
         client = self._llm.get(binding.provider)
         base_timeout = float(
@@ -246,7 +261,7 @@ class AgentCallService:
         )
         base_limit = binding.max_output_tokens
         attempt_messages = list(messages)
-        max_attempts = self._settings.max_llm_retries
+        max_attempts = max_attempts if max_attempts is not None else _DEFAULT_MAX_ATTEMPTS
         last_error = ""
         label = f"{kind} for {round_id}/{slot or lens or item_id or ''}"
 
@@ -293,7 +308,7 @@ class AgentCallService:
                     slot=slot,
                     lens=lens,
                     model_binding=binding,
-                    prompt_template_version=self._settings.prompt_version,
+                    pipeline_version=pipeline_version,
                     target_version=target_version,
                     topic_attempt=topic_attempt,
                     item_id=item_id,
@@ -386,11 +401,11 @@ class AgentCallService:
         )
 
     async def probe_fact_check(
-        self, content_markdown: str, *, binding: CallModel, transformer: CallModel, prompt_version: str
+        self, content_markdown: str, *, binding: CallModel, transformer: CallModel, prompts: PromptSet
     ) -> tuple[list[FactClaim], list[CitationRef]]:
         """글 하나를 사실 확인해 주장 목록을 돌려준다. 잘못된 API 를 심은 글로 모델별 재현율·오탐을 잴 때 쓴다.
 
-        영수증·상태를 남기지 않는다. 재시도하지 않으며 전송 실패는 LLMTransportError 그대로다.
+        prompts 는 버전 문서(또는 디렉터리)의 템플릿이다. 영수증·상태를 남기지 않는다. 재시도하지 않으며 전송 실패는 LLMTransportError 그대로다.
         """
         topic = TopicForReviewer(
             title="",
@@ -415,7 +430,7 @@ class AgentCallService:
         )
         async with self._llm.gate(binding.provider).slot():
             searched = await self._llm.get(binding.provider).complete(
-                _to_llm_messages(render_messages(fact_input, prompt_version, binding)),
+                _to_llm_messages(render_messages(fact_input, prompts, binding)),
                 None,
                 _params(binding, True),
                 float(self._settings.draft_timeout_s),
@@ -431,7 +446,7 @@ class AgentCallService:
         )
         async with self._llm.gate(transformer.provider).slot():
             transformed = await self._llm.get(transformer.provider).complete(
-                _to_llm_messages(render_messages(transform_input, prompt_version, transformer)),
+                _to_llm_messages(render_messages(transform_input, prompts, transformer)),
                 FactCheckOutput.model_json_schema(),
                 _params(transformer, False),
                 float(self._settings.review_timeout_s),
@@ -443,17 +458,17 @@ class AgentCallService:
         self,
         call: AgentCall,
         *,
-        versions: Iterable[str],
+        prompt_sets: Mapping[str, PromptSet],
         runs: int,
         core_mechanism: str | None = None,
         out_of_scope: list[str] | None = None,
         on_draft: Callable[[str, int, DraftOutput], None] | None = None,
         max_output_tokens: int | None = None,
     ) -> list[tuple[str, int, VersionDensity | None, str | None]]:
-        """저장된 WRITE_DRAFT 입력을 여러 프롬프트 버전으로 다시 써 밀도를 잰다. 같은 주제를 새 라운드로 돌리면 중복 검사에 걸린다.
+        """저장된 WRITE_DRAFT 입력을 여러 프롬프트 집합(라벨 → 템플릿)으로 다시 써 밀도를 잰다. 같은 주제를 새 라운드로 돌리면 중복 검사에 걸린다.
 
-        옛 입력에는 범위 필드가 없어 호출자가 채운다(None 이면 입력의 값을 둔다). 영수증·상태를 바꾸지 않는다. 행은 (버전, 회차, 밀도, 오류)다.
-        프롬프트 가족은 영수증의 모델을 따른다. on_draft 가 있으면 파싱된 글을 (버전, 회차, 글)로 넘긴다. 글을 읽고 판단하는 용도다.
+        옛 입력에는 범위 필드가 없어 호출자가 채운다(None 이면 입력의 값을 둔다). 영수증·상태를 바꾸지 않는다. 행은 (라벨, 회차, 밀도, 오류)다.
+        프롬프트 가족은 영수증의 모델을 따른다. on_draft 가 있으면 파싱된 글을 (라벨, 회차, 글)로 넘긴다. 글을 읽고 판단하는 용도다.
         replay 는 잘린 응답의 한도를 올리지 않으므로(D-53 은 call 에만) max_output_tokens 로 영수증보다 큰 한도를 줄 수 있다.
         """
         if call.kind != CallKind.WRITE_DRAFT:
@@ -474,17 +489,17 @@ class AgentCallService:
         if max_output_tokens is not None:
             binding = binding.model_copy(update={"max_output_tokens": max_output_tokens})
         rows = []
-        for version in versions:
-            messages = render_messages(write_input, version, binding)
+        for label, prompts in prompt_sets.items():
+            messages = render_messages(write_input, prompts, binding)
             for run in range(1, runs + 1):
                 result = await self.replay(call, binding=binding, messages=messages)
                 if result.error is not None:
-                    rows.append((version, run, None, result.error))
+                    rows.append((label, run, None, result.error))
                     continue
                 output = DraftOutput.model_validate_json(result.text)
                 if on_draft is not None:
-                    on_draft(version, run, output)
-                rows.append((version, run, density_of(output.content_markdown), None))
+                    on_draft(label, run, output)
+                rows.append((label, run, density_of(output.content_markdown), None))
         return rows
 
     async def _check_budget(

@@ -55,36 +55,16 @@ class Settings(BaseSettings):
     xai_publisher_email: str = ""
     xai_publisher_password: SecretStr | None = None
     publish_timeout_s: int = 30
-    max_iterations: int = 2
-    max_topic_attempts: int = 2
-    max_llm_retries: int = 3
-    max_validation_retries: int = 2
-    max_publish_attempts: int = 3
-    draft_token_limit: int = 300_000  # 글 소프트 상한. 운영 후 조정한다 (설계 07 문서 Q-07)
-    topic_keyword_overlap: float = 0.5  # 주제 중복 판별 Jaccard 임계 (설계 04 문서 2절)
-    topic_title_overlap: float = 0.5
-    topic_avoid_lookback_days: int = 180
-    publish_requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다
-    # 평가 수준을 CreatePostDto.level 로 보낸다. Post BE 는 DTO 에 없는 필드를 400 으로 거부하므로 그쪽 배포 뒤에 켠다
+    # 반복 상한·예산·주제 임계·길이 범위·승인 토글·프롬프트 버전·용어 값은 Mongo 의 파이프라인 버전 문서(parameters·prompts)로 옮겼다
+    # (설계 09 문서 2.4절, 이행 1a). 라운드가 생성 때 버전을 고정하므로 환경 변수로는 바꾸지 않는다.
+    # 평가 수준을 CreatePostDto.level 로 보낸다. Post BE 는 DTO 에 없는 필드를 400 으로 거부하므로 그쪽 배포 뒤에 켠다 (1c 에서 삭제, 09 문서 D-83)
     publish_post_level: bool = False
-    # 주제 후보로 줄 메인 카테고리 값. vans_story POST_THEMES 에 없는 메인은 글이 발행돼도 블로그 주소가 404 다 (설계 07 문서 D-60)
+    # 주제 후보로 줄 메인 카테고리 값. vans_story POST_THEMES 에 없는 메인은 글이 발행돼도 블로그 주소가 404 다 (설계 07 문서 D-60. 1c 에서 삭제, 09 문서 D-82)
     agent_main_categories: str = "nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm"
-    draft_min_chars: int = 4000  # 본문 길이 범위 (설계 07 문서 Q-08)
-    draft_max_chars: int = 20000
     review_timeout_s: int = 300
     draft_timeout_s: int = 600  # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
     scan_interval_s: int = 15
-    prompt_version: str = "v4"  # 2026-11-07 compare-prompts 2차 비교 뒤 올렸다(D-62). 되돌리기는 PROMPT_VERSION=v3
     llm_concurrency_per_provider: int = 2
-
-    # 용어 사전 (설계 08 문서 2.3절). 사전이 full_list_max 를 넘기 전까지는 표제어 전체를 추출 호출 입력에 넣는다
-    glossary_full_list_max: int = 300
-    glossary_min_terms: int = 8
-    glossary_max_terms: int = 12
-    glossary_surface_max_chars: int = 40  # 본문 표면형 길이 상한. 넘으면 그 후보를 버린다
-    glossary_terminology_max: int = (
-        150  # 작성자 표기 표준으로 넘길 승인 표제어 수 상한 (2.7절, 아직 프롬프트에 넣지 않는다)
-    )
 
     # 코드 그래프 (code_graph_design/README.md G-11). 분석 대상 저장소 설정은 Mongo code_graph_repos 다 (G-35)
     code_graph_download_timeout_s: int = 30

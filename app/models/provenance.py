@@ -36,7 +36,8 @@ class ProvenanceCall(BaseModel):
     provider: str
     model_id: str
     effort: str | None = None
-    prompt_template_version: str
+    prompt_template_version: str | None = None  # 옛 영수증: 프롬프트 디렉터리 이름(v3·v4)
+    pipeline_version: str | None = None  # 1a 부터: 파이프라인 버전 id (09 문서 D-73)
     attempt_number: int
     succeeded: bool  # output_parsed_ok 이고 error 가 없다
     error: str | None = None  # 공개 응답에는 넣지 않는다 (벤더 응답을 담을 수 있다)
@@ -54,6 +55,7 @@ class ProvenanceStage(BaseModel):
     item_id: str | None = None  # ARBITRATION
     models: list[ProvenanceModel] = Field(default_factory=list)  # 이 단계에 쓰인 (벤더, 모델, effort) 집합
     prompt_template_versions: list[str] = Field(default_factory=list)
+    pipeline_versions: list[str] = Field(default_factory=list)
     calls: list[ProvenanceCall] = Field(default_factory=list)  # 실패한 시도 포함. 시작 순
     usage: TokenUsage = Field(default_factory=TokenUsage)  # calls 합계
     outcome: str = ""  # 한 줄 결과
@@ -87,7 +89,8 @@ class PostProvenance(BaseModel):
     iteration: int = 0
     level: PostLevel | None = None  # 평가자 라벨. 사람 경로 글은 None
     user_level: PostLevel | None = None
-    prompt_template_versions: list[str] = Field(default_factory=list)  # 전체 집합
+    prompt_template_versions: list[str] = Field(default_factory=list)  # 전체 집합 (옛 영수증)
+    pipeline_versions: list[str] = Field(default_factory=list)  # 전체 집합 (1a 부터)
     stages: list[ProvenanceStage] = Field(default_factory=list)
     usage_total: TokenUsage = Field(default_factory=TokenUsage)
     call_count: int = 0

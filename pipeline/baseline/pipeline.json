@@ -1,0 +1,407 @@
+{
+  "meta": {
+    "label": "baseline",
+    "note": "1a 기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수(2026-11-07). agents pipeline bootstrap 이 같은 입력으로 v1 을 만든다",
+    "content_hash": "sha256:2156cccbc67d56bc93df08b8bb9064c82c8632694af42e287c4121fbd6df9007"
+  },
+  "schema_version": 1,
+  "slots": {
+    "A": "architect",
+    "B": "systems_engineer",
+    "C": "troubleshooter"
+  },
+  "personas": {
+    "architect": {
+      "persona_id": "architect",
+      "display_name": "아키텍처와 경계",
+      "writer_bias": "Module boundaries, dependency direction, state lifecycle management, and domain modeling. Focus on how structural code changes resolve coupling or invariant violations.",
+      "primary_lens": "LOGIC_READABILITY"
+    },
+    "systems_engineer": {
+      "persona_id": "systems_engineer",
+      "display_name": "시스템 내부 동작",
+      "writer_bias": "Database execution plans, concurrency control, lock contention, I/O and memory overhead, and runtime specifications. Focus on internal mechanics backed by official specs and metrics.",
+      "primary_lens": "FACT_STRUCTURE"
+    },
+    "troubleshooter": {
+      "persona_id": "troubleshooter",
+      "display_name": "엣지 케이스와 실패 모드",
+      "writer_bias": "Public failure postmortems, edge-case breakdowns, pitfalls of default configurations, and critical analysis of conventional practices through concrete counterexamples.",
+      "primary_lens": "CRITICAL_PRACTICAL",
+      "max_level_without_evidence": 200
+    }
+  },
+  "routes": {
+    "PROPOSE_TOPIC:architect": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 8000
+      }
+    ],
+    "PROPOSE_TOPIC:systems_engineer": [
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 16000
+      }
+    ],
+    "PROPOSE_TOPIC:troubleshooter": [
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 8000
+      }
+    ],
+    "WRITE_DRAFT:architect": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 24000
+      }
+    ],
+    "WRITE_DRAFT:systems_engineer": [
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 32768
+      }
+    ],
+    "WRITE_DRAFT:troubleshooter": [
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 24000
+      }
+    ],
+    "REVISE_DRAFT:architect": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 24000
+      }
+    ],
+    "REVISE_DRAFT:systems_engineer": [
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 32768
+      }
+    ],
+    "REVISE_DRAFT:troubleshooter": [
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 24000
+      }
+    ],
+    "REVIEW:LOGIC_READABILITY": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 16000
+      }
+    ],
+    "REVIEW:FACT_STRUCTURE": [
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 16000
+      }
+    ],
+    "REVIEW:CRITICAL_PRACTICAL": [
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 16000
+      }
+    ],
+    "ARBITRATE": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "xai",
+        "model_id": "grok-4.7",
+        "effort": "high",
+        "max_output_tokens": 16000
+      }
+    ],
+    "FINAL_READ": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "high",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "high",
+        "max_output_tokens": 16000
+      }
+    ],
+    "ASSESS_LEVEL": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "medium",
+        "max_output_tokens": 8000
+      },
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "medium",
+        "max_output_tokens": 16000
+      }
+    ],
+    "POLISH_TONE": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-opus-5-5",
+        "effort": "medium",
+        "max_output_tokens": 16000
+      },
+      {
+        "provider": "google",
+        "model_id": "gemini-4-argon",
+        "effort": "medium",
+        "max_output_tokens": 16000
+      }
+    ],
+    "FACT_TRANSFORM": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-haiku-5-5",
+        "effort": "low",
+        "max_output_tokens": 8000
+      }
+    ],
+    "GLOSSARY": [
+      {
+        "provider": "anthropic",
+        "model_id": "claude-haiku-5-5",
+        "effort": "low",
+        "max_output_tokens": 8000
+      }
+    ]
+  },
+  "level_criteria": {
+    "version": "v1",
+    "criteria": [
+      {
+        "level": 100,
+        "name": "입문",
+        "core_question": "어떻게 쓰는가",
+        "prerequisites": "없음",
+        "assessment": "절차를 따라 하면 동작하는 결과가 나온다",
+        "evidence": "공식 문서"
+      },
+      {
+        "level": 200,
+        "name": "응용 기초",
+        "core_question": "어떻게 제대로 쓰는가",
+        "prerequisites": "기본 사용 경험",
+        "assessment": "방법과 그 이유를 함께 설명한다",
+        "evidence": "실행 가능한 코드"
+      },
+      {
+        "level": 300,
+        "name": "심화",
+        "core_question": "이 결정이 왜 따라오고 코드가 어떻게 바뀌는가",
+        "prerequisites": "여러 접근을 직접 써 본 경험",
+        "assessment": "선택한 전환이나 설계 결정 하나의 인과를 변경 전후 코드로 깊게 설명한다",
+        "evidence": "변경 전후 코드와 테스트. 표준 시나리오도 된다"
+      },
+      {
+        "level": 400,
+        "name": "전문",
+        "core_question": "왜 그렇게 동작하고 어디서 실패하는가",
+        "prerequisites": "내부 동작과 운영 경험",
+        "assessment": "내부 동작이나 실패 원인을 측정값으로 설명한다",
+        "evidence": "측정값과 운영 기록. 외부 근거가 있어야 한다"
+      }
+    ],
+    "reference_posts": []
+  },
+  "parameters": {
+    "max_iterations": 2,
+    "max_validation_retries": 2,
+    "max_llm_retries": 3,
+    "max_publish_attempts": 3,
+    "max_topic_attempts": 2,
+    "draft_token_limit": 300000,
+    "topic_keyword_overlap": 0.5,
+    "topic_title_overlap": 0.5,
+    "topic_avoid_lookback_days": 180,
+    "draft_min_chars": 4000,
+    "draft_max_chars": 20000,
+    "min_code_blocks": 1,
+    "structure": {
+      "required_sections": [
+        "intro",
+        "body-1",
+        "tradeoff"
+      ],
+      "sections_optional_by_level": {
+        "100": [
+          "tradeoff"
+        ]
+      },
+      "anchor_format": "<!-- sec:{id} -->",
+      "forbidden_syntax": [
+        "HTML tags (except section anchors)",
+        "Images (![alt](url))",
+        "Footnotes",
+        "mermaid code blocks"
+      ],
+      "language": "ko"
+    },
+    "review": {
+      "tone_preservation": {
+        "may_flag": [
+          "Factual errors or specification mismatches",
+          "Logical leaps or broken causal links",
+          "Code bugs, syntax errors, or body-code contradictions",
+          "Sentence structures that obstruct comprehension",
+          "Hollow filler phrases or cliched AI introductions/summaries"
+        ],
+        "must_not_flag": [
+          "First-person narrative choice",
+          "Sentence rhythm and length preferences",
+          "Direct or assertive tone",
+          "Choosing prose paragraphs over bullet lists"
+        ]
+      }
+    },
+    "fact_check": {
+      "severity": {
+        "REFUTED": "CRITICAL",
+        "UNVERIFIABLE": "MINOR"
+      }
+    },
+    "final_read": {
+      "blocking_kinds": [
+        "BODY_CODE_CONTRADICTION",
+        "CORE_MECHANISM_MISSING"
+      ]
+    },
+    "polish": {
+      "phrase_fixes": [
+        [
+          "하십시오",
+          "한다"
+        ],
+        [
+          "(?<=\\S)라고 볼 수 있다",
+          "다"
+        ],
+        [
+          "(?<=\\S)인 상황이다",
+          "이다"
+        ]
+      ],
+      "long_paragraph_chars": 300,
+      "length_slack_chars": 30,
+      "length_slack_ratio": 0.25
+    },
+    "publish": {
+      "requires_approval": true,
+      "note": {
+        "heading": "## 이 글은 어떻게 만들어졌나",
+        "intro": "이 글은 **$writer_model** 모델이 작성하고 $lens_labels 관점의 교차 리뷰를 거쳐 완성되었습니다.",
+        "versions_line": "- 버전: v1 → v$final_version",
+        "blocking_line": "- 발행을 막은 사항: CRITICAL $critical, MAJOR $major",
+        "non_blocking_line": "- 기록만 남긴 사항: MINOR $minor, NITPICK $nitpick (발행을 막지 않아 수정하지 않음)",
+        "resolutions_line": "- 작성자가 수용한 사항: $accepted건 / 근거를 들어 유지한 사항: $rejected건",
+        "models_line": "- 모델: $models",
+        "arbitrations_line": "- 의견이 갈려 제3자 판정을 받은 사항: $count건",
+        "reviewer_quote": "> **$lens 리뷰의 지적**: $comment",
+        "author_quote": "> **작성자의 입장**: $reason",
+        "verdict_quote": "> **판정**: $outcome — $reasoning",
+        "lens_labels": {
+          "LOGIC_READABILITY": "논리·가독성",
+          "FACT_STRUCTURE": "사실·구조",
+          "CRITICAL_PRACTICAL": "비판·실무"
+        },
+        "outcome_text": {
+          "UPHOLD_REVIEWER": "리뷰어 의견을 인용",
+          "UPHOLD_AUTHOR": "작성자 입장을 인정"
+        },
+        "model_roles": {
+          "writer": "작성",
+          "review": "리뷰",
+          "revise": "수정",
+          "arbitrate": "중재",
+          "polish": "다듬기"
+        },
+        "max_rejected_shown": 3
+      }
+    },
+    "glossary": {
+      "full_list_max": 300,
+      "min_terms": 8,
+      "max_terms": 12,
+      "surface_max_chars": 40,
+      "terminology_max": 150
+    },
+    "prompt_lint": {}
+  }
+}

@@ -56,6 +56,8 @@ class PublishingRound(BaseModel):
         AgentSlot, ModelBinding
     ]  # 슬롯의 페르소나와 작성 모델. 응답 계약이자 발행 계정(D-45)의 기준이다
     routing: RoutingSnapshot | None = None  # 호출별 모델 후보. 응답에 내보내지 않는다. 라우팅 전 라운드는 None
+    # 생성 때 고정한 파이프라인 버전(프롬프트·조절 값·페르소나). 끝까지 이 버전으로 돈다. 1a 전 라운드는 None 이고 최신 버전으로 돈다 (09 문서 D-73)
+    pipeline_version_id: str | None = None
     evidence: str | None = (
         None  # 실제 프로젝트 근거(git 이력, code-graph context, 측정 기록). 없어도 300 까지는 쓸 수 있다
     )

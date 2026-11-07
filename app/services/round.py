@@ -2,6 +2,7 @@
 
 여러 문서를 고치는 동작은 커밋 지점 쓰기 하나(라운드 상태)를 먼저 하고 나머지를 멱등하게 따라 쓴다.
 중간에 멈추면 reconcile 이 마저 쓴다. 트랜잭션은 쓰지 않는다.
+라운드는 생성 때 파이프라인 버전(프롬프트·라우트·페르소나·조절 값)을 고정한다(09 문서 D-73). 라우트의 유효 스냅샷은 그 버전의 routes 에서 만든다.
 """
 
 import logging
@@ -10,11 +11,12 @@ from typing import Any
 from uuid import uuid4
 
 from app.agents.personas import get_persona
-from app.agents.prompts.registry import PROMPT_VERSION, validate_prompts
+from app.agents.prompts.registry import validate_prompts
 from app.clients.publisher.base import PostCategory, Publisher
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError
 from app.models.enums import AgentSlot, PostStatus, RoundAbortReason, RoundStatus, TopicRegistryStatus
 from app.models.model_binding import CallModel, ModelBinding
+from app.models.pipeline import PipelineVersion
 from app.models.post_draft import PostDraft, build_lens_assignments
 from app.models.publishing_round import PublishingRound
 from app.models.routing import RoutingSnapshot, build_snapshot, select_writer, validate_snapshot
@@ -24,6 +26,7 @@ from app.repositories.model_route import ModelRouteRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.derived_records import DerivedRecordsWriter
+from app.services.pipeline_versions import PipelineVersionService
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +44,23 @@ class RoundService:
         draft_repository: PostDraftRepository,
         topic_registry_repository: TopicRegistryRepository,
         publisher: Publisher | None = None,
+        version_service: PipelineVersionService | None = None,
         route_repository: ModelRouteRepository | None = None,
         providers: Iterable[str] = (),
         main_categories: Iterable[str] = (),
-        prompt_version: str = PROMPT_VERSION,
         derived_writer: DerivedRecordsWriter | None = None,
     ) -> None:
         self._rounds = round_repository
         self._drafts = draft_repository
         self._topics = topic_registry_repository
         self._publisher = publisher
-        self._routes = route_repository
+        self._versions = version_service  # 라운드 생성이 고정할 파이프라인 버전
+        self._routes = route_repository  # 옛 agent_routes. bootstrap 의 입력과 seed-routes 만 쓴다(3단계에서 삭제)
         self._derived = (
             derived_writer  # 정리가 PUBLISHED 글의 파생 문서(post_glossary·post_provenance)를 마저 쓴다 (설계 08 문서)
         )
         self._providers = list(providers)  # API 키가 있는 벤더. 라운드 스냅샷에서 키 없는 후보를 뺀다
         self._main_categories = frozenset(main_categories)  # 블로그에 화면이 있는 메인 카테고리 값 (D-60)
-        self._prompt_version = prompt_version  # 후보 모델의 가족마다 템플릿이 있는지 라운드 생성 때 확인한다
 
     async def get(self, round_id: str) -> PublishingRound | None:
         return await self._rounds.get(round_id)
@@ -74,6 +77,7 @@ class RoundService:
         theme_keyword: str | None,
         slot_bindings: Mapping[str, Any] | None = None,
         evidence: str | None = None,
+        pipeline_version_id: str | None = None,
     ) -> PublishingRound:
         """Post BE 활성 카테고리를 읽어 스냅샷을 만들고 라운드를 만든다 (설계 06 문서 3절 라우터 표).
 
@@ -85,7 +89,11 @@ class RoundService:
         if not categories:
             raise ValueError("Post BE has no active sub category under an allowed active main category")
         return await self.create_round(
-            theme_keyword=theme_keyword, slot_bindings=slot_bindings, categories=categories, evidence=evidence
+            theme_keyword=theme_keyword,
+            slot_bindings=slot_bindings,
+            categories=categories,
+            evidence=evidence,
+            pipeline_version_id=pipeline_version_id,
         )
 
     async def create_round(
@@ -95,13 +103,16 @@ class RoundService:
         categories: list[CategoryOption],
         slot_bindings: Mapping[str, Any] | None = None,
         evidence: str | None = None,
+        pipeline_version_id: str | None = None,
     ) -> PublishingRound:
-        """라우트를 스냅샷으로 뜨고 끝까지 고를 수 있는지 검사한 라운드를 TOPIC_SELECTION 으로 만든다 (설계 03 문서 3절).
+        """파이프라인 버전(기본은 최신)을 고정하고, 그 라우트로 끝까지 고를 수 있는지 검사한 라운드를 TOPIC_SELECTION 으로 만든다.
 
         slot_bindings 는 슬롯의 페르소나·작성 모델을 이 라운드만 바꾸는 A/B 값이다. 라우트가 빠졌거나 지원하지 않는 조합이면 ValueError.
+        pipeline_version_id 는 최신이 아닌 버전으로 돌릴 때(차기 프롬프트 시험, Q-42) 준다. 버전이 하나도 없으면 ValueError(400).
         다른 라운드가 주제 선정 중이면 InvalidTransitionError(409) 이고 문서는 남지 않는다. 카테고리 스냅샷은 호출자가 읽어 넘긴다.
         """
-        routing = await self._routing_snapshot(slot_bindings)
+        version = await self._pipeline_version(pipeline_version_id)
+        routing = self._routing_snapshot(version, slot_bindings)
         bindings = {
             slot: _binding_of(select_writer(routing, persona_id), persona_id)
             for slot, persona_id in routing.slot_personas.items()
@@ -116,15 +127,22 @@ class RoundService:
             theme_keyword=theme_keyword,
             slot_bindings=bindings,
             routing=routing,
+            pipeline_version_id=version.version_id,
             evidence=evidence,
             categories=categories,
         )
         await self._rounds.add(publishing_round)
         return publishing_round
 
-    async def _routing_snapshot(self, slot_bindings: Mapping[str, Any] | None) -> RoutingSnapshot:
-        if self._routes is None:
-            raise ValueError("no model route repository is configured")
+    async def _pipeline_version(self, pipeline_version_id: str | None) -> PipelineVersion:
+        if self._versions is None:
+            raise ValueError("no pipeline version service is configured")
+        if pipeline_version_id is None:
+            return await self._versions.require_latest()
+        return await self._versions.get(pipeline_version_id)
+
+    def _routing_snapshot(self, version: PipelineVersion, slot_bindings: Mapping[str, Any] | None) -> RoutingSnapshot:
+        """버전의 routes 에서 키 없는 벤더 후보를 빼고 A/B 를 얹은 유효 스냅샷. 끝까지 고를 수 있고 템플릿이 다 있어야 한다."""
         overrides = {
             AgentSlot(slot): ModelBinding.model_validate(binding) for slot, binding in (slot_bindings or {}).items()
         }
@@ -132,25 +150,28 @@ class RoundService:
             if binding.provider not in self._providers:
                 raise ValueError(f"slot {slot} binds provider {binding.provider} which has no API key")
         snapshot = build_snapshot(
-            await self._routes.list_documents(),
+            version.route_documents(),
             self._providers,
             writer_overrides={slot: (binding.persona_id, _call_model(binding)) for slot, binding in overrides.items()},
         )
-        personas = [get_persona(persona_id).persona_id for persona_id in snapshot.slot_personas.values()]
+        personas = [
+            get_persona(persona_id, version.personas).persona_id for persona_id in snapshot.slot_personas.values()
+        ]
         if len(set(personas)) != len(personas):
             raise ValueError("every slot needs a distinct persona")
         validate_snapshot(snapshot)
-        validate_prompts(snapshot, self._prompt_version)
+        validate_prompts(snapshot, version.prompts)
         return snapshot
 
     async def seed_routes(self, documents: list[Mapping[str, Any]]) -> None:
-        """라우트 설정을 넣는다. 깨진 설정이 DB 에 들어가지 않게 벤더 키와 무관하게 먼저 검사한다."""
+        """옛 agent_routes 에 라우트 설정을 넣는다. 라운드는 이제 버전 문서의 routes 를 쓰므로 `agents pipeline edit-routes` 가 그 자리다.
+
+        bootstrap --routes mongo 의 입력으로만 남는다(3단계에서 삭제). 깨진 설정이 들어가지 않게 벤더 키와 무관하게 먼저 검사한다.
+        """
         if self._routes is None:
             raise ValueError("no model route repository is configured")
         declared = {candidate["provider"] for document in documents for candidate in document.get("candidates", [])}
-        snapshot = build_snapshot(documents, declared)
-        validate_snapshot(snapshot)
-        validate_prompts(snapshot, self._prompt_version)
+        validate_snapshot(build_snapshot(documents, declared))
         await self._routes.replace_all(documents)
 
     async def list_route_documents(self) -> list[dict[str, Any]]:

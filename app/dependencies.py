@@ -37,6 +37,7 @@ from app.repositories.code_graph import CodeGraphRepository
 from app.repositories.code_graph_repo_config import CodeGraphRepoConfigRepository
 from app.repositories.glossary import GlossaryRepository
 from app.repositories.model_route import ModelRouteRepository
+from app.repositories.pipeline_version import PipelineVersionRepository
 from app.repositories.popular_search import PopularSearchRepository
 from app.repositories.post import PostRepository
 from app.repositories.post_draft import PostDraftRepository
@@ -55,6 +56,7 @@ from app.services.health import HealthService
 from app.services.index_setup import IndexSetupService
 from app.services.indexing import IndexingService
 from app.services.kis import KISService
+from app.services.pipeline_versions import PipelineVersionService
 from app.services.pipeline_views import PipelineViewService
 from app.services.provenance import ProvenanceService
 from app.services.publishing import PublishingService, UnconfiguredDraftPublisher
@@ -64,7 +66,6 @@ from app.services.search import SearchService
 from app.services.service_graph import ServiceGraphService
 from app.services.sync import SyncService
 from app.services.topic_selection import TopicSelectionService
-from app.services.validation import ValidationGate
 
 
 @contextmanager
@@ -270,6 +271,12 @@ async def ensure_agent_indexes(database: AsyncDatabase) -> None:
     await TopicRegistryRepository(database).ensure_indexes()
     await GlossaryRepository(database).ensure_indexes()
     await PostProvenanceRepository(database).ensure_indexes()
+    await PipelineVersionRepository(database).ensure_indexes()
+
+
+def build_pipeline_version_service(database: AsyncDatabase) -> PipelineVersionService:
+    """파이프라인 버전(프롬프트·라우트·페르소나·조절 값) 읽기·생성 (설계 09 문서). 러너·결정·조회·CLI `agents pipeline` 이 같이 쓴다."""
+    return PipelineVersionService(PipelineVersionRepository(database))
 
 
 def available_providers(settings: Settings) -> list[str]:
@@ -338,6 +345,7 @@ def build_glossary_service(database: AsyncDatabase, settings: Settings) -> Gloss
         agent_call_service=build_agent_call_service(database, settings),
         draft_repository=PostDraftRepository(database),
         round_repository=PublishingRoundRepository(database),
+        version_service=build_pipeline_version_service(database),
     )
 
 
@@ -376,6 +384,7 @@ def build_draft_decision_service(database: AsyncDatabase, settings: Settings) ->
         topic_registry_repository=TopicRegistryRepository(database),
         round_service=build_round_service(database, settings),
         settings=settings,
+        version_service=build_pipeline_version_service(database),
         derived_writer=build_derived_records_writer(database),
     )
 
@@ -386,10 +395,10 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
         PostDraftRepository(database),
         TopicRegistryRepository(database),
         publisher=build_publisher(settings),
+        version_service=build_pipeline_version_service(database),
         route_repository=ModelRouteRepository(database),
         providers=available_providers(settings),
         main_categories=settings.agent_main_category_values,
-        prompt_version=settings.prompt_version,
         derived_writer=build_derived_records_writer(database),
     )
 
@@ -400,7 +409,7 @@ def build_pipeline_view_service(database: AsyncDatabase, settings: Settings) -> 
         round_service=build_round_service(database, settings),
         draft_repository=PostDraftRepository(database),
         agent_call_repository=AgentCallRepository(database),
-        settings=settings,
+        version_service=build_pipeline_version_service(database),
     )
 
 
@@ -415,6 +424,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
     draft_repository = PostDraftRepository(database)
     topic_registry_repository = TopicRegistryRepository(database)
     publisher = build_publisher(settings)
+    version_service = build_pipeline_version_service(database)  # 러너 안의 서비스가 같은 캐시를 쓴다
     round_service = build_round_service(database, settings)
     agent_call_service = build_agent_call_service(database, settings)
     draft_publisher: DraftPublisher = (
@@ -423,6 +433,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             topic_registry_repository=topic_registry_repository,
             publisher=publisher,
             settings=settings,
+            version_service=version_service,
             derived_writer=build_derived_records_writer(database),
         )
         if publisher is not None
@@ -434,6 +445,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
         agent_call_service=agent_call_service,
         draft_repository=draft_repository,
         round_repository=round_repository,
+        version_service=version_service,
     )
     return PipelineRunner(
         round_repository=round_repository,
@@ -445,18 +457,18 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             topic_registry_repository=topic_registry_repository,
             round_service=round_service,
             agent_call_service=agent_call_service,
-            settings=settings,
+            version_service=version_service,
         ),
         draft_pipeline_service=DraftPipelineService(
             draft_repository=draft_repository,
             round_service=round_service,
             agent_call_service=agent_call_service,
-            gate=ValidationGate(min_chars=settings.draft_min_chars, max_chars=settings.draft_max_chars),
             publisher=draft_publisher,
-            settings=settings,
+            version_service=version_service,
             link_checker=LinkChecker(),
             glossary_service=glossary_service,
         ),
+        version_service=version_service,
         settings=settings,
     )
 

@@ -7,7 +7,6 @@ schemas 는 models 를 변환하지 않고(CONVENTIONS 1절), 라우터·CLI 는
 
 import difflib
 
-from app.core.config import Settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.models.agent_call import AgentCall
 from app.models.enums import ClaimStatus, ResolutionStatus, RevisionCause, RoundStatus
@@ -27,6 +26,7 @@ from app.schemas.agent_pipeline import (
     RoundPublic,
 )
 from app.services.metrics import PipelineMetrics, compute_metrics
+from app.services.pipeline_versions import PipelineVersionService
 from app.services.round import RoundService
 
 
@@ -39,12 +39,12 @@ class PipelineViewService:
         round_service: RoundService,
         draft_repository: PostDraftRepository,
         agent_call_repository: AgentCallRepository,
-        settings: Settings,
+        version_service: PipelineVersionService,
     ) -> None:
         self._rounds = round_service
         self._drafts = draft_repository
         self._calls = agent_call_repository
-        self._settings = settings
+        self._versions = version_service
 
     async def list_rounds(self, status: RoundStatus | None = None) -> list[RoundPublic]:
         return [build_round_public(each) for each in await self._rounds.list_rounds(status)]
@@ -57,6 +57,8 @@ class PipelineViewService:
     async def get_round_progress(self, round_id: str) -> RoundProgress:
         """`agents status`·`--wait` 용: 러너가 멈춘 이유(승인 대기·격리·실패)와 글당 토큰."""
         publishing_round = await self._round(round_id)
+        # 승인 토글은 라운드 버전의 조절 값이다. 상태 화면은 버전이 없어도 보여야 하므로 기본값으로 대신한다
+        requires_approval = (await self._versions.parameters_or_default(publishing_round)).publish.requires_approval
         drafts = []
         for draft in await self._drafts.list_by_round(round_id):
             usage = await self._calls.sum_usage(draft.draft_id)
@@ -64,7 +66,7 @@ class PipelineViewService:
                 DraftProgress(
                     draft_id=draft.draft_id,
                     status=draft.status,
-                    awaits_approval=draft.awaits_approval(self._settings.publish_requires_approval),
+                    awaits_approval=draft.awaits_approval(requires_approval),
                     iteration=draft.iteration,
                     versions=len(draft.versions),
                     title=draft.current_version.title if draft.versions else None,
@@ -132,6 +134,7 @@ def build_round_public(publishing_round: PublishingRound) -> RoundPublic:
         status=publishing_round.status,
         theme_keyword=publishing_round.theme_keyword,
         slot_bindings=publishing_round.slot_bindings,
+        pipeline_version_id=publishing_round.pipeline_version_id,
         draft_ids=publishing_round.draft_ids,
         topic_attempts=len(publishing_round.topic_attempts),
         abort_reason=publishing_round.abort_reason,

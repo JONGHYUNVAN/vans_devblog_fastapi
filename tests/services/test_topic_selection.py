@@ -53,9 +53,9 @@ async def test_no_conflict_locks_first_choices_and_commits_drafts_and_registry()
     assert {slot: locked.proposal_index for slot, locked in attempt.locked.items()} == {A: 0, B: 0, C: 0}
     drafts = await harness.drafts.list_by_round("round-1")
     assert [(draft.status, draft.token_limit, draft.topic.title) for draft in drafts] == [
-        (PostStatus.TOPIC_LOCKED, harness.settings.draft_token_limit, "A 하나"),
-        (PostStatus.TOPIC_LOCKED, harness.settings.draft_token_limit, "B 하나"),
-        (PostStatus.TOPIC_LOCKED, harness.settings.draft_token_limit, "C 하나"),
+        (PostStatus.TOPIC_LOCKED, harness.version.parameters.draft_token_limit, "A 하나"),
+        (PostStatus.TOPIC_LOCKED, harness.version.parameters.draft_token_limit, "B 하나"),
+        (PostStatus.TOPIC_LOCKED, harness.version.parameters.draft_token_limit, "C 하나"),
     ]
     assert [(entry.entry_id, entry.status) for entry in await harness.topics.list_by_round("round-1")] == [
         ("round-1:A", "RESERVED"),

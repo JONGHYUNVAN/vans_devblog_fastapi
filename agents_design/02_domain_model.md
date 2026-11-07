@@ -146,7 +146,8 @@ class GlossaryStatus(StrEnum):          # 표제어·뜻의 승인 상태 (08 �
 ```
 PublishingRound (Aggregate Root, 라운드 수준)
  ├─ round_id, round_seq, status, theme_keyword?, slot_bindings{slot → ModelBinding}
- ├─ routing?: RoutingSnapshot               호출별 모델 후보, 슬롯 페르소나, 수준 기준표. 생성 때 스냅샷. 응답에 내보내지 않는다. 라우팅 전 라운드는 없다
+ ├─ routing?: RoutingSnapshot               호출별 모델 후보, 슬롯 페르소나, 수준 기준표. 생성 때 버전 문서의 routes 에서 만든 유효 스냅샷. 응답에 내보내지 않는다. 라우팅 전 라운드는 없다
+ ├─ pipeline_version_id?                    생성 때 고정한 파이프라인 버전(프롬프트·조절 값·페르소나, 09 문서 D-73). 끝까지 이 버전으로 돈다. 1a 전 라운드는 없고 최신 버전으로 돈다
  ├─ evidence?                               실제 프로젝트 근거(git 이력, code-graph context, 측정 기록)
  ├─ categories: CategoryOption[]            라운드 생성 때 Post BE 에서 읽은 카테고리 스냅샷. `AGENT_MAIN_CATEGORIES` 에 든 메인 아래 서브만 넣는다(07 문서 D-60). 주제 제안 입력
  ├─ draft_ids                               길이 0 (주제 선정 중) 또는 3 (확정 후)
@@ -194,7 +195,7 @@ PostDraft (Aggregate Root, 글 수준)        ◄── 리뷰 결과를 써도 
  └─ publication?: Publication
 
 AgentCall (독립 컬렉션, LLM 호출 1회의 영수증. insert 만 한다)
- ├─ call_id, round_id, draft_id?, kind, slot?, lens?, model_binding(CallModel 스냅샷), prompt_template_version
+ ├─ call_id, round_id, draft_id?, kind, slot?, lens?, model_binding(CallModel 스냅샷), pipeline_version?(메시지를 렌더링한 버전 문서 id, 1a 부터), prompt_template_version?(옛 영수증의 프롬프트 디렉터리 이름)
  ├─ target_version?, topic_attempt?, item_id?   어느 단계의 호출인지
  ├─ attempt_number                          같은 단계 호출 안의 몇 번째 시도. 1부터
  ├─ messages                                이 시도에 실제로 보낸 메시지
@@ -230,7 +231,7 @@ class CallModel(BaseModel):
 
 
 class RoutingSnapshot(BaseModel):
-    """agent_routes 를 라운드 생성 때 뜬 것. 키 없는 벤더 후보는 빠진다. 선택은 models/routing.py 의 순수 함수다."""
+    """파이프라인 버전 문서의 routes 를 라운드 생성 때 뜬 것(09 문서. 1a 전에는 agent_routes). 키 없는 벤더 후보는 빠진다. 선택은 models/routing.py 의 순수 함수다."""
 
     routes: dict[str, list[CallModel]]  # PROPOSE_TOPIC:{persona}, WRITE_DRAFT:{persona}, REVISE_DRAFT:{persona}, REVIEW:{lens},
                                         # ARBITRATE, FINAL_READ, ASSESS_LEVEL, POLISH_TONE, FACT_TRANSFORM (POLISH_FORMAT 은 v4 에서 뺐다, D-62)
@@ -488,7 +489,9 @@ class Publication(BaseModel):
 | `agent_rounds` | `PublishingRound` | `(status, created_at)`. `status` 부분 unique(`status == "TOPIC_SELECTION"` 인 문서만): 주제 선정 라운드는 하나 |
 | `agent_drafts` | `PostDraft` (versions·reviews 내장) | `round_id`, `status`, `(status, updated_at)` |
 | `agent_calls` | `AgentCall` | `draft_id`, `(round_id, kind)` |
-| `agent_routes` | 호출별 후보, `SLOTS`, `LEVEL_CRITERIA` 문서 | `_id` 만 쓴다 |
+| `agent_pipeline_versions` | `PipelineVersion` (09 문서 2.2절: 슬롯·페르소나·라우트·수준 기준표·프롬프트·조절 값). insert 만 한다. 활성은 `seq` 가 가장 큰 문서 | `seq` **unique**, `content_hash`, `created_at` |
+| `agent_pipeline_counters` | `{_id: "version", seq}` | `_id` 만. `find_one_and_update($inc)` 로 버전 순번 |
+| `agent_routes` | 옛 호출별 후보, `SLOTS`, `LEVEL_CRITERIA` 문서. 1a 부터 라운드가 읽지 않는다. `agents pipeline bootstrap --routes mongo` 의 입력으로만 남는다(3단계 삭제) | `_id` 만 쓴다 |
 | `agent_topics` | `TopicRegistryEntry` | `(status, keywords)`, `round_id`, `published_at` |
 | `glossary_headwords` | `GlossaryHeadword` (08 문서 2.1절) | `lookup_keys` **unique**(다중키: 한 조회 키는 표제어 하나에만), `status` |
 | `glossary_senses` | `GlossarySense` | `headword_key`, `(status, headword_key)`, `post_ids` |

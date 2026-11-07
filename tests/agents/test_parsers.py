@@ -165,15 +165,13 @@ def test_level_400_needs_evidence():
 
 
 def test_troubleshooter_without_evidence_stops_at_200():
-    check = topic_proposal_check([make_category()], persona_id="troubleshooter")
+    check = topic_proposal_check([make_category()], level_cap=200)
     with pytest.raises(LLMOutputError, match="limit is 200"):
         check(_proposals(target_level=300))
     check(_proposals(target_level=200))
 
-    topic_proposal_check([make_category()], persona_id="troubleshooter", has_evidence=True)(
-        _proposals(target_level=300)
-    )
-    topic_proposal_check([make_category()], persona_id="architect")(_proposals(target_level=300))
+    topic_proposal_check([make_category()], level_cap=200, has_evidence=True)(_proposals(target_level=300))
+    topic_proposal_check([make_category()])(_proposals(target_level=300))
 
 
 # ---------- 인용·주장 ----------

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.agents.personas import PERSONAS
 from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
 from app.models.enums import (
     AgentSlot,
@@ -22,6 +23,14 @@ from app.models.enums import (
     ReviewVerdict,
 )
 from app.models.model_binding import CallModel, ModelBinding
+from app.models.pipeline import (
+    BODY_FIELDS,
+    Parameters,
+    PipelineVersion,
+    PipelineVersionBody,
+    PromptSet,
+    content_hash_of,
+)
 from app.models.post_draft import (
     Arbitration,
     DraftVersion,
@@ -37,6 +46,7 @@ from app.models.publishing_round import PublishingRound
 from app.models.routing import RoutingSnapshot
 from app.models.topic import CategoryOption, TopicProposal, TopicRegistryEntry
 from app.services.evaluation import derive_verdict
+from app.services.pipeline_versions import split_route_documents
 
 # 기본 바인딩의 주 렌즈 (설계 03 문서 4절 표)
 LENSES = {
@@ -273,6 +283,73 @@ def make_routing(with_glossary: bool = False) -> RoutingSnapshot:
 
 def make_call_model(**overrides) -> CallModel:
     return CallModel(**({"provider": "fake", "model_id": "fake-1", "max_output_tokens": 1000} | overrides))
+
+
+# ---------- 파이프라인 버전 (설계 09 문서, 이행 1a) ----------
+
+# 시나리오 테스트의 스텁 프롬프트 문구. ScriptedLLMClient 가 시스템 프롬프트의 이 문구로 호출 종류를 가린다(fakes._KIND_MARKERS).
+# 실제 템플릿 문구에 묶이지 않도록 스텁을 쓴다 (09 문서 D-78). propose_topic 만 $writer_bias 를 치환한다(R-08)
+STUB_PHRASES = {
+    "propose_topic": "주제를 세 개 제안한다 (탐색 도메인: $writer_bias)",
+    "write_draft": "글 한 편을 한국어로 쓴다",
+    "revise_draft": "수정본을 낸다",
+    "review_full": "`content_markdown` 을 `lens` 로 리뷰한다",
+    "review_spot_check": "해소됐는지 확인한다",
+    "arbitrate": "리뷰 분쟁을 판정한다",
+    "arbitrate_search": "분쟁의 근거를 찾는다",
+    "fact_check": "사실 확인 담당이다",
+    "fact_transform": "JSON 으로 옮기는 변환기다",
+    "final_read": "마지막 독자다",
+    "assess_level": "전문성 수준을 판정한다",
+    "polish_tone": "교정자다",
+    "glossary": "glossary extractor",
+}
+
+
+def stub_prompts() -> PromptSet:
+    """가족 디렉터리가 없는 가짜 벤더(fake, fake-a/b/c)가 common 으로 내려오므로 common 에만 둔다."""
+    return {
+        "common": {
+            name: f"[template:{name}] {phrase}. 입력(JSON)을 읽고 JSON 으로만 답한다."
+            for name, phrase in STUB_PHRASES.items()
+        }
+    }
+
+
+def make_pipeline_body(
+    *, with_glossary: bool = False, prompts: PromptSet | None = None, **parameter_overrides: Any
+) -> PipelineVersionBody:
+    """가짜 벤더 라우트·기본 페르소나·스텁 프롬프트의 본문. parameter_overrides 는 Parameters 필드(중첩은 dict)다."""
+    slots, level_criteria, routes = split_route_documents(route_documents(with_glossary))
+    return PipelineVersionBody(
+        slots=slots,
+        personas={key: value.model_copy(deep=True) for key, value in PERSONAS.items()},
+        routes=routes,
+        level_criteria=level_criteria,
+        prompts=prompts if prompts is not None else stub_prompts(),
+        parameters=Parameters.model_validate(parameter_overrides),
+    )
+
+
+def make_pipeline_version(
+    version_id: str = "v1",
+    seq: int = 1,
+    *,
+    parent_version_id: str | None = None,
+    body: PipelineVersionBody | None = None,
+    **body_overrides: Any,
+) -> PipelineVersion:
+    body = body if body is not None else make_pipeline_body(**body_overrides)
+    return PipelineVersion(
+        **body.model_dump(include=BODY_FIELDS),
+        version_id=version_id,
+        seq=seq,
+        parent_version_id=parent_version_id,
+        content_hash=content_hash_of(body),
+        created_at=datetime(2026, 11, 7, 0, 0, tzinfo=UTC),
+        created_by="test",
+        source="import",
+    )
 
 
 def make_category() -> CategoryOption:

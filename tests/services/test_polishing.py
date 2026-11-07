@@ -7,6 +7,7 @@ from app.models.enums import AgentSlot, PostStatus, RevisionCause
 from app.services.pipeline_views import build_escalation_summary
 from app.services.polishing import _Document, _fix_phrases, _tone_violation
 from app.services.publishing import build_peer_review_note
+from app.services.validation import ValidationGate
 from tests.factories import assess_level_output, draft_output, final_read_output, polish_output, review_output
 from tests.fakes import PipelineHarness
 
@@ -167,15 +168,15 @@ async def test_polished_body_that_fails_the_gate_at_the_end_is_discarded(monkeyp
     harness = PipelineHarness(_scripts(POLISH_TONE=[polish_output((FIRST, "첫 문장이다. 둘째 문장으로 이어진다."))]))
     await harness.seed_round()
     calls = {"count": 0}
-    original = harness.draft_pipeline._gate.check_markdown  # noqa: SLF001
+    original = ValidationGate.check_markdown  # 게이트는 걸음마다 라운드 버전의 조절 값으로 만들어지므로 클래스를 바꾼다
 
-    def failing_at_the_end(markdown, level):
+    def failing_at_the_end(self, markdown, level):
         calls["count"] += 1
         if "이어진다" in markdown and "값을 확인한다" in markdown and calls["count"] > 3:
             return ["본문이 너무 길다"]
-        return original(markdown, level)
+        return original(self, markdown, level)
 
-    monkeypatch.setattr(harness.draft_pipeline._gate, "check_markdown", failing_at_the_end)  # noqa: SLF001
+    monkeypatch.setattr(ValidationGate, "check_markdown", failing_at_the_end)
 
     draft = await harness.drive(A)
 

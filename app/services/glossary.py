@@ -30,6 +30,7 @@ from app.models.glossary import (
     PostGlossaryItem,
     ProposalSource,
 )
+from app.models.pipeline import GlossaryParameters, PipelineVersion
 from app.models.post_draft import DraftVersion, PostDraft
 from app.models.publishing_round import PublishingRound
 from app.models.sections import find_anchors, mask_code_fences
@@ -38,6 +39,7 @@ from app.repositories.glossary import GlossaryRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.services.agent_calls import AgentCallService
 from app.services.glossary_matching import headword_key_of, normalize_key, similar_headwords, similarity
+from app.services.pipeline_versions import PipelineVersionService
 from app.services.routing import DraftRoutes
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,7 @@ class GlossaryService:
         agent_call_service: AgentCallService | None = None,
         draft_repository: PostDraftRepository | None = None,
         round_repository: PublishingRoundRepository | None = None,
+        version_service: PipelineVersionService | None = None,
         now: Callable[[], datetime] = _now,
     ) -> None:
         self._repo = repository
@@ -74,19 +77,20 @@ class GlossaryService:
         self._calls = agent_call_service
         self._drafts = draft_repository
         self._rounds = round_repository
+        self._versions = version_service  # 보충(backfill)이 라운드의 버전(프롬프트·용어 값)을 찾을 때 쓴다
         self._now = now
 
     # ── 추출 단계 ────────────────────────────────────────────────────
 
-    async def extract(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
+    async def extract(self, draft: PostDraft, publishing_round: PublishingRound, version: PipelineVersion) -> None:
         """POST_REVIEW(GLOSSARY) 한 걸음. 돌아오면 글은 READY_TO_PUBLISH 다. 호출·라우트가 없으면 건너뛴 기록만 남는다."""
-        record = await self._run(draft, draft.current_version, publishing_round)
+        record = await self._run(draft, draft.current_version, publishing_round, version)
         draft.finish_glossary(record)
 
     async def backfill(self, draft_id: str) -> GlossaryRecord:
         """보충: 발행된 버전으로 추출을 다시 돌려 글 기록과 post_glossary 를 덮어쓴다. 사람의 resolve·drop 은 사라진다."""
-        if self._drafts is None or self._rounds is None:
-            raise ValueError("backfill needs draft and round repositories")
+        if self._drafts is None or self._rounds is None or self._versions is None:
+            raise ValueError("backfill needs draft and round repositories and the pipeline version service")
         draft = await self._drafts.get(draft_id)
         if draft is None:
             raise NotFoundError(f"draft {draft_id} does not exist")
@@ -96,11 +100,13 @@ class GlossaryService:
         version = _published_version(draft)
         if version is None:
             raise InvalidRequestError(f"draft {draft_id} has no version that passed validation")
-        record = await self._run(draft, version, publishing_round)
+        pipeline_version = await self._versions.for_round(publishing_round)
+        record = await self._run(draft, version, publishing_round, pipeline_version)
         draft.glossary = record
         await self._drafts.save(draft)
         if draft.status == PostStatus.PUBLISHED and draft.publication is not None:
-            post_glossary = build_post_glossary(draft, record, await self._template_version(record))
+            template_version, pipeline_version_id = await self._template_version(record)
+            post_glossary = build_post_glossary(draft, record, template_version, pipeline_version_id)
             if post_glossary is not None:
                 await self._repo.save_post_glossary(post_glossary)
                 await self._repo.add_post_to_senses(
@@ -118,24 +124,33 @@ class GlossaryService:
             if draft.glossary is None
         ]
 
-    async def _template_version(self, record: GlossaryRecord) -> str | None:
+    async def _template_version(self, record: GlossaryRecord) -> tuple[str | None, str | None]:
+        """추출 호출 영수증의 (옛 프롬프트 디렉터리 이름, 파이프라인 버전 id)."""
         if record.call_id is None or self._calls is None:
-            return None
+            return None, None
         try:
-            return (await self._calls.get(record.call_id)).prompt_template_version
+            call = await self._calls.get(record.call_id)
         except NotFoundError:
-            return None
+            return None, None
+        return call.prompt_template_version, call.pipeline_version
 
-    async def _run(self, draft: PostDraft, version: DraftVersion, publishing_round: PublishingRound) -> GlossaryRecord:
+    async def _run(
+        self,
+        draft: PostDraft,
+        version: DraftVersion,
+        publishing_round: PublishingRound,
+        pipeline_version: PipelineVersion,
+    ) -> GlossaryRecord:
+        parameters = pipeline_version.parameters.glossary
         record = GlossaryRecord(target_version=version.version_number, extracted_at=self._now())
-        model = DraftRoutes(publishing_round, draft).glossary_extractor
+        model = DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor
         if model is None:
             record.skipped = "no GLOSSARY route"
             return record
         if self._calls is None:
             record.skipped = "no LLM client"
             return record
-        known, by_key = await self._known_headwords()
+        known, by_key = await self._known_headwords(parameters.full_list_max)
         record.known_headwords_sent = len(known)
         messages = render_messages(
             build_glossary_input(
@@ -143,10 +158,10 @@ class GlossaryService:
                 publishing_round,
                 version,
                 known,
-                min_terms=self._settings.glossary_min_terms,
-                max_terms=self._settings.glossary_max_terms,
+                min_terms=parameters.min_terms,
+                max_terms=parameters.max_terms,
             ),
-            self._settings.prompt_version,
+            pipeline_version.prompts,
             model,
         )
         try:
@@ -158,6 +173,8 @@ class GlossaryService:
                 schema=GlossaryOutput,
                 draft=draft,
                 target_version=version.version_number,
+                max_attempts=pipeline_version.parameters.max_llm_retries,
+                pipeline_version=pipeline_version.version_id,
             )
         except Exception as exc:  # 용어 추출 실패는 글을 멈추지 않는다(재시도 소진·예산 초과·벤더 거부 전부, D-64)
             logger.warning("draft %s skipped %s: %s", draft.draft_id, CallKind.GLOSSARY, exc)
@@ -165,24 +182,24 @@ class GlossaryService:
             return record
         record.call_id = result.call_id
         source = ProposalSource(draft_id=draft.draft_id, call_id=result.call_id)
-        await self._resolve(result.output, draft, version, record, source, by_key)
+        await self._resolve(result.output, draft, version, record, source, by_key, parameters)
         return record
 
-    async def _known_headwords(self) -> tuple[list[KnownHeadword], dict[str, GlossaryHeadword]]:
+    async def _known_headwords(self, full_list_max: int) -> tuple[list[KnownHeadword], dict[str, GlossaryHeadword]]:
         """추출 입력의 표제어 목록. 상한을 넘으면 글이 많이 가리키는 표제어부터 남긴다 (08 문서 Q-20, 2단계 호출 전까지의 임시 규칙)."""
         headwords = await self._repo.list_headwords(_KNOWN_STATUSES)
         senses = await self._repo.list_senses(statuses=_KNOWN_STATUSES)
         by_headword: dict[str, list[GlossarySense]] = {}
         for sense in senses:
             by_headword.setdefault(sense.headword_key, []).append(sense)
-        if len(headwords) > self._settings.glossary_full_list_max:
+        if len(headwords) > full_list_max:
             headwords.sort(
                 key=lambda each: (
                     -sum(len(sense.post_ids) for sense in by_headword.get(each.headword_key, [])),
                     each.headword_key,
                 )
             )
-            headwords = headwords[: self._settings.glossary_full_list_max]
+            headwords = headwords[:full_list_max]
         known = [
             KnownHeadword(
                 key=each.headword_key,
@@ -212,6 +229,7 @@ class GlossaryService:
         record: GlossaryRecord,
         source: ProposalSource,
         known_by_key: dict[str, GlossaryHeadword],
+        parameters: GlossaryParameters,
     ) -> None:
         """후보마다 등록 확인(①~④)과 뜻 선택을 한다. 버리는 사유는 record.discarded 에 남긴다."""
         prose = _mask_code(version.content_markdown)
@@ -220,8 +238,10 @@ class GlossaryService:
         all_keys = [each.headword_key for each in await self._repo.list_headwords()]
         seen_surfaces: set[str] = set()
         seen_senses: set[str] = set()
-        for candidate in output.candidates[: self._settings.glossary_max_terms]:
-            reason = self._discard_reason(candidate, prose, section_ids, prerequisites, seen_surfaces)
+        for candidate in output.candidates[: parameters.max_terms]:
+            reason = self._discard_reason(
+                candidate, prose, section_ids, prerequisites, seen_surfaces, parameters.surface_max_chars
+            )
             if reason is not None:
                 record.discarded.append(DiscardedTerm(surface=candidate.surface, reason=reason))
                 continue
@@ -273,12 +293,13 @@ class GlossaryService:
         section_ids: set[str],
         prerequisites: str,
         seen_surfaces: set[str],
+        surface_max_chars: int,
     ) -> str | None:
         term_ko, term_en = candidate.term_ko.strip(), (candidate.term_en or "").strip()
         if not term_ko and not term_en:
             return "표기 없음"
         surface = candidate.surface
-        if "\n" in surface or len(surface) > self._settings.glossary_surface_max_chars:
+        if "\n" in surface or len(surface) > surface_max_chars:
             return "표면형 형식"
         if surface in seen_surfaces:
             return "표면형 중복"
@@ -811,7 +832,10 @@ def _published_version(draft: PostDraft) -> DraftVersion | None:
 
 
 def build_post_glossary(
-    draft: PostDraft, record: GlossaryRecord, prompt_template_version: str | None
+    draft: PostDraft,
+    record: GlossaryRecord,
+    prompt_template_version: str | None,
+    pipeline_version: str | None = None,
 ) -> PostGlossary | None:
     """발행 뒤 글 기록을 게시글 id 로 옮긴 문서. 항목도 보류도 없으면 만들지 않는다."""
     if draft.publication is None or not (record.items or record.pending):
@@ -823,6 +847,7 @@ def build_post_glossary(
         content_version=record.target_version,
         call_id=record.call_id,
         prompt_template_version=prompt_template_version,
+        pipeline_version=pipeline_version,
         items=list(record.items),
         pending=list(record.pending),
         extracted_at=record.extracted_at,

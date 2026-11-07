@@ -2,6 +2,7 @@
 
 drive(round_id) 는 라운드가 TOPIC_SELECTION 인 동안 한 걸음(제안 → 배정 → 확정)씩 진행하고 매번 저장한다.
 재시작하면 저장된 TopicAttempt 로 빠진 슬롯만 다시 부르고, 전체 잠금이 있으면 확정만 다시 한다.
+프롬프트·페르소나·임계·상한은 라운드가 고정한 파이프라인 버전 문서에서 읽는다(09 문서 D-73).
 """
 
 import asyncio
@@ -11,18 +12,19 @@ import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
-from app.agents.builders import build_propose_topic_input, render_messages
+from app.agents.builders import build_propose_topic_input, persona_of, render_messages
 from app.agents.contracts import ProposeTopicOutput
 from app.agents.parsers import topic_proposal_check
-from app.core.config import Settings
 from app.core.exceptions import ConcurrentUpdateError, LLMRetriesExhaustedError
 from app.models.enums import AgentSlot, CallKind, RoundAbortReason, RoundStatus
+from app.models.pipeline import Parameters, PipelineVersion
 from app.models.publishing_round import LockedTopic, PublishingRound, TopicAttempt, TopicConflict
 from app.models.topic import TopicProposal, TopicRegistryEntry
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.agent_calls import AgentCallService
+from app.services.pipeline_versions import NoPipelineVersionError, PipelineVersionService
 from app.services.round import RoundService
 from app.services.routing import proposer_of
 
@@ -42,14 +44,14 @@ class TopicSelectionService:
         topic_registry_repository: TopicRegistryRepository,
         round_service: RoundService,
         agent_call_service: AgentCallService,
-        settings: Settings,
+        version_service: PipelineVersionService,
     ) -> None:
         self._rounds = round_repository
         self._drafts = draft_repository
         self._topics = topic_registry_repository
         self._round_service = round_service
         self._calls = agent_call_service
-        self._settings = settings
+        self._versions = version_service
 
     async def drive(self, round_id: str) -> None:
         while True:
@@ -57,29 +59,37 @@ class TopicSelectionService:
             if publishing_round is None or publishing_round.status != RoundStatus.TOPIC_SELECTION:
                 return
             try:
-                await self._step(publishing_round)
+                version = await self._versions.for_round(publishing_round)
+            except NoPipelineVersionError as exc:
+                logger.error("round %s cannot select topics: %s", round_id, exc)
+                return
+            try:
+                await self._step(publishing_round, version)
             except ConcurrentUpdateError:
                 # 라운드 중단과 겹쳤다. 결과를 버리고 다시 읽는다. 호출 비용은 AgentCall 에 남는다
                 continue
 
-    async def _step(self, publishing_round: PublishingRound) -> None:
+    async def _step(self, publishing_round: PublishingRound, version: PipelineVersion) -> None:
         attempt = publishing_round.latest_attempt
         if attempt is None:
             attempt = TopicAttempt(attempt_number=1)
             publishing_round.topic_attempts.append(attempt)
         if attempt.is_fully_locked:
-            await self._commit(publishing_round)
+            await self._commit(publishing_round, version.parameters)
             return
         pending = [slot for slot in AgentSlot if slot not in attempt.locked and slot not in attempt.proposals]
         if pending:
-            await self._propose(publishing_round, attempt, pending)
+            await self._propose(publishing_round, attempt, pending, version)
         else:
-            await self._assign(publishing_round, attempt)
+            await self._assign(publishing_round, attempt, version.parameters)
         await self._rounds.save(publishing_round)
 
-    async def _propose(self, publishing_round: PublishingRound, attempt: TopicAttempt, slots: list[AgentSlot]) -> None:
+    async def _propose(
+        self, publishing_round: PublishingRound, attempt: TopicAttempt, slots: list[AgentSlot], version: PipelineVersion
+    ) -> None:
         """잠기지 않은 슬롯에 PROPOSE_TOPIC 을 병렬 호출한다. 하나라도 소진하면 나머지를 기다린 뒤 ABORTED(LLM_FAILED)."""
-        since = datetime.now(UTC) - timedelta(days=self._settings.topic_avoid_lookback_days)
+        parameters = version.parameters
+        since = datetime.now(UTC) - timedelta(days=parameters.topic_avoid_lookback_days)
         avoid_entries = [
             entry
             for entry in await self._topics.list_active_since(since)
@@ -92,7 +102,7 @@ class TopicSelectionService:
                     kind=CallKind.PROPOSE_TOPIC,
                     round_id=publishing_round.round_id,
                     slot=slot,
-                    binding=proposer_of(publishing_round, slot),
+                    binding=proposer_of(publishing_round, slot, version.personas),
                     messages=render_messages(
                         build_propose_topic_input(
                             publishing_round,
@@ -100,17 +110,20 @@ class TopicSelectionService:
                             attempt_number=attempt.attempt_number,
                             avoid_entries=avoid_entries,
                             conflict_feedback=_conflict_feedback(previous, slot),
+                            personas=version.personas,
                         ),
-                        self._settings.prompt_version,
-                        proposer_of(publishing_round, slot),
+                        version.prompts,
+                        proposer_of(publishing_round, slot, version.personas),
                     ),
                     schema=ProposeTopicOutput,
                     check=topic_proposal_check(
                         publishing_round.categories,
-                        persona_id=publishing_round.slot_bindings[slot].persona_id,
+                        level_cap=persona_of(publishing_round, slot, version.personas).max_level_without_evidence,
                         has_evidence=bool(publishing_round.evidence),
                     ),
                     topic_attempt=attempt.attempt_number,
+                    max_attempts=parameters.max_llm_retries,
+                    pipeline_version=version.version_id,
                 )
                 for slot in slots
             ),
@@ -128,10 +141,10 @@ class TopicSelectionService:
             # 글이 없으므로 ESCALATED 로 올릴 대상이 없다. 성공한 제안은 이력으로 남긴다
             publishing_round.abort(RoundAbortReason.LLM_FAILED)
 
-    async def _assign(self, publishing_round: PublishingRound, attempt: TopicAttempt) -> None:
+    async def _assign(self, publishing_round: PublishingRound, attempt: TopicAttempt, parameters: Parameters) -> None:
         """충돌 없는 조합 중 잠그는 슬롯 수가 가장 많고 순위 합이 가장 작은 배정 (설계 04 문서 2절 4~6단계)."""
         registry = [entry for entry in await self._topics.list_active() if entry.round_id != publishing_round.round_id]
-        attempt.conflicts = self._find_conflicts(attempt, registry)
+        attempt.conflicts = self._find_conflicts(attempt, registry, parameters)
         # 잠긴 주제·레지스트리와의 충돌은 어느 조합에서든 못 쓴다. 제안끼리의 충돌은 조합마다 본다
         conflicting = {
             (conflict.slot, conflict.proposal_index)
@@ -145,9 +158,7 @@ class TopicSelectionService:
             chosen = {slot: index for slot, index in zip(open_slots, choice, strict=True) if index is not None}
             if any((slot, index) in conflicting for slot, index in chosen.items()):
                 continue
-            if _conflicts_among(
-                [(slot, attempt.proposals[slot][index]) for slot, index in chosen.items()], self._settings
-            ):
+            if _conflicts_among([(slot, attempt.proposals[slot][index]) for slot, index in chosen.items()], parameters):
                 continue
             key = (
                 -len(chosen),
@@ -166,7 +177,7 @@ class TopicSelectionService:
             )
         if attempt.is_fully_locked:
             return
-        if attempt.attempt_number >= self._settings.max_topic_attempts:
+        if attempt.attempt_number >= parameters.max_topic_attempts:
             publishing_round.abort(RoundAbortReason.TOPIC_ATTEMPTS_EXHAUSTED)
             return
         # 잠긴 주제는 스냅샷으로 다음 시도에 넘기고, 남은 슬롯만 재제안한다
@@ -174,7 +185,9 @@ class TopicSelectionService:
             TopicAttempt(attempt_number=attempt.attempt_number + 1, locked=dict(attempt.locked))
         )
 
-    def _find_conflicts(self, attempt: TopicAttempt, registry: list[TopicRegistryEntry]) -> list[TopicConflict]:
+    def _find_conflicts(
+        self, attempt: TopicAttempt, registry: list[TopicRegistryEntry], parameters: Parameters
+    ) -> list[TopicConflict]:
         """이번 시도 제안 각각이 잠긴 주제·다른 슬롯의 제안·레지스트리와 겹치는지 (설계 04 문서 2절 3단계)."""
         conflicts: list[TopicConflict] = []
         others: list[tuple[AgentSlot, int, TopicProposal]] = [
@@ -192,7 +205,7 @@ class TopicSelectionService:
                 for other_slot, other_index, other in others:
                     if other_slot == slot:
                         continue
-                    kind, score = _overlap(proposal, other.title, other.keywords, self._settings)
+                    kind, score = _overlap(proposal, other.title, other.keywords, parameters)
                     if kind:
                         conflicts.append(
                             TopicConflict(
@@ -206,7 +219,7 @@ class TopicSelectionService:
                             )
                         )
                 for entry in registry:
-                    kind, score = _overlap(proposal, entry.title, entry.keywords, self._settings)
+                    kind, score = _overlap(proposal, entry.title, entry.keywords, parameters)
                     if kind:
                         conflicts.append(
                             TopicConflict(
@@ -221,10 +234,10 @@ class TopicSelectionService:
                         )
         return conflicts
 
-    async def _commit(self, publishing_round: PublishingRound) -> None:
+    async def _commit(self, publishing_round: PublishingRound, parameters: Parameters) -> None:
         """글 3편·레지스트리 3건을 없을 때만 만들고 라운드를 IN_PROGRESS 로 바꾼다. 라운드 저장이 커밋 지점이다 (설계 07 문서 D-28)."""
         for slot in AgentSlot:
-            draft = self._round_service.build_draft(publishing_round, slot, self._settings.draft_token_limit)
+            draft = self._round_service.build_draft(publishing_round, slot, parameters.draft_token_limit)
             await self._drafts.add_if_missing(draft)
             await self._topics.add_if_missing(
                 TopicRegistryEntry(
@@ -246,22 +259,22 @@ def _slot_priority(round_seq: int) -> list[AgentSlot]:
     return slots[start:] + slots[:start]
 
 
-def _conflicts_among(chosen: list[tuple[AgentSlot, TopicProposal]], settings: Settings) -> bool:
+def _conflicts_among(chosen: list[tuple[AgentSlot, TopicProposal]], parameters: Parameters) -> bool:
     for (_, first), (_, second) in itertools.combinations(chosen, 2):
-        if _overlap(first, second.title, second.keywords, settings)[0]:
+        if _overlap(first, second.title, second.keywords, parameters)[0]:
             return True
     return False
 
 
 def _overlap(
-    proposal: TopicProposal, title: str, keywords: Iterable[str], settings: Settings
+    proposal: TopicProposal, title: str, keywords: Iterable[str], parameters: Parameters
 ) -> tuple[str | None, float]:
     """충돌 종류와 점수. 키워드 Jaccard 를 먼저 보고, 아니면 제목 토큰 Jaccard 를 본다. 둘 다 아니면 (None, 0)."""
     keyword_score = _jaccard(_normalize(proposal.keywords), _normalize(keywords))
-    if keyword_score >= settings.topic_keyword_overlap:
+    if keyword_score >= parameters.topic_keyword_overlap:
         return "keyword", keyword_score
     title_score = _jaccard(_tokens(proposal.title), _tokens(title))
-    if title_score >= settings.topic_title_overlap:
+    if title_score >= parameters.topic_title_overlap:
         return "title", title_score
     return None, 0.0
 

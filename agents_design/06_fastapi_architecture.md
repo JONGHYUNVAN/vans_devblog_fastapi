@@ -42,6 +42,8 @@ app/
 │  └─ provenance.py            ProvenancePublic 과 하위(단계·호출·버전). 저장 문서에서 built_by 와 호출 오류 문자열을 뺀 것
 ├─ services/
 │  ├─ routing.py               DraftRoutes(글 하나의 호출별 모델 선택), 라우팅 전 라운드의 legacy_snapshot
+│  ├─ pipeline_versions.py     PipelineVersionService: get(캐시)·latest·for_round(라운드가 고정한 버전, 없으면 최신)·create(검증·해시·순번)·bootstrap·export/import·edit_prompt/edit_parameters/edit_routes. build_baseline_version(저장소 프롬프트·라우트 문서·코드 상수 → 기준 본문), export_version·read_directory (09 문서 2·5절)
+│  ├─ pipeline_validation.py   validate_version(body) -> list[Finding]: R-04(라우트)·R-05(템플릿)·R-08(템플릿 내용·prompt_lint)·R-09(조절 값)·R-10(슬롯·페르소나)·R-11(해시). 순수 함수 (09 문서 4절)
 │  ├─ polishing.py             PolishingService: 정규식·줄바꿈·문체 패치와 안전장치
 │  ├─ glossary.py              GlossaryService: extract(POST_REVIEW 의 GLOSSARY 단계), 등록 확인·뜻 선택(_resolve), pending·show·승인·거절·별칭·resolve·drop·merge·merge-sense·check·backfill (08 문서 2.2~2.5절)
 │  ├─ glossary_matching.py     normalize_key, headword_key_of, similarity, similar_headwords. 순수 함수
@@ -62,7 +64,8 @@ app/
 ├─ agents/                     [프롬프트 자산 계층] 도메인 → 프롬프트 입력, LLM 출력 → 도메인
 │  ├─ personas.py              PersonaProfile 상수 3종
 │  ├─ contracts.py             05 문서의 입출력 Pydantic 모델
-│  ├─ builders.py              build_*_input(draft, round, …) 가 입력 모델을 만들고 render_messages(model, prompt_version) 가 [system=템플릿, user=입력 JSON] 을 만든다. 블라인드 처리 포함
+│  ├─ builders.py              build_*_input(draft, round, …) 가 입력 모델을 만들고 render_messages(model, prompts, call_model) 가 [system=버전 문서의 템플릿, user=입력 JSON] 을 만든다. 블라인드 처리 포함
+│  ├─ personas.py              기본 페르소나 상수 3종(bootstrap 입력·테스트 기본값). 모델은 models/persona.py. 실행 중에는 버전 문서의 personas
 │  ├─ parsers.py               문맥 검사(*_check 클로저 → AgentCallService.call 의 check 인자, 위반은 LLMOutputError 로 재시도)와 출력 → ReviewItem 변환(review_items, spot_check_items)
 │  └─ prompts/
 │     ├─ v1/
@@ -75,13 +78,14 @@ app/
 │     ├─ v2/                   작성·수정에 문장 규칙 (D-47)
 │     ├─ v3/                   범위·수준·문단 규칙과 arbitrate_search, fact_check, fact_transform, final_read, assess_level, polish_format, polish_tone (D-59)
 │     ├─ v4/                   가족별 디렉터리 claude/ gemini/ grok/ haiku/ common/. 영어 지시문·한국어 결과물, 페르소나 없음, polish_format 없음 (D-62). haiku/glossary.md 는 용어 추출이고 같은 파일이 v3/glossary.md(평면)에도 있다 (08 문서 D-69)
-│     └─ registry.py           PROMPT_VERSION = "v3"(Settings.prompt_version 이 실제 값), 로더 load_template(가족 → common → 평면), prompt_family, validate_prompts(라운드 생성 때). 템플릿은 string.Template($writer_bias)이고 .dockerignore 의 *.md 에서 예외다
+│     └─ registry.py           TEMPLATE_NAMES, prompt_family, resolve_template(버전 문서의 prompts 에서 가족 → common), load_prompt_files(디렉터리 → PromptSet, bootstrap·테스트용), validate_prompts(snapshot, prompts). 1a 부터 실행 중에는 파일을 읽지 않는다. v1~v4 디렉터리는 기준 버전의 입력이다
 ├─ repositories/
 │  ├─ optimistic_lock.py       replace_with_revision: revision 조건 저장. agent_round·post_draft 가 같이 쓴다
 │  ├─ agent_round.py           agent_rounds 컬렉션, 주제 선정 라운드 부분 unique 인덱스
 │  ├─ post_draft.py            agent_drafts 컬렉션, revision 기반 낙관적 잠금
 │  ├─ agent_call.py            agent_calls 컬렉션, 글별 usage 합계
-│  ├─ model_route.py           agent_routes 컬렉션. 호출별 후보, SLOTS, LEVEL_CRITERIA 문서
+│  ├─ model_route.py           옛 agent_routes 컬렉션. 1a 부터 라운드가 읽지 않고 `agents pipeline bootstrap --routes mongo` 의 입력으로만 남는다(3단계 삭제)
+│  ├─ pipeline_version.py      agent_pipeline_versions(insert·get·latest·list_all·find_by_hash)·agent_pipeline_counters(순번). 갱신·삭제 메서드가 없다 (09 문서 D-71)
 │  ├─ glossary.py              glossary_headwords·glossary_senses·post_glossary·glossary_counters. lookup_keys unique 다중키, next_sense_key
 │  ├─ post_provenance.py       post_provenance 컬렉션
 │  ├─ post_ref.py              Post BE 소유 posts·categories 읽기 전용(비동기). 뜻의 글 목록 링크용
@@ -95,6 +99,8 @@ app/
 │  ├─ sections.py              섹션 앵커 찾기·지우기·자르기(find_anchors, strip_anchors, section_text). 빌더·게이트·변환이 같이 쓴다
 │  ├─ tiptap.py                markdown_to_tiptap: 04 문서 8절 변환표. markdown-it-py(commonmark + table·strikethrough)로 파싱한다. 순수 함수. 변환 불가는 ValueError
 │  ├─ routing.py               RoutingSnapshot, 후보 선택(select_*), 벤더·모델 지원표(candidate_errors), 라운드 생성 전 검사(validate_snapshot)
+│  ├─ pipeline.py              PipelineVersion(버전 문서: slots·personas·routes·level_criteria·prompts·parameters, 순번 id v1·v2…), Parameters(조절 값. 기본값 = 1a 전 Settings·상수), content_hash_of (09 문서 2절)
+│  ├─ persona.py               PersonaProfile(persona_id·display_name·writer_bias·primary_lens·max_level_without_evidence)
 │  ├─ level.py                 수준 기준표와 참고 글
 │  ├─ glossary.py              GlossaryHeadword, GlossarySense, PostGlossary, PostGlossaryItem, PendingTerm, GlossaryRecord, PostRefRecord, DOMAINS(영역 슬러그 → 표시 이름)
 │  ├─ provenance.py            PostProvenance 와 하위 모델, STAGE_LABELS
@@ -113,7 +119,9 @@ app/
       ├─ base.py               Publisher Protocol: list_categories() -> list[PostCategory], publish(PostCreatePayload) -> PublishResult. PostCreatePayload 는 CreatePostDto(camelCase alias)
       └─ post_be.py            PostBEPublisher: GET /api/v1/categories?activeOnly=true, 발행마다 vans_story_be POST /api/v1/auth/login(토큰은 응답 Authorization 헤더) → POST /api/v1/posts(Bearer). 실패 분류는 3절
 cli/
-└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics·seed-routes·routes·label·compare-prompts·fact-check, `agents glossary …`(08 문서 2.5절), `agents provenance build/show`
+└─ __main__.py                 typer `agents` 하위 명령: start-round·status·abort·run·show·resolve·approve·retry·discard·replay·metrics·seed-routes·routes·label·compare-prompts·fact-check, `agents pipeline bootstrap/validate/export/import/edit-prompt/edit-param/edit-routes`(09 문서 5절), `agents glossary …`(08 문서 2.5절), `agents provenance build/show`
+pipeline/
+└─ baseline/                   기준 버전의 내보내기(pipeline.json + prompts/{family}/{name}.md). build_baseline_version 과 해시가 같아야 한다(테스트). git 이 보관하는 기준 (09 문서 5절)
 ```
 
 ### `agents/`의 위치
@@ -267,10 +275,14 @@ vans_story 가 읽는다. 발행된 글의 부속이라 비밀이 없다(08 문�
 
 | 명령 | 동작 |
 |---|---|
-| `agents seed-routes <file>` | 호출별 모델 라우트를 넣는다(예시 `agents_design/routes.example.json`). 깨진 설정은 거절한다. 진행 중인 라운드는 스냅샷을 쓴다 |
+| `agents pipeline bootstrap [--routes mongo\|<file>] [--prompts-dir v4] [--dry-run]` | 첫 버전 `v1`(1a): 옛 `agent_routes`(또는 파일)·저장소 프롬프트·코드 상수를 그대로 옮긴다. `--dry-run` 은 검증 결과와 해시만 찍는다. 이미 버전이 있으면 거절 |
+| `agents pipeline validate <dir\|version> [--all-referenced]` | 09 문서 4절 규칙. 오류가 있으면 종료 코드 1 |
+| `agents pipeline export [version] --out-dir pipeline/<label>/` / `import <dir> [--note] [--label]` | 내보내기(기본은 최신)와 들여오기(새 버전. 최신과 같은 해시면 거절). 되돌리기는 옛 내보내기를 다시 들여오는 것이다 |
+| `agents pipeline edit-prompt <family> <name> --file <md>` / `edit-param key.path=value …` / `edit-routes --file <json>` | 최신을 부모로 한 부분만 바꾼 자식 버전. 재배포 없이 다음 라운드부터 쓰인다 |
+| `agents seed-routes <file>` | 옛 `agent_routes` 에 라우트를 넣는다. 1a 부터 라운드가 읽지 않으므로 `bootstrap --routes mongo` 의 입력으로만 남는다(3단계 삭제). 라우트 변경은 `agents pipeline edit-routes` |
 | `agents routes` | 현재 라우트 문서를 찍는다 |
 | `agents label <draft_id> <level>` | 사용자가 매긴 수준을 남긴다. `metrics` 의 일치도에 쓴다 |
-| `agents compare-prompts <call_id> --version v2 --version v3 --core-mechanism … --out-of-scope … [--runs 3]` | 저장된 `WRITE_DRAFT` 입력을 프롬프트 버전별로 다시 써 밀도를 비교한다 |
+| `agents compare-prompts <call_id> --version v1 --version pipeline/next/ --core-mechanism … --out-of-scope … [--runs 3]` | 저장된 `WRITE_DRAFT` 입력을 프롬프트 집합별로 다시 써 밀도를 비교한다. `--version` 은 파이프라인 버전 id, 내보내기 디렉터리, 저장소 프롬프트 디렉터리 이름(v3·v4) 중 하나다. 들여오지 않고 써 볼 수 있다 |
 | `agents fact-check <file> --provider … --model … [--effort]` | 글 하나를 사실 확인한다. 잘못된 API 를 심은 글로 재현율·오탐을 잰다 |
 | `agents start-round [--theme] [--wait] [--evidence-file]` | Post BE 카테고리를 읽어 라운드 생성 후 종료(진행은 러너). `--wait`면 러너가 더 할 일이 없을 때(라운드 종결, 또는 글이 모두 승인 대기·사람 결정 대기·종결. 승인됐거나 토글이 꺼진 `READY_TO_PUBLISH`는 발행 중이라 기다린다)까지 `SCAN_INTERVAL_S` 마다 상태를 찍는다 |
 | `agents run` | 서버 없이 이 프로세스에서 러너를 돌린다. 디버깅용. 서버와 동시에 쓰지 않는다 |
@@ -298,18 +310,8 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     xai_api_key: SecretStr | None = None
 
-    # 파이프라인 상수 (03 문서 5절)
-    max_iterations: int = 2
-    max_topic_attempts: int = 2
-    max_llm_retries: int = 3
-    max_validation_retries: int = 2
-    max_publish_attempts: int = 3
-    draft_token_limit: int                # 글 소프트 상한. 라운드 상한은 없다
-    topic_keyword_overlap: float = 0.5
-    topic_title_overlap: float = 0.5
-    topic_avoid_lookback_days: int = 180
-    draft_min_chars: int = 4000
-    draft_max_chars: int = 20000
+    # 반복 상한·글 토큰 상한·주제 임계·길이 범위·승인 토글·용어 값·프롬프트 버전은 1a 부터 파이프라인 버전 문서의 parameters·prompts 다
+    # (09 문서 2.4절, models/pipeline.Parameters). 환경 변수로는 바꾸지 않는다.
     review_timeout_s: int = 300
     draft_timeout_s: int = 600           # PROPOSE_TOPIC, WRITE_DRAFT, REVISE_DRAFT
     scan_interval_s: int = 15
@@ -327,21 +329,12 @@ class Settings(BaseSettings):
     publish_timeout_s: int = 30
 
     # 운영
-    publish_requires_approval: bool = True
-    publish_post_level: bool = False      # Post BE 에 level 필드를 넣어 배포한 뒤에 켠다
-    agent_main_categories: str = "nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm"  # 블로그에 화면이 있는 메인 (D-60)
-    prompt_version: str = "v3"
+    publish_post_level: bool = False      # Post BE 에 level 필드를 넣어 배포한 뒤에 켠다 (1c 에서 삭제, D-83)
+    agent_main_categories: str = "nextjs,nestjs,spring,jwt,database-theory,mariadb,mongodb,docker,algorithm"  # 블로그에 화면이 있는 메인 (D-60. 1c 에서 삭제, D-82)
     llm_concurrency_per_provider: int = 2
-
-    # 용어 사전 (08 문서 2.3절)
-    glossary_full_list_max: int = 300     # 이 수까지는 표제어 전체를 추출 입력에 넣는다
-    glossary_min_terms: int = 8
-    glossary_max_terms: int = 12
-    glossary_surface_max_chars: int = 40
-    glossary_terminology_max: int = 150   # 작성자 표기 표준 입력 상한 (2.7절, 아직 프롬프트에 넣지 않는다)
 ```
 
-호출별 모델은 `Settings` 가 아니라 Mongo `agent_routes` 컬렉션이다(07 문서 D-51). temperature·effort 도 후보에 있다. 새 변수는 `.env.example`에 같이 추가한다. 슬롯의 페르소나·작성 모델을 라운드 생성 요청으로 덮어쓸 수 있게 해 A/B 테스트를 지원한다(라운드 문서에 스냅샷 저장).
+호출별 모델·프롬프트·페르소나·조절 값은 `Settings` 가 아니라 Mongo `agent_pipeline_versions` 의 버전 문서다(09 문서 D-71. 1a 전에는 `agent_routes` 와 저장소 프롬프트, D-51). temperature·effort 도 후보에 있다. 새 변수는 `.env.example`에 같이 추가한다. 슬롯의 페르소나·작성 모델을 라운드 생성 요청으로 덮어쓸 수 있게 해 A/B 테스트를 지원한다(라운드 문서에 유효 스냅샷 저장).
 
 ## 5. 비동기 모델
 

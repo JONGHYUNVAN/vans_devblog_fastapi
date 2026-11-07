@@ -1,6 +1,6 @@
 # 05. 에이전트 계약
 
-프롬프트 문구는 이 문서에 두지 않는다(`app/agents/prompts/` 아래 버전 관리, 06 문서). 버전 디렉터리는 배포 후 고치지 않는다. 문구를 바꾸면 새 디렉터리를 만든다. 여기서는 페르소나 정의와 입출력 JSON 계약만 고정한다. 모든 출력은 Pydantic 모델로 파싱되며, 벤더의 structured output 기능을 쓸 수 있으면 스키마를 그대로 넘긴다. `item_id`, `source_review_id`, `reviewer_slot`, `is_new_in_version`은 오케스트레이터가 부모 리뷰 문맥을 사용해 파싱 뒤에 붙인다.
+프롬프트 문구는 이 문서에 두지 않는다. 1a 부터 본문은 Mongo 파이프라인 버전 문서의 `prompts`(가족 → 템플릿 이름 → 본문)이고, 문구를 바꾸면 `agents pipeline edit-prompt` 로 새 버전을 만든다(09 문서). 저장소의 `app/agents/prompts/v1~v4/` 는 기준 버전을 만드는 입력이다. 여기서는 페르소나 정의와 입출력 JSON 계약만 고정한다. 모든 출력은 Pydantic 모델로 파싱되며, 벤더의 structured output 기능을 쓸 수 있으면 스키마를 그대로 넘긴다. `item_id`, `source_review_id`, `reviewer_slot`, `is_new_in_version`은 오케스트레이터가 부모 리뷰 문맥을 사용해 파싱 뒤에 붙인다.
 
 ## 1. 페르소나 프로필
 

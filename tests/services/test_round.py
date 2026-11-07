@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.clients.publisher.base import PostCategory
-from app.core.exceptions import InvalidTransitionError, PublishFailedError
+from app.core.exceptions import InvalidTransitionError, NotFoundError, PublishFailedError
 from app.models.enums import (
     AgentSlot,
     EscalationReason,
@@ -207,10 +207,9 @@ async def test_start_round_snapshots_post_be_categories():
         harness.drafts,
         harness.topics,
         publisher=FakePublisher(CATEGORIES),
-        route_repository=harness.routes,
+        version_service=harness.versions,
         providers=["fake", *FAKE_VENDORS.values()],
         main_categories=["backend"],
-        prompt_version="v3",  # 가짜 벤더는 v4 가족 디렉터리가 없다
     )
 
     publishing_round = await service.start_round(theme_keyword="mongodb", slot_bindings=BINDINGS)
@@ -283,33 +282,53 @@ async def test_create_round_snapshots_routes_and_fills_slot_bindings_from_write_
     assert stored is not None and stored.routing == created.routing
 
 
-async def test_later_route_changes_do_not_touch_a_running_round():
+async def test_later_version_changes_do_not_touch_a_running_round():
+    """라운드는 생성 때 버전을 고정한다(09 문서 D-73). 새 버전(라우트 변경)이 들어와도 진행 중인 라운드의 스냅샷은 그대로다."""
     harness = PipelineHarness()
-    await harness.seed_routes()
     created = await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
+    assert created.pipeline_version_id == "v1"
 
     documents = route_documents()
     next(each for each in documents if each["_id"] == "WRITE_DRAFT:architect")["candidates"][0]["model_id"] = "new"
-    await harness.routes.replace_all(documents)
+    newer = await harness.versions.edit_routes(documents)
+    later = await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
 
     stored = await harness.rounds.get(created.round_id)
     assert stored is not None
     assert stored.routing.candidates("WRITE_DRAFT:architect")[0].model_id == "fake-a-1"
+    assert (newer.version_id, later.pipeline_version_id) == ("v2", "v2")
+    assert later.routing.candidates("WRITE_DRAFT:architect")[0].model_id == "new"
 
 
-async def test_create_round_fails_without_routes_and_leaves_no_document():
-    harness = PipelineHarness()
+async def test_create_round_fails_without_a_pipeline_version_and_leaves_no_document():
+    harness = PipelineHarness(with_version=False)
 
-    with pytest.raises(ValueError, match="SLOTS"):
+    with pytest.raises(ValueError, match="no pipeline version"):
         await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
     assert harness.database.agent_rounds.docs == []
 
 
+async def test_create_round_can_pin_an_older_version_for_a_trial_round():
+    """차기 프롬프트 시험(Q-42): 최신이 아닌 버전을 골라 라운드를 만든다."""
+    harness = PipelineHarness()
+    await harness.versions.edit_prompt("common", "write_draft", "[template:write_draft] 글 한 편을 한국어로 쓴다. JSON")
+
+    pinned = await harness.round_service.create_round(
+        theme_keyword=None, categories=[make_category()], pipeline_version_id="v1"
+    )
+    latest = await harness.round_service.create_round(theme_keyword=None, categories=[make_category()])
+
+    assert (pinned.pipeline_version_id, latest.pipeline_version_id) == ("v1", "v2")
+    with pytest.raises(NotFoundError):
+        await harness.round_service.create_round(
+            theme_keyword=None, categories=[make_category()], pipeline_version_id="v9"
+        )
+
+
 async def test_create_round_fails_when_a_vendor_key_is_missing_for_a_needed_route():
     harness = PipelineHarness()
-    await harness.seed_routes()
     service = RoundService(
-        harness.rounds, harness.drafts, harness.topics, route_repository=harness.routes, providers=["fake-a", "fake-b"]
+        harness.rounds, harness.drafts, harness.topics, version_service=harness.versions, providers=["fake-a", "fake-b"]
     )
 
     with pytest.raises(ValueError, match="has no candidate"):

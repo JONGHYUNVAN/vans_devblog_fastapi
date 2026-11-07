@@ -51,10 +51,13 @@ class DerivedRecordsWriter:
         post_id = draft.publication.external_post_id
         calls = await self._calls.list_by_round(draft.round_id)
         if draft.glossary is not None:
-            template_version = next(
-                (call.prompt_template_version for call in calls if call.call_id == draft.glossary.call_id), None
+            glossary_call = next((call for call in calls if call.call_id == draft.glossary.call_id), None)
+            post_glossary = build_post_glossary(
+                draft,
+                draft.glossary,
+                glossary_call.prompt_template_version if glossary_call else None,
+                glossary_call.pipeline_version if glossary_call else None,
             )
-            post_glossary = build_post_glossary(draft, draft.glossary, template_version)
             if post_glossary is not None:
                 await self._glossary.add_post_glossary_if_missing(post_glossary)
                 await self._glossary.add_post_to_senses([item.sense_key for item in post_glossary.items], post_id)
