@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.enums import AgentSlot, ArbitrationOutcome, IssueSeverity, ResolutionStatus, RevisionCause
+from app.models.pipeline import StructureParameters
 from app.models.post_draft import ItemResolution, PostDraft
 from app.models.sections import find_anchors
 from app.services.evaluation import evaluate
@@ -337,3 +338,21 @@ def test_long_code_block_with_a_real_comment_passes_and_short_blocks_are_ignored
 def test_json_block_is_not_checked_for_comments():
     rows = ",\n".join(f'  "k{index}": {index}' for index in range(15))
     assert not GATE.check_style(body(code="{\n" + rows + "\n}", language="json"))
+
+
+# ---------- 기대 문체 (D-86) ----------
+GATE_POLITE = ValidationGate(min_chars=1, max_chars=100_000, structure=StructureParameters(prose_register="polite"))
+
+
+def test_expected_register_rejects_plain_body_with_examples():
+    errors = GATE_POLITE.check_style(body(extra=f"\n<!-- sec:body-2 -->\n{PLAIN * 2}"))
+    assert any("블로그 글의 문체는 합쇼체" in error and "해라체" in error and "[body-2]" in error for error in errors)
+
+
+def test_expected_register_accepts_polite_body_and_default_gate_has_no_expectation():
+    assert not GATE_POLITE.check_style(body(extra=f"\n<!-- sec:body-2 -->\n{POLITE * 2}"))
+    assert not GATE.check_style(body(extra=f"\n<!-- sec:body-2 -->\n{PLAIN * 2}"))  # register=None: 혼용만 본다
+
+
+def test_expected_register_ignores_too_short_bodies():
+    assert not GATE_POLITE.check_style(body(extra="\n<!-- sec:body-2 -->\n한 문장뿐이다."))

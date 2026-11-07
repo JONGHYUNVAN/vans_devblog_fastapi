@@ -25,6 +25,7 @@ from app.agents.builders import (
     render_messages,
 )
 from app.agents.contracts import (
+    REGISTER_DESCRIPTIONS,
     ArbitrateOutput,
     AssessLevelOutput,
     DraftOutput,
@@ -112,6 +113,8 @@ def structure_rules_of(parameters: Parameters, level: int | None) -> StructureRu
         max_chars=parameters.draft_max_chars,
         min_code_blocks=parameters.min_code_blocks,
         language=structure.language,
+        prose_register=structure.prose_register,
+        prose_register_description=REGISTER_DESCRIPTIONS.get(structure.prose_register or ""),
         forbidden_syntax=list(structure.forbidden_syntax),
     )
 

@@ -95,3 +95,8 @@ def test_style_and_code_comment_parameters_have_the_d85_defaults():
     assert (parameters.style.minority_register_ratio, parameters.style.minority_register_min) == (0.1, 3)
     assert parameters.style.forbid_imperatives is True
     assert (parameters.code_comments.min_lines, parameters.code_comments.lines_per_comment) == (12, 25)
+
+
+def test_structure_register_defaults_to_no_expectation():
+    """D-86: 코드 기본값은 None(테스트 픽스처가 해라체). 운영 설정 개정이 polite 를 든다."""
+    assert Parameters().structure.prose_register is None

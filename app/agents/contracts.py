@@ -30,6 +30,13 @@ TITLE_MAX_CHARS = 100  # Post BE CreatePostDto.title 상한
 SUMMARY_MAX_CHARS = 150  # 발행 때 Post BE description
 
 
+# structure.prose_register 값 → 작성·수정 입력에 넣는 설명. 어미를 지시문에 박지 않고 규칙 데이터로 알린다(D-86)
+REGISTER_DESCRIPTIONS = {
+    "polite": "합쇼체: every sentence ends with ~습니다/~입니다. This is the blog's house style; the validation gate rejects other registers",
+    "plain": "해라체: sentences end with ~다/~한다",
+}
+
+
 class StructureRules(BaseModel):
     """작성·수정 입력의 글 구조 규칙(05 문서 3절). 실행 때 값은 라운드 버전의 조절 값이고 여기 기본값은 계약의 모양이다."""
 
@@ -39,6 +46,9 @@ class StructureRules(BaseModel):
     max_chars: int
     min_code_blocks: int = 1
     language: str = "ko"
+    # 기대 문체 (D-86). 값은 조절 값 structure.prose_register 이고 description 은 모델이 읽을 설명이다. None 이면 문체를 정하지 않는다
+    prose_register: str | None = None
+    prose_register_description: str | None = None
     forbidden_syntax: list[str] = Field(
         default_factory=lambda: [
             "HTML tags (except section anchors)",

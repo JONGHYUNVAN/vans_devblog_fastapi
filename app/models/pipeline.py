@@ -47,6 +47,10 @@ class StructureParameters(BaseModel):
         ]
     )
     language: str = "ko"
+    # 기대 문체 (D-86). polite = 합쇼체(~습니다), plain = 해라체(~다), None = 검사하지 않는다. 운영 설정 개정은 polite 다:
+    # 블로그의 사람 글 36편이 전부 합쇼체고 "~다"는 독자에게 반말로 읽힌다(2026-11-08). 프롬프트에 박지 않고
+    # structure_rules 데이터로 알리며, 게이트가 다수 어미를 잰다. 코드 기본값이 None 인 이유는 테스트 픽스처가 해라체라서다
+    prose_register: str | None = None
 
     def required_sections_for(self, level: int | None) -> list[str]:
         """글 수준별 필수 섹션. 수준이 없는 옛 글은 원래 규칙 그대로다."""

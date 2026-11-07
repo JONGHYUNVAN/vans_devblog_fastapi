@@ -90,7 +90,9 @@ class ValidationGate:
         VALIDATING 게이트(validate)만 부른다. 다듬기가 패치마다 부르는 check_markdown 에는 넣지 않는다: 다듬기 전부터 있던 어미를
         다듬기 실패로 돌리면 안 되고, 문단 하나로는 혼용을 가릴 수 없다.
         """
-        return _check_register(markdown, self._style) + _check_code_comments(markdown, self._code_comments)
+        return _check_register(markdown, self._style, self._structure.prose_register) + _check_code_comments(
+            markdown, self._code_comments
+        )
 
 
 def _check_anchors(anchors: list[str], required_sections: list[str]) -> list[str]:
@@ -218,10 +220,11 @@ def _format_examples(examples: list[tuple[str, str]]) -> str:
     return "; ".join(f"[{section}] '{sentence[:60]}'" for section, sentence in examples[:_EXAMPLES_SHOWN])
 
 
-def _check_register(markdown: str, style: StyleParameters) -> list[str]:
-    """어미 혼용·명령형 검사 (D-85). 소수 어미가 비율·문장 수 임계를 모두 넘을 때만 혼용으로 본다.
+def _check_register(markdown: str, style: StyleParameters, expected: str | None = None) -> list[str]:
+    """어미 혼용·명령형 검사 (D-85)와 기대 문체 검사 (D-86). 소수 어미가 비율·문장 수 임계를 모두 넘을 때만 혼용으로 본다.
 
-    어미를 고치는 것은 수정 호출의 몫이다. 오류 문장에 예시와 섹션을 넣어 모델이 어디를 고칠지 알게 한다.
+    expected 가 있으면 다수 어미가 그 문체여야 한다(블로그 사람 글은 전부 합쇼체). 어미를 고치는 것은 수정 호출의 몫이다.
+    오류 문장에 예시와 섹션을 넣어 모델이 어디를 고칠지 알게 한다.
     """
     classified: dict[str, list[tuple[str, str]]] = {"plain": [], "polite": [], "haeyo": [], "imperative": []}
     for section, sentence in _prose_sentences(markdown):
@@ -242,6 +245,15 @@ def _check_register(markdown: str, style: StyleParameters) -> list[str]:
                     f"문체가 섞였다: {_REGISTER_LABELS[majority]} {len(registers[majority])}문장, "
                     f"{_REGISTER_LABELS[kind]} {len(items)}문장. 한 가지 어미로 통일하라. 예: {_format_examples(items)}"
                 )
+    if expected in _REGISTER_LABELS and total >= style.minority_register_min:
+        majority = max(registers, key=lambda kind: len(registers[kind])) if registers else None
+        if majority is not None and majority != expected:
+            # 블로그 전체가 한 문체다. 글 하나가 다른 문체면 독자에게 반말·존댓말이 섞인 블로그로 보인다
+            errors.append(
+                f"블로그 글의 문체는 {_REGISTER_LABELS[expected]}인데 본문은 {_REGISTER_LABELS[majority]} "
+                f"{len(registers[majority])}문장이다. 모든 서술문을 {_REGISTER_LABELS[expected]}로 바꿔라. "
+                f"예: {_format_examples(registers[majority])}"
+            )
     if style.forbid_imperatives and classified["imperative"]:
         errors.append(
             f"설명글에 명령형·청유형 문장이 {len(classified['imperative'])}개 있다. 서술문으로 바꿔라. "

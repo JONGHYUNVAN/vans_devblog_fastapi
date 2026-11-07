@@ -244,7 +244,7 @@ Stage
 | 다듬기 | `polish.length_slack_chars`, `polish.length_slack_ratio` | `polishing.py` 상수. 정규식 어미 치환(`_PHRASE_FIXES`)과 긴 문단 알림은 없앤다(D-81) |
 | 발행 | `publish.requires_approval`, `publish.note`(글 끝 짧은 표기의 줄 문구 `writer`·`reviewers`·`revisers`·`arbiters`·`polishers` 와 `lens_labels`) | `Settings.publish_requires_approval`, `publishing.py` 의 머리말 템플릿(05 문서 5절). 형식은 D-80 으로 줄였다 |
 | 용어 | `glossary.full_list_max`, `glossary.min_terms`, `glossary.max_terms`, `glossary.surface_max_chars`, `glossary.terminology_max` | `Settings` |
-| 문체 | `style.minority_register_ratio`(0.1), `style.minority_register_min`(3), `style.forbid_imperatives` | 신설(D-85). 어미는 프롬프트로 고정하지 않고 게이트가 서술문 어미 분포를 잰다 |
+| 문체 | `style.minority_register_ratio`(0.1), `style.minority_register_min`(3), `style.forbid_imperatives`, `structure.prose_register`(코드 기본 None, 운영 `polite`) | 신설(D-85·D-86). 어미는 프롬프트로 고정하지 않고 게이트가 서술문 어미 분포와 기대 문체를 잰다. 기대 문체는 `structure_rules` 데이터로 모델에 알린다 |
 | 코드 주석 | `code_comments.min_lines`(12), `code_comments.lines_per_comment`(25) | 신설(D-85). 긴 코드 블록의 설명 주석 수 |
 | 프롬프트 lint(선택) | `prompt_lint`: 템플릿 이름 → 있어야 하는 구절 목록(작성·수정의 어미·길이 예산·표기 규칙 문구). R-08 이 경고로 검사한다(Q-38) | `tests/agents/prompts/test_registry.py` 의 문구 단언 |
 
@@ -705,6 +705,7 @@ tests/factories.py                 make_pipeline_body·make_pipeline_version(스
 | D-83 | 수준 평가가 있는 글은 `CreatePostDto.level` 을 항상 보낸다. `PUBLISH_POST_LEVEL` 토글을 없앤다. Post BE 가 `level` 필드를 받도록 먼저 배포한다(다른 저장소) | 2026-11-07 사용자 결정: 수준은 글 생성에서 매우 중요한 지표라 저장돼야 한다. 토글은 Post BE 배포 순서를 맞추려던 임시 장치였고(D-54), 순서는 이행 표가 정한다 | 토글 유지, 수준을 본문에 적기, 조절 값 `parameters.publish.send_level`(원 세션 제안: 다른 저장소 배포 순서에 묶이지 않는다. 사용자가 설계대로 삭제를 택했다, 2026-11-07) |
 | D-84 | 타임아웃(작성·리뷰·발행)과 동시성(벤더당 동시 요청, 429 냉각, 스캔 주기)은 `core/config.py` 의 frozen dataclass `Timeouts`·`Concurrency` 인스턴스 `TIMEOUTS`·`CONCURRENCY` 다. 환경 변수도, 값마다 흩어진 모듈 상수도 아니다. 테스트는 `dataclasses.replace` 로 바꿔 넣는다 | 2026-11-07 사용자 결정: 타임아웃마다 전역 변수를 두지 말고 불변 객체로 모으거나 코드에 박는다. 지금은 `Settings` 네 개와 `agent_calls._RATE_LIMIT_COOLDOWN_S` 가 흩어져 있다. 환경마다 다를 값이 아니다 | 환경 변수 유지, 버전 문서의 조절 값으로(글의 조건이 아니다) |
 | D-85 | 어미를 프롬프트로 고정하지 않는다. 게이트가 서술문 어미 분포를 재서 소수 어미가 임계(비율·최소 문장 수)를 넘거나 명령형·청유형이 있으면 예시 문장·섹션을 오류에 적어 수정 루프로 보내고, 12줄 이상 코드 블록에 25줄당 1줄 이상의 설명 주석(파일 경로 머리줄 제외)이 없어도 보낸다. 정규식 치환은 하지 않는다. 작성·수정 프롬프트의 "~다" 고정 규칙은 뺐고 코드 주석 요구를 넣었다. 임계는 `parameters.style`·`parameters.code_comments` | 2026-11-08 사용자 지적: "생성한 글에도 주석이 하나도 없음", "어미를 프롬프트로 고정하지 말고 생성된 어미가 이상한지를 검증해야지". 프롬프트 고정은 모델마다 다르게 새고(Claude 가 1차에 ~합니다 로 갔다) 검증이 없으면 새는 것을 모른다. 측정: 글 10편의 코드 블록 42개 중 파일 경로 머리줄 외 주석이 있는 블록이 드물었고 명령형이 섞인 글도 잡히지 않았다 | 프롬프트 고정 유지, 리뷰 렌즈에 문체 지적 허용(톤 보존 규칙과 충돌), 정규식 치환(D-81 로 뺐다), 경고만(수정되지 않는다) |
+| D-86 | 블로그 글의 기대 문체는 합쇼체(~습니다)다. 조절 값 `structure.prose_register`(운영 `polite`, 코드 기본 None)가 작성·수정 입력의 `structure_rules.prose_register`·`prose_register_description` 으로 모델에 전달되고, 게이트는 다수 어미가 기대 문체와 다르면 예시를 들어 수정 루프로 보낸다. 수준 100·200 기준은 사용자가 지정한 참조 글(데이터 모델의 이해)의 호흡(짧은 문장, 작은 제목, 일상 예시, 주석 달린 작은 코드 조각)으로 적고 `level_criteria.reference_posts` 에 그 글을 둔다 | 2026-11-08 사용자: "왜 반말을 하지?", "레벨 100~200 은 이런 느낌이어야 함". 블로그 사람 글 36편 전부 합쇼체, 파이프라인 글 2편만 해라체였다. 어미를 지시문에 박지 않는다는 D-85 원칙은 유지하고 데이터와 검증으로 푼다 | 프롬프트에 합쇼체 지시(D-85 와 충돌), 문체를 정하지 않음(블로그 안에서 반말·존댓말이 섞인다) |
 
 ## 11. 결정 대기 항목
 
