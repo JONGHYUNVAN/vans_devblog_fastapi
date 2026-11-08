@@ -19,7 +19,7 @@ from app.repositories.post_draft import PostDraftRepository
 from app.repositories.topic_registry import TopicRegistryRepository
 from app.services.derived_records import DerivedRecordsWriter
 from app.services.pipeline_versions import PipelineVersionService
-from app.services.publishing import build_peer_review_note
+from app.services.publishing import build_publish_note
 from app.services.round import RoundService
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ class DraftDecisionService:
         note = ""
         if publishing_round is not None:
             parameters = await self._versions.parameters_or_default(publishing_round)
-            note = build_peer_review_note(draft, publishing_round, parameters.publish.note)
+            note = build_publish_note(draft, publishing_round, parameters.publish.note)
         return Publication(
             published_at=datetime.now(UTC),
             final_version=intent.final_version if intent is not None else version.version_number,  # type: ignore[union-attr]

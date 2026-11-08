@@ -1,4 +1,4 @@
-"""READY_TO_PUBLISH 글의 발행: 요약 노트, Tiptap 변환·CreatePostDto 매핑, 발행 의도, Post BE 호출, 결과 반영 (설계 04 문서 8절).
+"""READY_TO_PUBLISH 글의 발행: 글 끝 AI Information 표기, Tiptap 변환·CreatePostDto 매핑, 발행 의도, Post BE 호출, 결과 반영 (설계 04 문서 8절).
 
 DraftPipelineService 의 DraftPublisher 계약을 구현한다. 글·라운드 재확인(8절 3단계: READY_TO_PUBLISH·IN_PROGRESS)과
 승인 대기(1단계)는 글 코루틴이 매 걸음 다시 읽어 검사하므로 여기서는 되풀이하지 않는다.
@@ -6,8 +6,6 @@ DraftPipelineService 의 DraftPublisher 계약을 구현한다. 글·라운드 �
 
 import asyncio
 import logging
-import re
-from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from string import Template
@@ -16,16 +14,9 @@ from app.agents.contracts import StructureRules
 from app.clients.publisher.base import PostCreatePayload, Publisher
 from app.core.config import Settings
 from app.core.exceptions import ConcurrentUpdateError, InvalidTransitionError, PublishFailedError, PublishUncertainError
-from app.models.enums import (
-    EscalationReason,
-    IssueSeverity,
-    ResolutionStatus,
-    ReviewLens,
-    RevisionCause,
-    TopicRegistryStatus,
-)
+from app.models.enums import EscalationReason, ReviewLens, RevisionCause, TopicRegistryStatus
 from app.models.pipeline import PublishNoteParameters
-from app.models.post_draft import ItemResolution, PostDraft, Publication, PublicationIntent
+from app.models.post_draft import PostDraft, Publication, PublicationIntent
 from app.models.publishing_round import PublishingRound
 from app.models.tiptap import markdown_to_tiptap
 from app.repositories.post_draft import PostDraftRepository
@@ -37,71 +28,24 @@ logger = logging.getLogger(__name__)
 
 _BACKOFF_BASE_S = 2.0  # 결과 확정 실패 뒤 다음 호출까지 (03 문서 28a행)
 _LANGUAGE = StructureRules.model_fields["language"].default  # "ko"
-_SEVERITY_ORDER = {severity: index for index, severity in enumerate(IssueSeverity)}
-# 노트에 넣는 LLM 텍스트는 문단 텍스트로만 들어가야 한다. ASCII 구두점을 백슬래시로 이스케이프하면 CommonMark 가 글자로 읽는다
-# ^ 도 넣는다: 정규식 얘기([^a-z])가 각주 패턴([^n])에 걸려 변환이 거부되지 않게
-_MARKDOWN_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+\-.!<>&|~^])")
 
 
 def _fill(template: str, **values: object) -> str:
     return Template(template).safe_substitute(**{key: str(value) for key, value in values.items()})
 
 
-def build_peer_review_note(
+def build_publish_note(
     draft: PostDraft, publishing_round: PublishingRound, note: PublishNoteParameters | None = None
 ) -> str:
-    """피어 리뷰 요약 노트 마크다운 (05 문서 5절 템플릿). LLM 호출 없음. 발행 본문 뒤에 붙여 함께 Tiptap 으로 변환한다.
+    """글 끝 "AI Information" 표기 마크다운 (09 문서 D-80·D-87). LLM 호출 없음. 발행 본문 뒤에 붙여 함께 Tiptap 으로 변환한다.
 
-    문구는 라운드 버전 문서의 조절 값(publish.note)이고 줄의 구조는 여기 코드다. 다듬은 버전은 버전 수에 넣지 않는다.
-    모델은 본문에 영향을 준 것만 적는다.
+    독자에게는 누가 무엇을 했는지만 보인다: 작성·리뷰 줄은 항상, 수정·중재·다듬기 줄은 본문에 영향을 줬을 때만.
+    문구는 라운드 버전 문서의 조절 값(publish.note)이고 어느 줄을 넣을지는 여기 코드다. 이력 전체는 제작 기록이 보인다.
+    줄에 들어가는 값은 라우트 설정의 모델 id 와 렌즈 라벨뿐이라 LLM 텍스트 이스케이프가 필요 없다.
     """
     note = note if note is not None else PublishNoteParameters()
-    version = draft.authored_publishable_version or draft.publishable_version or draft.current_version
-    lens_labels = ", ".join(_lens_label(note, assignment.primary_lens) for assignment in draft.reviewer_assignments)
-    items = [item for review in draft.reviews for item in review.items]
-    severity_counts = Counter(item.severity for item in items)
-    final_resolutions = _final_resolutions(draft)
-    accepted = sum(1 for resolution in final_resolutions.values() if resolution.status == ResolutionStatus.ACCEPTED)
-    rejected = sorted(
-        (item for item in items if _is_rejected(final_resolutions.get(item.item_id))),
-        key=lambda item: _SEVERITY_ORDER[item.severity],
-    )
-    arbitration_by_item = {arbitration.item_id: arbitration for arbitration in draft.arbitrations}
-
-    lines = [
-        "---",
-        "",
-        note.heading,
-        "",
-        _fill(note.intro, writer_model=_writer_model(draft, publishing_round), lens_labels=lens_labels),
-        "",
-        _fill(note.versions_line, final_version=version.version_number),
-        _fill(
-            note.blocking_line,
-            critical=severity_counts[IssueSeverity.CRITICAL],
-            major=severity_counts[IssueSeverity.MAJOR],
-        ),
-        _fill(
-            note.non_blocking_line,
-            minor=severity_counts[IssueSeverity.MINOR],
-            nitpick=severity_counts[IssueSeverity.NITPICK],
-        ),
-        _fill(note.resolutions_line, accepted=accepted, rejected=len(rejected)),
-        _fill(note.models_line, models=_model_line(draft, publishing_round, note)),
-    ]
-    if draft.arbitrations:
-        lines.append(_fill(note.arbitrations_line, count=len(arbitration_by_item)))
-    for item in rejected[: note.max_rejected_shown]:
-        resolution = final_resolutions[item.item_id]
-        quote = [
-            _fill(note.reviewer_quote, lens=_lens_label(note, draft.reviewer_of(item)), comment=_plain(item.comment)),
-            _fill(note.author_quote, reason=_plain(resolution.reason or "")),
-        ]
-        arbitration = arbitration_by_item.get(item.item_id)
-        if arbitration is not None:
-            outcome = note.outcome_text.get(arbitration.outcome.value, arbitration.outcome.value)
-            quote.append(_fill(note.verdict_quote, outcome=outcome, reasoning=_plain(arbitration.reasoning)))
-        lines += ["", "\\\n".join(quote)]  # 줄 끝 백슬래시는 hardBreak (04 문서 8절 변환표)
+    lines = ["---", "", note.heading, ""]
+    lines += [_fill(template, models=models) for template, models in _role_lines(draft, publishing_round, note)]
     return "\n".join(lines) + "\n"
 
 
@@ -151,7 +95,7 @@ class PublishingService:
         self._topics = topic_registry_repository
         self._publisher = publisher
         self._settings = settings
-        self._versions = version_service  # 승인 토글·발행 시도 상한·머리말 문구는 라운드 버전의 조절 값이다
+        self._versions = version_service  # 승인 토글·발행 시도 상한·글 끝 표기 문구는 라운드 버전의 조절 값이다
         self._sleep = sleep
         self._derived = (
             derived_writer  # 발행 뒤 post_glossary·post_provenance 따라 쓰기 (설계 08 문서). 없으면 정리가 쓴다
@@ -161,7 +105,7 @@ class PublishingService:
     async def publish(self, draft: PostDraft, publishing_round: PublishingRound) -> None:
         """READY_TO_PUBLISH 글 하나를 발행한다(04 문서 8절). 결과 불명이면 호출 없이 ESCALATED(PUBLISH_UNCERTAIN), 작성 벤더의 계정이 없으면 의도 저장 전에 ValueError.
 
-        호출과 결과 반영은 shield 된 태스크라 글 코루틴이 cancel 돼도 끝까지 간다. 승인 토글·시도 상한·머리말 문구는 라운드 버전에서 읽는다.
+        호출과 결과 반영은 shield 된 태스크라 글 코루틴이 cancel 돼도 끝까지 간다. 승인 토글·시도 상한·글 끝 표기 문구는 라운드 버전에서 읽는다.
         """
         parameters = await self._versions.parameters_for(publishing_round)
         requires_approval = parameters.publish.requires_approval
@@ -177,7 +121,7 @@ class PublishingService:
         previous = draft.publication_intent
         if previous is not None:
             await self._sleep(_BACKOFF_BASE_S * 2 ** (previous.attempt - 1))  # 결과 확정 실패 뒤 재호출
-        note = build_peer_review_note(draft, publishing_round, parameters.publish.note)
+        note = build_publish_note(draft, publishing_round, parameters.publish.note)
         payload = build_payload(draft, note, include_level=self._settings.publish_post_level)
         intent = draft.begin_publish(requires_approval)
         await self._drafts.save(draft)  # 이 쓰기가 실패(충돌)하면 호출하지 않는다 (8절 6단계)
@@ -283,44 +227,36 @@ class UnconfiguredDraftPublisher:
         return None
 
 
-def _final_resolutions(draft: PostDraft) -> dict[str, ItemResolution]:
-    """항목마다 마지막 버전의 해소. 중재에서 리뷰어가 맞다고 판정돼 다음 버전에서 수용하면 그 수용이 남는다."""
-    final: dict[str, ItemResolution] = {}
-    for version in draft.versions:
-        for resolution in version.resolutions:
-            final[resolution.item_id] = resolution
-    return final
-
-
-def _is_rejected(resolution: ItemResolution | None) -> bool:
-    """작성자가 지적을 받아들이지 않고 유지한 항목. 범위 밖 판단도 유지다."""
-    return resolution is not None and resolution.status in (
-        ResolutionStatus.REJECTED_WITH_REASON,
-        ResolutionStatus.OUT_OF_SCOPE,
-    )
-
-
 def _writer_model(draft: PostDraft, publishing_round: PublishingRound) -> str:
-    """첫 버전을 쓴 모델. 옛 글은 슬롯 바인딩의 모델이다. v4 부터 페르소나가 글을 규정하지 않아 머리말에도 모델을 적는다."""
+    """첫 버전을 쓴 모델. 옛 글은 슬롯 바인딩의 모델이다. v4 부터 페르소나가 글을 규정하지 않아 글 끝 표기에도 모델을 적는다."""
     writer = next((version.model_id for version in draft.versions if version.model_id), None)
     return writer or publishing_round.slot_bindings[draft.author_slot].model_id
 
 
-def _model_line(draft: PostDraft, publishing_round: PublishingRound, note: PublishNoteParameters) -> str:
-    """본문에 영향을 준 모델만 적는다: 작성·리뷰는 항상, 수정은 작성과 다를 때, 중재는 있었을 때, 다듬기는 패치가 적용됐을 때.
+def _role_lines(
+    draft: PostDraft, publishing_round: PublishingRound, note: PublishNoteParameters
+) -> list[tuple[str, str]]:
+    """(줄 문구, 모델 표기) 목록. 본문에 영향을 준 모델만 적는다: 작성·리뷰는 항상, 수정은 작성과 다를 때,
+    중재는 있었을 때, 다듬기는 패치가 적용됐을 때.
 
-    전체 읽기·수준 평가는 본문을 바꾸지 않아 적지 않는다(agent_calls 에 남는다). 옛 글은 슬롯 바인딩에서 찾는다.
+    전체 읽기·수준 평가·용어 추출은 본문을 바꾸지 않아 적지 않는다(제작 기록에 남는다). 옛 글은 슬롯 바인딩에서 찾는다.
     """
     bindings = publishing_round.slot_bindings
-    roles = note.model_roles
     writer = _writer_model(draft, publishing_round)
-    parts = [f"{writer} {roles['writer']}"]
-    reviewers: dict[ReviewLens, str] = {}
+    lines = [(note.writer, writer)]
+    # 리뷰는 렌즈마다 첫 리뷰의 모델이다(반복 리뷰가 같은 렌즈를 다시 봐도 한 번). 같은 모델이 여러 렌즈를 맡으면
+    # "모델(렌즈, 렌즈)" 로 묶는다. 독자에게는 모델별로 무엇을 봤는지가 렌즈 순서보다 읽기 쉽다
+    lenses_by_model: dict[str, list[str]] = {}
+    seen_lenses: set[ReviewLens] = set()
     for review in draft.reviews:
-        reviewers.setdefault(review.lens, review.model_id or bindings[review.reviewer_slot].model_id)
-    if reviewers:
-        parts.append(
-            "·".join(f"{model}({_lens_label(note, lens)})" for lens, model in reviewers.items()) + f" {roles['review']}"
+        if review.lens in seen_lenses:
+            continue
+        seen_lenses.add(review.lens)
+        model = review.model_id or bindings[review.reviewer_slot].model_id
+        lenses_by_model.setdefault(model, []).append(_lens_label(note, review.lens))
+    if lenses_by_model:
+        lines.append(
+            (note.reviewers, ", ".join(f"{model}({', '.join(lenses)})" for model, lenses in lenses_by_model.items()))
         )
     revisers = {
         version.model_id
@@ -329,17 +265,12 @@ def _model_line(draft: PostDraft, publishing_round: PublishingRound, note: Publi
         and version.model_id not in (None, writer)
     }
     if revisers:
-        parts.append("·".join(sorted(revisers)) + f" {roles['revise']}")
+        lines.append((note.revisers, ", ".join(sorted(revisers))))
     arbiters = {
         arbitration.model_id or bindings[arbitration.arbiter_slot].model_id for arbitration in draft.arbitrations
     }
     if arbiters:
-        parts.append("·".join(sorted(arbiters)) + f" {roles['arbitrate']}")
+        lines.append((note.arbiters, ", ".join(sorted(arbiters))))
     if draft.polish and draft.polish.model_ids:
-        parts.append("·".join(sorted(set(draft.polish.model_ids))) + f" {roles['polish']}")
-    return ", ".join(parts)
-
-
-def _plain(text: str) -> str:
-    """줄바꿈을 공백으로 바꾸고 마크다운·HTML 특수문자를 이스케이프해 문단 텍스트로만 들어가게 한다 (05 문서 5절)."""
-    return _MARKDOWN_SPECIALS.sub(r"\\\1", " ".join(text.split()))
+        lines.append((note.polishers, ", ".join(sorted(set(draft.polish.model_ids)))))
+    return lines

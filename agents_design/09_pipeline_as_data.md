@@ -127,7 +127,7 @@
 | `propose` | `TopicSelectionService._propose` | `proposer` 선택, 템플릿, 계약, 검사 | 슬롯별 병렬 호출 → `record_proposals`, 소진이면 `ABORTED(LLM_FAILED)` |
 | `assign_and_commit` | `_assign`·`_commit` | 중복 임계, `max_topic_attempts`, `draft_token_limit` | 04 문서 2절 4~7단계. 전체 잠금이면 확정, 아니면 배정 |
 
-**변환·발행 코드** (이름 없음, 절차가 쓴다): `markdown_to_tiptap`, `build_publish_note`(글 끝 짧은 표기. 지금 `build_peer_review_note` 의 자리이고 문구는 조절 값, D-80), `build_payload`, `PostBEPublisher.publish`, `DerivedRecordsWriter.write`.
+**변환·발행 코드** (이름 없음, 절차가 쓴다): `markdown_to_tiptap`, `build_publish_note`(글 끝 "AI Information" 표기. 문구는 조절 값, D-80·D-87), `build_payload`, `PostBEPublisher.publish`, `DerivedRecordsWriter.write`.
 
 **잠금·재개·정리** (이름 없음, 실행기 바깥): `replace_with_revision`, `PostDraft.revision`·`PublishingRound.revision`, `DraftPipelineService.drive` 루프의 다시 읽기, `PostDraft.post_review_stage`·`TopicAttempt` 포인터, `retry_from_failed`, `PipelineRunner.scan`, `RoundService.reconcile`.
 
@@ -242,19 +242,22 @@ Stage
 | 사실 확인 | `fact_check.severity`: `{REFUTED: CRITICAL, UNVERIFIABLE: MINOR}` (Q-19 가 데이터 변경이 된다) | `parsers.claim_items` 상수 |
 | 전체 읽기 | `final_read.blocking_kinds`: `[BODY_CODE_CONTRADICTION, CORE_MECHANISM_MISSING]` | `FinalReadKind.is_blocking` |
 | 다듬기 | `polish.length_slack_chars`, `polish.length_slack_ratio` | `polishing.py` 상수. 정규식 어미 치환(`_PHRASE_FIXES`)과 긴 문단 알림은 없앤다(D-81) |
-| 발행 | `publish.requires_approval`, `publish.note`(글 끝 짧은 표기의 줄 문구 `writer`·`reviewers`·`revisers`·`arbiters`·`polishers` 와 `lens_labels`) | `Settings.publish_requires_approval`, `publishing.py` 의 머리말 템플릿(05 문서 5절). 형식은 D-80 으로 줄였다 |
+| 발행 | `publish.requires_approval`, `publish.note`(글 끝 표기의 제목 `heading`, 줄 문구 `writer`·`reviewers`·`revisers`·`arbiters`·`polishers` 와 `lens_labels`) | `Settings.publish_requires_approval`, `publishing.py` 의 머리말 템플릿(05 문서 5절). 형식은 D-80·D-87 로 줄였다 |
 | 용어 | `glossary.full_list_max`, `glossary.min_terms`, `glossary.max_terms`, `glossary.surface_max_chars`, `glossary.terminology_max` | `Settings` |
 | 문체 | `style.minority_register_ratio`(0.1), `style.minority_register_min`(3), `style.forbid_imperatives`, `structure.prose_register`(코드 기본 None, 운영 `polite`) | 신설(D-85·D-86). 어미는 프롬프트로 고정하지 않고 게이트가 서술문 어미 분포와 기대 문체를 잰다. 기대 문체는 `structure_rules` 데이터로 모델에 알린다 |
 | 코드 주석 | `code_comments.min_lines`(12), `code_comments.lines_per_comment`(25) | 신설(D-85). 긴 코드 블록의 설명 주석 수 |
 | 프롬프트 lint(선택) | `prompt_lint`: 템플릿 이름 → 있어야 하는 구절 목록(작성·수정의 어미·길이 예산·표기 규칙 문구). R-08 이 경고로 검사한다(Q-38) | `tests/agents/prompts/test_registry.py` 의 문구 단언 |
 
-글 끝 표기(D-80, Q-34)는 본문 뒤에 `---` 와 줄 몇 개로 붙는다. 작성·리뷰 줄은 항상, 수정 줄은 작성 모델과 다른 모델이 고쳤을 때, 중재·다듬기 줄은 있었을 때만이다. 버전 수·차단 건수·기각 인용은 넣지 않는다. 그것은 제작 기록(08 문서 3절)이 보인다.
+글 끝 표기(D-80·D-87, Q-34)는 본문 뒤에 `---`, `## AI Information` 제목, "역할: 모델" 목록으로 붙는다. 작성·리뷰 줄은 항상, 수정 줄은 작성 모델과 다른 모델이 고쳤을 때, 중재·다듬기 줄은 있었을 때만이다. 같은 모델이 렌즈 둘을 맡으면 `모델(렌즈, 렌즈)` 로 한 번 적는다. 버전 수·차단 건수·기각 인용은 넣지 않는다. 그것은 제작 기록(08 문서 3절)이 보인다. 줄 문구에 `$models` 가 없으면 R-09 오류다.
 
 ```markdown
 ---
-작성 AI - claude-opus-5-5
-리뷰 AI - gemini-4-argon(사실·구조), grok-4.7(비판·실무), claude-opus-5-5(논리·가독성)
-중재 AI - gemini-4-argon
+
+## AI Information
+
+- 작성: claude-opus-5-5
+- 리뷰: grok-4.7(논리·가독성, 비판·실무), gemini-4-argon(사실·구조)
+- 중재: gemini-4-argon
 ```
 
 `Settings`(환경 변수)에 남는 것은 비밀과 주소뿐이다: 벤더 키, Mongo, `POST_BE_URL`, `USER_SERVICE_URL`, 발행 계정, `AGENTS_INTERNAL_API_KEY`. `prompt_version` 은 버전 문서로, `agent_main_categories` 는 삭제(Post BE 의 활성 카테고리가 기준, D-82), `publish_post_level` 은 삭제(수준을 항상 보낸다, D-83)다. 시간(작성·리뷰·발행 타임아웃)과 동시성(벤더당 동시 요청 수, 429 뒤 냉각 시간, 스캔 주기)은 환경 변수가 아니라 `core/config.py` 의 불변 객체 두 개에 상수로 모은다(D-84). 값마다 전역 변수나 모듈 상수를 흩어 두지 않는다.
@@ -613,7 +616,7 @@ pipeline/<label>/
 | 단계 | 내용 | 배포·시드 순서 | 되돌리기 | 완료 기준 |
 |---|---|---|---|---|
 | (1a) 데이터 이행(동작 동일) | `models/pipeline.py`(`schema_version: 1`, `draft_stages` 없음), `models/persona.py`(`PersonaProfile` 이동), `repositories/pipeline_version.py`, `services/pipeline_versions.py`(읽기·캐시·최신·create·bootstrap·export·import·edit_*), `services/pipeline_validation.py`(R-04·R-05·R-08~R-11), CLI `agents pipeline bootstrap/validate/export/import/edit-prompt/edit-param/edit-routes`. `render_messages`·템플릿 로더가 버전의 `prompts` 에서 읽는다. `RoundService.create_round` 가 최신 버전으로 유효 스냅샷을 만들고 `pipeline_version_id` 를 적는다. 영수증 `AgentCall.pipeline_version`(옛 `prompt_template_version` 은 옛 영수증용). 서비스가 `Settings` 상수 대신 라운드 버전의 `parameters` 를 읽는다. `Settings.prompt_version`·`registry.PROMPT_VERSION` 삭제. `pipeline/baseline/` 내보내기와 `build_baseline_version()` 해시 동일 테스트, 픽스처 버전·스텁 프롬프트 하네스(D-78). 기준 버전은 현재 코드 상수·v4 프롬프트·`routes.example.json` 을 그대로 재현한다. 발행 머리말·다듬기 정규식·카테고리 거르기·수준 토글·타임아웃은 **지금 그대로** 둔다(값만 `parameters` 로 옮긴다. `publish.note` 도 지금 머리말 문구를 그대로 담는다). `_step` 은 그대로 | ① 로컬에서 `agents pipeline bootstrap --routes mongo` (현재 `agent_routes` 와 저장소 v4 프롬프트로 `v1`. 옛 코드는 새 컬렉션을 모른다. 실제 시드는 사용자 승인 뒤) ② 배포. 새 라운드는 `v1`, 진행 중 라운드는 최신 버전 | 이전 이미지 재배포. `agent_routes` 는 지우지 않았으므로 옛 코드가 그대로 돈다. `edit-prompt` 로 만든 버전은 Mongo 에만 있고 옛 코드는 저장소 v4 를 쓴다 | **완료(2026-11-07)**: 운영 Mongo 에 `v1` 시드(`bootstrap --routes mongo`, 해시 `sha256:152e37cd…`. 운영 `agent_routes` 기준이라 `pipeline/baseline/`(`routes.example.json`)의 해시와 다르다. R-05 경고 1건 외 오류 없음), origin/main 3275d97. CloudType 재배포 확인은 사용자 몫. 기준: 기존 단위 테스트가 그대로 통과한다(856). 기준 버전의 프롬프트 바이트·조절 값이 지금 코드와 같다(해시 테스트). `edit-prompt` 뒤 재배포 없이 다음 라운드의 영수증 `messages` 에 바뀐 문구가 있고 `pipeline_version` 이 새 id 다 |
-| (1b) 이 저장소 안의 동작 변경 | D-80 글 끝 표기(`build_publish_note`), D-81 정규식 다듬기 삭제, D-84 `TIMEOUTS`·`CONCURRENCY` 불변 객체와 `Settings` 의 시간·동시성 변수 삭제 | 1a 가 main 에 올라간 뒤 배포 | 이전 이미지 재배포 | 글 끝 표기가 짧고, 정규식 패치가 없고, `.env` 의 타임아웃 변수가 무시된다 |
+| (1b) 이 저장소 안의 동작 변경 | D-80 글 끝 표기(`build_publish_note`. D-87 의 제목·줄 꼴로 코드 완료 2026-11-08), D-81 정규식 다듬기 삭제, D-84 `TIMEOUTS`·`CONCURRENCY` 불변 객체와 `Settings` 의 시간·동시성 변수 삭제 | 1a 가 main 에 올라간 뒤 배포 | 이전 이미지 재배포 | 글 끝 표기가 짧고, 정규식 패치가 없고, `.env` 의 타임아웃 변수가 무시된다 |
 | (1c) 다른 저장소 의존 | D-82 카테고리 거르기 삭제, D-83 수준 항상 전송(설계대로 삭제. 2026-11-07 사용자 결정) | ⓪ 화면 없는 메인(`jest`·`cypress`·`junit5`·`git`)과 그 서브 21개는 공유 Mongo 에서 `isActive=false` 로 바꿨다(2026-11-07 완료. 활성 메인 9개 = vans_story `POST_THEMES`). 남은 전제는 Post BE(`vans_story_be_post`)에 `CreatePostDto.level` 을 더해 배포하는 것뿐이다 ① 이 저장소 배포 | 이전 이미지 재배포. Post BE 의 `level` 필드는 선택이라 옛 코드도 보내지 않을 뿐이다 | `level` 전송이 400 이 아니고 404 글이 생기지 않는다 |
 | (2) 단계 목록·실패 정책·실행기 | `Stage` 모델(`schema_version: 2`), `services/pipeline_registry.py`, `services/pipeline_executor.py`, 검증 R-01~R-03·R-06·R-07·R-12. `DraftPipelineService._step`·`_write`·`_review`·`_arbitrate`·`_post_review`·`_final_read`·`_assess_level` 을 실행기로 대체. `_call_review`·`_call_fact_review`·`_call_arbitrate` 는 절차로 옮긴다. `PostDraft` 의 `POST_REVIEW` 처리기가 `next` 를 받는다. `TopicSelectionService._step` 이 `round_stages` 를 본다. `build_baseline_version()` 이 단계 목록도 만든다 | ① 배포(2단계 코드는 `schema_version: 1` 버전을 만나면 코드의 기준 단계 목록을 쓴다) ② 로컬에서 `agents pipeline import pipeline/baseline/` 로 단계가 든 `v0N`. 이때부터 새 라운드는 데이터 단계로 돈다 | 이전 이미지 재배포. 1단계 코드는 `draft_stages` 를 읽지 않으므로 `schema_version: 2` 문서도 그대로 쓴다(Pydantic `extra="ignore"`) | 시나리오 ①~㉓ 통과. `draft_pipeline.py` 에 `match draft.status` 가 없다 |
 | (3) 정리 | `agent_routes`·`seed-routes`·`routes`·`app/agents/prompts/`·`registry.PROMPT_VERSION`·기준 생성기 삭제. `pipeline/baseline/` 이 유일한 기준. `.dockerignore` 예외 줄 삭제 | ① `agents pipeline validate --all-referenced` 로 진행 중 라운드가 `schema_version: 1` 을 안 가리키는지 확인 ② 배포 ③ `db.agent_routes.drop()` (Q-37: 지금 개발 중인 것이 v1 이라 보존할 옛것이 없다) | 이전 이미지 재배포. 지운 저장소 프롬프트는 git 에 있다 | `pipeline/baseline/` 을 `import` 하면 최신 버전과 같은 해시로 거절된다(저장소와 운영이 같다) |
@@ -705,6 +708,8 @@ tests/factories.py                 make_pipeline_body·make_pipeline_version(스
 | D-83 | 수준 평가가 있는 글은 `CreatePostDto.level` 을 항상 보낸다. `PUBLISH_POST_LEVEL` 토글을 없앤다. Post BE 가 `level` 필드를 받도록 먼저 배포한다(다른 저장소) | 2026-11-07 사용자 결정: 수준은 글 생성에서 매우 중요한 지표라 저장돼야 한다. 토글은 Post BE 배포 순서를 맞추려던 임시 장치였고(D-54), 순서는 이행 표가 정한다 | 토글 유지, 수준을 본문에 적기, 조절 값 `parameters.publish.send_level`(원 세션 제안: 다른 저장소 배포 순서에 묶이지 않는다. 사용자가 설계대로 삭제를 택했다, 2026-11-07) |
 | D-84 | 타임아웃(작성·리뷰·발행)과 동시성(벤더당 동시 요청, 429 냉각, 스캔 주기)은 `core/config.py` 의 frozen dataclass `Timeouts`·`Concurrency` 인스턴스 `TIMEOUTS`·`CONCURRENCY` 다. 환경 변수도, 값마다 흩어진 모듈 상수도 아니다. 테스트는 `dataclasses.replace` 로 바꿔 넣는다 | 2026-11-07 사용자 결정: 타임아웃마다 전역 변수를 두지 말고 불변 객체로 모으거나 코드에 박는다. 지금은 `Settings` 네 개와 `agent_calls._RATE_LIMIT_COOLDOWN_S` 가 흩어져 있다. 환경마다 다를 값이 아니다 | 환경 변수 유지, 버전 문서의 조절 값으로(글의 조건이 아니다) |
 | D-85 | 어미를 프롬프트로 고정하지 않는다. 게이트가 서술문 어미 분포를 재서 소수 어미가 임계(비율·최소 문장 수)를 넘거나 명령형·청유형이 있으면 예시 문장·섹션을 오류에 적어 수정 루프로 보내고, 12줄 이상 코드 블록에 25줄당 1줄 이상의 설명 주석(파일 경로 머리줄 제외)이 없어도 보낸다. 정규식 치환은 하지 않는다. 작성·수정 프롬프트의 "~다" 고정 규칙은 뺐고 코드 주석 요구를 넣었다. 임계는 `parameters.style`·`parameters.code_comments` | 2026-11-08 사용자 지적: "생성한 글에도 주석이 하나도 없음", "어미를 프롬프트로 고정하지 말고 생성된 어미가 이상한지를 검증해야지". 프롬프트 고정은 모델마다 다르게 새고(Claude 가 1차에 ~합니다 로 갔다) 검증이 없으면 새는 것을 모른다. 측정: 글 10편의 코드 블록 42개 중 파일 경로 머리줄 외 주석이 있는 블록이 드물었고 명령형이 섞인 글도 잡히지 않았다 | 프롬프트 고정 유지, 리뷰 렌즈에 문체 지적 허용(톤 보존 규칙과 충돌), 정규식 치환(D-81 로 뺐다), 경고만(수정되지 않는다) |
+| D-87 | 글 끝 표기의 제목은 `## AI Information` 이고 줄은 "- 역할: 모델" 목록이다(작성·리뷰·수정·중재·다듬기). 같은 모델이 렌즈 둘을 맡으면 `모델(렌즈, 렌즈)` 로 한 번 적는다. D-80 의 줄 선택 규칙은 그대로이고 "작성 AI - 모델" 꼴만 바꿨다. 옛 "이 글은 어떻게 만들어졌나" 머리말의 필드는 버전 문서에 남아 있어도 무시된다(`extra` 무시). 이미 발행된 글의 본문은 자동으로 바뀌지 않는다 | 2026-11-08 사용자: "ai information으로 바꾸고, 누가 뭘 했는지 간단히". 발행된 글 끝에 버전 수·MINOR 건수·수용 0건 같은 숫자가 남아 독자에게 뜻이 없었다. 이력은 제작 기록이 보인다 | "작성 AI - 모델" 줄(D-80 의 처음 꼴, 제목 아래에서 "AI" 가 되풀이된다), 렌즈마다 한 줄 |
+| D-88 | 용어 정의는 사전체 명사구다: 명사로 끝나고("…객체들의 묶음") "~이다"·"~한다" 같은 문장 어미와 끝 마침표가 없다. `models/glossary.dictionary_style_problem` 이 끝 글자 "다" 와 문장 안의 "다. " 를 잰다. 추출 계약 `SenseProposal.definition` 이 어기면 계약 위반이라 `AgentCallService` 가 직전 출력과 사유를 붙여 다시 부르고(코드는 끝 마침표만 뗀다), `approve_sense` 는 사전체가 아닌 정의를 승인하지 않으며, `agents glossary check` 가 규칙 전 정의를 알린다. 추출 프롬프트(v4 haiku·v3 `glossary.md`)의 정의 규칙도 이 꼴로 바꿨다 | 2026-11-08 사용자: "~이다 말고 사전체로 묶음 까지만". 툴팁의 정의가 본문 문장처럼 읽혔다. 사전 표제어 풀이는 명사로 끝나는 것이 관례다. 어미를 코드가 바꾸지 않는 것은 D-85 와 같은 이유다("~한다" 의 명사형을 코드가 정할 수 없다) | 정규식으로 "이다." 를 떼기("한다" 는 못 고친다), 항목 단위로 버리기(용어를 잃는다), 프롬프트만 바꾸기(새는 것을 모른다) |
 | D-86 | 블로그 글의 기대 문체는 합쇼체(~습니다)다. 조절 값 `structure.prose_register`(운영 `polite`, 코드 기본 None)가 작성·수정 입력의 `structure_rules.prose_register`·`prose_register_description` 으로 모델에 전달되고, 게이트는 다수 어미가 기대 문체와 다르면 예시를 들어 수정 루프로 보낸다. 수준 100·200 기준은 사용자가 지정한 참조 글(데이터 모델의 이해)의 호흡(짧은 문장, 작은 제목, 일상 예시, 주석 달린 작은 코드 조각)으로 적고 `level_criteria.reference_posts` 에 그 글을 둔다 | 2026-11-08 사용자: "왜 반말을 하지?", "레벨 100~200 은 이런 느낌이어야 함". 블로그 사람 글 36편 전부 합쇼체, 파이프라인 글 2편만 해라체였다. 어미를 지시문에 박지 않는다는 D-85 원칙은 유지하고 데이터와 검증으로 푼다 | 프롬프트에 합쇼체 지시(D-85 와 충돌), 문체를 정하지 않음(블로그 안에서 반말·존댓말이 섞인다) |
 
 ## 11. 결정 대기 항목

@@ -1,8 +1,8 @@
 {
   "meta": {
     "label": "baseline",
-    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-86(structure.register, 수준 100·200 기준·참조 글)로 재생성",
-    "content_hash": "sha256:c07ffa6de6e4792ae518a98ae93979acd6d5bf335d62f70e4a281cc7a259b8f2"
+    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성",
+    "content_hash": "sha256:0f0b1bcb49784e79eaf1c481f7e0d9e7b2651133f8718d16f34bc5250c05ef8a"
   },
   "schema_version": 1,
   "slots": {
@@ -372,34 +372,17 @@
     "publish": {
       "requires_approval": true,
       "note": {
-        "heading": "## 이 글은 어떻게 만들어졌나",
-        "intro": "이 글은 **$writer_model** 모델이 작성하고 $lens_labels 관점의 교차 리뷰를 거쳐 완성되었습니다.",
-        "versions_line": "- 버전: v1 → v$final_version",
-        "blocking_line": "- 발행을 막은 사항: CRITICAL $critical, MAJOR $major",
-        "non_blocking_line": "- 기록만 남긴 사항: MINOR $minor, NITPICK $nitpick (발행을 막지 않아 수정하지 않음)",
-        "resolutions_line": "- 작성자가 수용한 사항: $accepted건 / 근거를 들어 유지한 사항: $rejected건",
-        "models_line": "- 모델: $models",
-        "arbitrations_line": "- 의견이 갈려 제3자 판정을 받은 사항: $count건",
-        "reviewer_quote": "> **$lens 리뷰의 지적**: $comment",
-        "author_quote": "> **작성자의 입장**: $reason",
-        "verdict_quote": "> **판정**: $outcome — $reasoning",
+        "heading": "## AI Information",
+        "writer": "- 작성: $models",
+        "reviewers": "- 리뷰: $models",
+        "revisers": "- 수정: $models",
+        "arbiters": "- 중재: $models",
+        "polishers": "- 다듬기: $models",
         "lens_labels": {
           "LOGIC_READABILITY": "논리·가독성",
           "FACT_STRUCTURE": "사실·구조",
           "CRITICAL_PRACTICAL": "비판·실무"
-        },
-        "outcome_text": {
-          "UPHOLD_REVIEWER": "리뷰어 의견을 인용",
-          "UPHOLD_AUTHOR": "작성자 입장을 인정"
-        },
-        "model_roles": {
-          "writer": "작성",
-          "review": "리뷰",
-          "revise": "수정",
-          "arbitrate": "중재",
-          "polish": "다듬기"
-        },
-        "max_rejected_shown": 3
+        }
       }
     },
     "glossary": {

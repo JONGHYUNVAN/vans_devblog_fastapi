@@ -22,7 +22,7 @@
             }
           ],
           "term_ko": "무상태",
-          "definition": "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계다.",
+          "definition": "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계",
           "distinguisher": "",
           "posts": [
             {
@@ -50,7 +50,7 @@
             }
           ],
           "term_ko": "토큰",
-          "definition": "서버가 서명해 발급하는 인증용 문자열이다.",
+          "definition": "서버가 서명해 발급하는 인증용 문자열",
           "distinguisher": "언어 모델 토큰이 아니라 인증용 서명 문자열",
           "posts": [
             {
@@ -70,7 +70,7 @@
             }
           ],
           "term_ko": "토큰",
-          "definition": "언어 모델이 글을 자르는 입력 단위다.",
+          "definition": "언어 모델이 글을 자르는 입력 단위",
           "distinguisher": "인증 토큰이 아니라 언어 모델의 입력 단위",
           "posts": [
             {

@@ -32,6 +32,8 @@ from app.models.glossary import (
     PostGlossary,
     PostGlossaryItem,
     ProposalSource,
+    dictionary_style_problem,
+    normalize_definition,
 )
 from app.models.model_binding import CallModel
 from app.models.pipeline import GlossaryParameters, PipelineVersion
@@ -622,10 +624,17 @@ class GlossaryService:
         domains: list[str] | None = None,
         term_ko: str | None = None,
     ) -> GlossarySense:
-        """정의·영역을 고쳐 승인한다. 표제어가 PROPOSED 면 함께 승인한다. 승인된 뜻이 둘 이상이면 모두 구분 문구가 있어야 한다."""
+        """정의·영역을 고쳐 승인한다. 표제어가 PROPOSED 면 함께 승인한다. 승인된 뜻이 둘 이상이면 모두 구분 문구가 있어야 한다.
+
+        승인되는 정의는 사전체 명사구여야 한다(D-88). 이 규칙 전에 제안된 "~다" 정의는 definition 을 고쳐 다시 승인한다.
+        """
         sense = await self._sense(sense_key)
         if definition is not None:
-            sense.definition = definition.strip()
+            sense.definition = normalize_definition(definition)
+        # 독자에게 보이는 것은 승인된 정의뿐이라 여기서 막으면 "~이다" 가 블로그에 나가지 않는다. 다른 검사보다 먼저 본다(부작용 없음)
+        problem = dictionary_style_problem(sense.definition)
+        if problem is not None:
+            raise InvalidRequestError(f"sense {sense_key}: {problem}; approve it again with a rewritten definition")
         if distinguisher is not None:
             sense.distinguisher = distinguisher.strip()
         if term_ko is not None:
@@ -845,7 +854,10 @@ class GlossaryService:
         return target
 
     async def check(self) -> list[str]:
-        """무결성: 고아 키, MERGED 미완, 뜻이 가리키는 표제어 없음, 둘 이상 승인된 뜻에 구분 문구 없음, 글 항목이 가리키는 뜻 없음."""
+        """무결성: 고아 키, MERGED 미완, 뜻이 가리키는 표제어 없음, 둘 이상 승인된 뜻에 구분 문구 없음, 글 항목이 가리키는 뜻 없음.
+
+        사전체가 아닌 정의(D-88)도 알린다. 규칙 전에 승인된 "~다" 정의를 찾아 approve-sense --definition 으로 고치는 목록이다.
+        """
         problems: list[str] = []
         headwords = await self._repo.list_headwords()
         by_key = {each.headword_key: each for each in headwords}
@@ -866,6 +878,8 @@ class GlossaryService:
                 approved_by_headword.setdefault(sense.headword_key, []).append(sense)
             if any(slug not in DOMAINS for slug in sense.domains):
                 problems.append(f"sense {sense.sense_key} has an unknown domain")
+            if sense.status in _KNOWN_STATUSES and dictionary_style_problem(sense.definition) is not None:
+                problems.append(f"sense {sense.sense_key} definition is not dictionary style: {sense.definition}")
         for headword_key, approved in approved_by_headword.items():
             if len(approved) > 1 and any(not each.distinguisher for each in approved):
                 problems.append(f"headword {headword_key} has approved senses without a distinguisher")

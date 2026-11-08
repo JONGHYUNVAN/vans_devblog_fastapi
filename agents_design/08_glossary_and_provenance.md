@@ -98,7 +98,7 @@ class GlossarySense(BaseModel):
     headword_key: str
     domains: list[str] = Field(min_length=1)    # 영역 태그. DOMAINS 의 슬러그. 첫째가 주 영역. 표시 이름은 표에서 찾는다
     term_ko: str | None = None                  # 뜻마다 표기가 다를 때만 ("index": 검색은 색인, DB 는 인덱스). 없으면 표제어 값
-    definition: str                             # 2문장 이하, "~다" 어미
+    definition: str                             # 사전체 명사구(09 문서 D-88). "~다" 어미·끝 마침표 없음
     distinguisher: str = ""                     # 한 줄. "언어 모델 토큰이 아니라 인증용 서명 문자열". 표제어에 승인된 뜻이 둘 이상이면 필수
     status: GlossaryStatus
     post_ids: list[str] = []                    # 이 뜻을 가리키는 발행 글 (Post BE 게시글 id). 발행 때 코드가 채운다
@@ -315,7 +315,7 @@ class GlossaryInput(BaseModel):
 ```python
 class SenseProposal(BaseModel):
     domains: list[str] = Field(min_length=1, max_length=3)   # 입력 allowed_domains 의 슬러그만. 첫째가 주 영역
-    definition: str = Field(max_length=240)     # 2문장 이하, "~다"
+    definition: str = Field(max_length=240)     # 사전체 명사구. "~다" 로 끝나면 계약 위반 → 재시도 (D-88)
     distinguisher: str = Field(max_length=80)   # 한 줄. 표제어에 다른 뜻이 있을 때 채운다
 
 
@@ -353,7 +353,7 @@ class GlossaryOutput(BaseModel):
 |---|---|
 | 선정 기준 | 본문이 쓰지만 정의하지 않고 `prerequisites` 에 없는 용어. 독자(`audience`)가 모를 만한 것. 글당 8~12개 |
 | 제외 | 이 글이 새로 만든 이름(변수·함수·파일·클래스), 고유명사가 아닌 일반어, 이미 본문이 정의한 용어 |
-| 정의 | 일반적으로 통용되는 뜻만. 확신이 없으면 후보에서 뺀다. 2문장 이하, "~다" 어미, 이 글의 맥락이 아니라 일반 정의 |
+| 정의 | 일반적으로 통용되는 뜻만. 확신이 없으면 후보에서 뺀다. 명사로 끝나는 사전체 명사구 하나("…객체들의 묶음", "~이다"·"~한다"·끝 마침표 없음), 이 글의 맥락이 아니라 일반 정의. 계약(`SenseProposal`)이 "~다" 끝을 잡아 재시도 안내로 돌려보내고, 승인(`approve-sense`)도 같은 검사로 막는다(09 문서 D-88) |
 | 표기 | `term_ko` 는 통용 표기(`무상태`), `surface` 는 본문 그대로(`스테이트리스는`). 둘이 다르면 그것이 별칭 제안이 된다 |
 | 목록 우선 | `known_headwords` 에 같은 개념이 있으면 반드시 `same_as` 로 가리킨다. 목록 밖 키를 만들지 않는다 |
 | 새 뜻 | 기존 뜻의 정의가 이 글에서 틀린 말이 될 때만. 영역이 다르다는 것은 이유가 아니다("트랜잭션"은 어디서나 같은 뜻). 같은 뜻을 말만 바꿔 다시 제안하지 않는다 |
@@ -490,7 +490,7 @@ class GlossaryTermList(BaseModel):
 | 툴팁 | `src/components/features/stocks/detail/TermTooltip.tsx`: `{ children, text, width? }`. `onMouseEnter/Move`·`onFocus` 로 커서·요소 위치에 `fixed` 패널. 포털·팝오버 라이브러리 없음. 클릭·탭 토글 없음. 트리거 span 이 `display: contents` 라 스스로 포커스를 받지 못한다 |
 | 접기 | 공용 컴포넌트 없음. `src/components/features/projects/code-graph/DiagnosticsPanel.tsx` 의 `DiagnosticSection`(네이티브 `<details>/<summary>`)이 가장 가깝다 |
 | i18n | `src/lib/i18n.ts` 의 `useTranslation()`(클라이언트 전용, Redux `i18n` 슬라이스). 사전은 `src/messages/{ko,en}/post.json` |
-| 요약 노트 | "## 이 글은 어떻게 만들어졌나"에 특별 처리 없음. 일반 heading·paragraph 로 그린다 |
+| 글 끝 표기 | "## AI Information"(09 문서 D-87)에 특별 처리 없음. 일반 heading·list 로 그린다 |
 
 #### 설계
 
@@ -520,7 +520,7 @@ class GlossaryTermList(BaseModel):
 
 - 글마다 문서 하나. 영수증(`agent_calls`)에서 만들되, 필요한 값을 복사해 **자족적**이다. 영수증이 정리돼도 남는다.
 - LLM 호출 없음. 순수 함수 `build_provenance(draft, round, calls) -> PostProvenance`(`services/provenance.py`)다. 입력이 같으면 결과가 같아 다시 만들 수 있다(`--rebuild`).
-- `publishing.py` 의 머리말("이 글은 **{작성 모델}** 모델이 작성하고 … 교차 리뷰를 거쳐")은 그대로 둔다. 머리말은 본문에 영향을 준 모델만 적고(`_model_line`), 이 문서는 전체 읽기·수준 평가·용어 추출·실패한 시도까지 전부 보인다.
+- `publishing.py` 의 글 끝 표기("## AI Information", 09 문서 D-80·D-87)는 누가 무엇을 했는지만 적는다. 본문에 영향을 준 모델만 적고(`_role_lines`), 이 문서는 버전 수·지적·기각 이유와 전체 읽기·수준 평가·용어 추출·실패한 시도까지 전부 보인다.
 
 ### 3.2 스키마
 
@@ -595,7 +595,7 @@ class PostProvenance(BaseModel):
     title: str
     published_at: datetime
     final_version: int                  # 발행된 본문 버전
-    authored_version: int               # 다듬기 전 발행본 (머리말의 "v1 → vN")
+    authored_version: int               # 다듬기 전 발행본 (제작 기록의 "v1 → vN")
     versions: list[ProvenanceVersion]
     iteration: int
     level: PostLevel | None             # 평가자 라벨. 사람 경로 글은 None
@@ -785,6 +785,6 @@ Post BE 는 바꾸지 않는다. FastAPI 를 먼저 끝내고 vans_story 를 잇
 | Q-26 | ES 용어 색인 시점 | `services/indexing.py` 확장, 재색인 명령 | 전역 페이지에서 Mongo 정규식이 느려질 때 |
 | Q-27 | 영어 UI 에서 정의를 영어로도 보일지 | 뜻마다 `definition_en` 과 번역 호출 | 한국어만. 블록 제목만 i18n |
 | Q-28 | `/glossary` 전역 페이지 범위(검색, 영역 필터, 글 목록) | 프런트 2단계 범위 | 표제어 목록 + 뜻 번호 + 글 링크. 검색은 `q` 하나 |
-| Q-29 | 글 끝 "용어"·"제작 기록" 블록을 기본 접힘으로 둘지, 요약 노트("이 글은 어떻게 만들어졌나") 바로 아래 둘지 태그 아래 둘지 | 독자 동선 | 둘 다 접힘. 태그 아래(요약 노트는 본문 안에 있다) |
+| Q-29 | 글 끝 "용어"·"제작 기록" 블록을 기본 접힘으로 둘지, 글 끝 표기("AI Information") 바로 아래 둘지 태그 아래 둘지 | 독자 동선 | 둘 다 접힘. 태그 아래(요약 노트는 본문 안에 있다) |
 | Q-30 | 영역 표 `DOMAINS` 를 코드 고정으로 둘지 Mongo 설정 문서(`agent_routes` 의 `LEVEL_CRITERIA` 처럼)로 둘지, 초기 목록 | 표시 이름의 i18n, 늘릴 때 배포가 필요한지 | 코드 고정 12개(2.1절). 늘리는 일이 잦으면 문서로 옮긴다 |
 | Q-31 | 병합 제안(`dedupe`)에 LLM 판정을 붙일지 | 템플릿·계약 하나 더. 지금은 코드 유사도 쌍만 찍는다(2.4절) | 사전이 몇백 개가 된 뒤 |

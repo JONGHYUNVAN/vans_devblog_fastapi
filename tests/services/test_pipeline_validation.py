@@ -86,6 +86,7 @@ def test_r09_checks_parameter_ranges():
     body = make_pipeline_body(draft_min_chars=50, draft_max_chars=10, max_iterations=0)
     body.parameters.structure.required_sections = ["body-1"]
     body.parameters.polish.phrase_fixes = [("(unclosed", "x")]
+    body.parameters.publish.note.reviewers = "- 리뷰: $model"  # edit-param 오타. 줄에 모델이 빠진다
 
     messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-09"]
 
@@ -93,6 +94,7 @@ def test_r09_checks_parameter_ranges():
     assert any("max_iterations" in message for message in messages)
     assert any("must include intro" in message for message in messages)
     assert any("does not compile" in message for message in messages)
+    assert "publish.note.reviewers must contain $models" in messages
 
 
 def test_r10_checks_slots_and_distinct_personas_and_lenses():

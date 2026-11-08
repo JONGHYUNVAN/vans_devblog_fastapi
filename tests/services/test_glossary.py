@@ -54,7 +54,7 @@ def _headword(
 def _sense(
     key: str,
     headword_key: str,
-    definition: str = "정의다.",
+    definition: str = "정의",
     domains=("backend",),
     status: GlossaryStatus = GlossaryStatus.APPROVED,
     **fields,
@@ -73,7 +73,7 @@ def _sense(
 
 async def _seed_stateless(harness: PipelineHarness) -> None:
     await harness.glossary_repository.add_headword_if_missing(_headword("stateless", "무상태", "stateless"))
-    await harness.glossary_repository.add_sense(_sense("s90001", "stateless", "서버가 상태를 들지 않는 설계다."))
+    await harness.glossary_repository.add_sense(_sense("s90001", "stateless", "서버가 상태를 들지 않는 설계"))
 
 
 async def _drive_with_glossary(harness: PipelineHarness):
@@ -124,6 +124,27 @@ async def test_call_failure_skips_the_stage_and_the_draft_still_reaches_ready():
     assert draft.glossary.items == []
 
 
+async def test_sentence_definition_goes_back_to_the_model_and_its_noun_phrase_rewrite_is_kept():  # D-88
+    harness = PipelineHarness(
+        _scripts()
+        | {
+            "GLOSSARY": [
+                glossary_output(glossary_candidate(new_sense=new_sense(definition="상태를 저장하지 않는 설계이다."))),
+                glossary_output(glossary_candidate(new_sense=new_sense(definition="상태를 저장하지 않는 설계."))),
+            ]
+        }
+    )
+
+    draft = await _drive_with_glossary(harness)
+
+    assert draft.glossary is not None and draft.glossary.skipped is None
+    assert harness.llm.all_kinds[-2:] == ["GLOSSARY", "GLOSSARY"]
+    # 재시도 안내에 사유가 붙어 모델이 무엇을 고칠지 안다. 코드는 어미를 바꾸지 않고 끝 마침표만 뗀다
+    assert "dictionary-style noun phrase" in harness.llm.calls[-1].messages[-1].content
+    sense = await harness.glossary_repository.get_sense("s00001")
+    assert sense is not None and sense.definition == "상태를 저장하지 않는 설계"
+
+
 async def test_round_without_the_route_skips_without_calling():  # ⑯
     harness = PipelineHarness(_scripts())
     await harness.seed_round()  # 기본 라우트에는 GLOSSARY 가 없다 (이 기능 전 스냅샷과 같다)
@@ -152,7 +173,7 @@ async def test_exact_match_wins_over_the_ai_same_as_and_reuses_the_only_sense():
     harness = PipelineHarness(_scripts(glossary_candidate(term_en="Stateless", same_as="token", sense_key=None)))
     await _seed_stateless(harness)
     await harness.glossary_repository.add_headword_if_missing(_headword("token", "토큰", "token"))
-    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",)))
+    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열", ("auth",)))
 
     draft = await _drive_with_glossary(harness)
 
@@ -177,9 +198,7 @@ async def test_same_as_inside_the_list_proposes_an_alias_for_the_new_spelling():
     await harness.glossary_repository.add_headword_if_missing(
         _headword("optimisticlocking", "낙관적 잠금", "optimistic locking")
     )
-    await harness.glossary_repository.add_sense(
-        _sense("s90003", "optimisticlocking", "충돌을 낙관하는 잠금이다.", ("db",))
-    )
+    await harness.glossary_repository.add_sense(_sense("s90003", "optimisticlocking", "충돌을 낙관하는 잠금", ("db",)))
 
     draft = await _drive_with_glossary(harness)
 
@@ -251,8 +270,8 @@ async def test_two_senses_and_an_unsure_ai_leave_the_term_pending_with_valid_can
     )
     await _seed_stateless(harness)
     await harness.glossary_repository.add_headword_if_missing(_headword("token", "토큰", "token"))
-    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",)))
-    await harness.glossary_repository.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위다.", ("llm",)))
+    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열", ("auth",)))
+    await harness.glossary_repository.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위", ("llm",)))
 
     draft = await _drive_with_glossary(harness)
 
@@ -266,7 +285,7 @@ async def test_two_senses_and_an_unsure_ai_leave_the_term_pending_with_valid_can
 
 
 async def test_a_different_domain_alone_is_not_a_new_sense_but_a_different_definition_is():
-    same_definition = "충돌을 낙관하는 잠금이다."
+    same_definition = "충돌을 낙관하는 잠금"
     harness = PipelineHarness(
         _scripts(
             glossary_candidate(
@@ -280,7 +299,7 @@ async def test_a_different_domain_alone_is_not_a_new_sense_but_a_different_defin
                 term_ko="토큰",
                 term_en="token",
                 surface="토큰은",
-                new_sense=new_sense(("llm",), "언어 모델의 입력 단위다."),
+                new_sense=new_sense(("llm",), "언어 모델의 입력 단위"),
             ),
         )
     )
@@ -289,7 +308,7 @@ async def test_a_different_domain_alone_is_not_a_new_sense_but_a_different_defin
     )
     await harness.glossary_repository.add_sense(_sense("s90003", "optimisticlocking", same_definition, ("db",)))
     await harness.glossary_repository.add_headword_if_missing(_headword("token", "토큰", "token"))
-    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",)))
+    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열", ("auth",)))
 
     draft = await _drive_with_glossary(harness)
 
@@ -309,12 +328,8 @@ async def test_second_approved_sense_needs_distinguishers_on_both():
     harness = PipelineHarness()
     repo = harness.glossary_repository
     await repo.add_headword_if_missing(_headword("token", "토큰", "token"))
-    await repo.add_sense(
-        _sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",), status=GlossaryStatus.PROPOSED)
-    )
-    await repo.add_sense(
-        _sense("s90009", "token", "언어 모델의 입력 단위다.", ("llm",), status=GlossaryStatus.PROPOSED)
-    )
+    await repo.add_sense(_sense("s90002", "token", "인증용 서명 문자열", ("auth",), status=GlossaryStatus.PROPOSED))
+    await repo.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위", ("llm",), status=GlossaryStatus.PROPOSED))
 
     await harness.glossary.approve_sense("s90002", approved_by="사람")
     with pytest.raises(InvalidRequestError, match="needs a distinguisher"):
@@ -331,6 +346,25 @@ async def test_second_approved_sense_needs_distinguishers_on_both():
         await harness.glossary.approve_sense("s90009", approved_by="사람", domains=["nope"])
 
 
+async def test_sentence_definition_is_approved_only_after_it_is_rewritten_as_a_noun_phrase():  # D-88
+    harness = PipelineHarness()
+    repo = harness.glossary_repository
+    await repo.add_headword_if_missing(_headword("aggregate", "애그리거트", "aggregate"))
+    # 규칙 전에 제안된 정의. 독자에게 "~이다." 로 보이지 않게 승인에서 막는다
+    await repo.add_sense(
+        _sense("s90020", "aggregate", "루트로만 접근하는 객체들의 묶음이다.", ("db",), status=GlossaryStatus.PROPOSED)
+    )
+
+    with pytest.raises(InvalidRequestError, match="dictionary-style"):
+        await harness.glossary.approve_sense("s90020", approved_by="사람")
+    assert (await repo.get_sense("s90020")).status == GlossaryStatus.PROPOSED
+    sense = await harness.glossary.approve_sense(
+        "s90020", approved_by="사람", definition="루트로만 접근하는 객체들의 묶음."
+    )
+
+    assert (sense.status, sense.definition) == (GlossaryStatus.APPROVED, "루트로만 접근하는 객체들의 묶음")
+
+
 async def test_approving_a_sense_approves_its_proposed_headword_and_approve_all_reports_skips():
     harness = PipelineHarness(
         _scripts(
@@ -339,12 +373,12 @@ async def test_approving_a_sense_approves_its_proposed_headword_and_approve_all_
                 term_ko="토큰",
                 term_en="token",
                 surface="토큰은",
-                new_sense=new_sense(("auth",), "인증용 서명 문자열이다."),
+                new_sense=new_sense(("auth",), "인증용 서명 문자열"),
             ),
         )
     )
     await harness.glossary_repository.add_headword_if_missing(_headword("token", "토큰", "token"))
-    await harness.glossary_repository.add_sense(_sense("s90002", "token", "언어 모델의 입력 단위다.", ("llm",)))
+    await harness.glossary_repository.add_sense(_sense("s90002", "token", "언어 모델의 입력 단위", ("llm",)))
     draft = await _drive_with_glossary(harness)
 
     result = await harness.glossary.approve_all(draft.draft_id, approved_by="사람")
@@ -378,8 +412,8 @@ async def test_pending_lists_proposals_of_one_draft_and_resolve_drop_edit_the_po
         publisher=FakePostBE(["post-42"]),
     )
     await harness.glossary_repository.add_headword_if_missing(_headword("token", "토큰", "token"))
-    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",)))
-    await harness.glossary_repository.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위다.", ("llm",)))
+    await harness.glossary_repository.add_sense(_sense("s90002", "token", "인증용 서명 문자열", ("auth",)))
+    await harness.glossary_repository.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위", ("llm",)))
     draft = await _drive_with_glossary(harness)
     pending = await harness.glossary.pending(draft_id=draft.draft_id)
     assert [each["headword_key"] for each in pending["headwords"]] == ["stateless"]
@@ -416,10 +450,10 @@ async def test_read_api_shows_only_approved_items_with_the_other_senses_of_the_h
     )
     await harness.glossary_repository.add_headword_if_missing(_headword("token", "토큰", "token"))
     await harness.glossary_repository.add_sense(
-        _sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",), distinguisher="언어 모델 토큰이 아니라")
+        _sense("s90002", "token", "인증용 서명 문자열", ("auth",), distinguisher="언어 모델 토큰이 아니라")
     )
     await harness.glossary_repository.add_sense(
-        _sense("s90009", "token", "언어 모델의 입력 단위다.", ("llm",), distinguisher="인증 토큰이 아니라")
+        _sense("s90009", "token", "언어 모델의 입력 단위", ("llm",), distinguisher="인증 토큰이 아니라")
     )
     draft = await _drive_with_glossary(harness)
     draft.record_approval("사람", requires_approval=True)
@@ -457,10 +491,8 @@ async def test_merge_headwords_moves_keys_and_senses_and_keeps_sense_keys():
     repo = harness.glossary_repository
     await repo.add_headword_if_missing(_headword("optimisticlocking", "낙관적 잠금", "optimistic locking"))
     await repo.add_headword_if_missing(_headword("낙관적락", "낙관적 락", None))
-    await repo.add_sense(
-        _sense("s90003", "optimisticlocking", "충돌을 낙관하는 잠금이다.", ("db",), distinguisher="DB 쪽")
-    )
-    await repo.add_sense(_sense("s90004", "낙관적락", "앱에서 거는 같은 뜻이다.", ("backend",), distinguisher="앱 쪽"))
+    await repo.add_sense(_sense("s90003", "optimisticlocking", "충돌을 낙관하는 잠금", ("db",), distinguisher="DB 쪽"))
+    await repo.add_sense(_sense("s90004", "낙관적락", "앱에서 거는 같은 뜻", ("backend",), distinguisher="앱 쪽"))
     pairs = await harness.glossary.dedupe_candidates()
     assert pairs == []  # 문자만 보면 다른 표기라 코드가 잡지 못한다. 사람이 merge 를 고른다
 
@@ -483,8 +515,8 @@ async def test_merge_senses_repoints_post_items_and_rejects_the_source():
     harness = PipelineHarness()
     repo = harness.glossary_repository
     await repo.add_headword_if_missing(_headword("optimisticlocking", "낙관적 잠금", "optimistic locking"))
-    await repo.add_sense(_sense("s90003", "optimisticlocking", "충돌을 낙관하는 잠금이다.", ("db",), post_ids=["p1"]))
-    await repo.add_sense(_sense("s90004", "optimisticlocking", "같은 뜻이다.", ("backend",), post_ids=["p2"]))
+    await repo.add_sense(_sense("s90003", "optimisticlocking", "충돌을 낙관하는 잠금", ("db",), post_ids=["p1"]))
+    await repo.add_sense(_sense("s90004", "optimisticlocking", "같은 뜻", ("backend",), post_ids=["p2"]))
     for post_id, keys in (("p1", ["s90003"]), ("p2", ["s90004"]), ("p3", ["s90003", "s90004"])):
         await repo.save_post_glossary(
             PostGlossary(
@@ -509,9 +541,10 @@ async def test_check_reports_stale_keys_missing_headwords_and_distinguishers():
     harness = PipelineHarness()
     repo = harness.glossary_repository
     await repo.add_headword_if_missing(_headword("token", "토큰", "token", lookup_keys=["token"]))
-    await repo.add_sense(_sense("s90002", "token", "인증용 서명 문자열이다.", ("auth",)))
-    await repo.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위다.", ("llm",)))
-    await repo.add_sense(_sense("s90010", "ghost", "없는 표제어의 뜻이다.", ("nope",)))
+    await repo.add_sense(_sense("s90002", "token", "인증용 서명 문자열", ("auth",)))
+    await repo.add_sense(_sense("s90009", "token", "언어 모델의 입력 단위", ("llm",)))
+    await repo.add_sense(_sense("s90010", "ghost", "없는 표제어의 뜻", ("nope",)))
+    await repo.add_sense(_sense("s90011", "token", "인증에 쓰는 문자열이다.", ("auth",), distinguisher="인증 쪽"))
     await repo.save_post_glossary(
         PostGlossary(
             post_id="p1",
@@ -524,7 +557,10 @@ async def test_check_reports_stale_keys_missing_headwords_and_distinguishers():
 
     problems = await harness.glossary.check()
 
-    assert [problem.split(" ")[1] for problem in problems] == ["token", "s90010", "s90010", "token", "p1"]
+    assert [problem.split(" ")[1] for problem in problems] == ["token", "s90010", "s90010", "s90011", "token", "p1"]
+    assert (
+        "sense s90011 definition is not dictionary style: 인증에 쓰는 문자열이다." in problems
+    )  # 규칙 전 정의를 찾는 목록
 
 
 # ---------- 보충 ----------

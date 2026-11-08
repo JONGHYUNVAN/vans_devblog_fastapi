@@ -7,12 +7,39 @@
 표제어가 모두 APPROVED 인 것만 보인다. 저장은 상태와 무관하게 하므로 "승인 전 표시 금지"는 읽는 쪽의 책임이다.
 """
 
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import GlossaryStatus
+
+# 정의는 사전체 명사구다(D-88): "…객체들의 묶음" 처럼 명사로 끝나고 "~이다."·"~한다." 같은 문장 어미로 끝나지 않는다.
+# 끝 글자 "다" 로 잰다. 한국어 문장 어미는 거의 다 "다" 로 끝나고, "람다" 처럼 다로 끝나는 명사로 정의를 맺는 일은 드물다.
+# 걸리면 고쳐 쓰게 한다(모델은 재시도 안내로, 사람은 승인 오류로). 어미를 정규식으로 바꾸지 않는다: "한다"→? 는 뜻을 모른다
+_SENTENCE_ENDING = re.compile(r"다[.!?]?$")
+_INNER_SENTENCE_END = re.compile(r"다[.!?]\s")  # "…묶음이다. 루트로…" 처럼 두 문장으로 쓴 정의
+
+
+def normalize_definition(definition: str) -> str:
+    """앞뒤 공백과 끝 마침표를 뗀다. 사전체 명사구는 마침표로 닫지 않는다(D-88). 어미는 건드리지 않는다."""
+    return definition.strip().rstrip(".").rstrip()
+
+
+def dictionary_style_problem(definition: str) -> str | None:
+    """정의가 사전체 명사구가 아니면 그 사유, 맞으면 None. 사유는 모델의 재시도 안내와 CLI 오류에 그대로 쓰인다."""
+    text = normalize_definition(definition)
+    if not text:
+        return "definition is empty"
+    if _SENTENCE_ENDING.search(text) or _INNER_SENTENCE_END.search(text):
+        return (
+            "definition must be one Korean dictionary-style noun phrase that ends with a noun, "
+            "for example '하나의 일관성 경계를 이루고 외부에서 루트를 통해서만 접근하는 객체들의 묶음', "
+            f"not a sentence ending in '~다' such as '~이다' or '~한다' (got '…{text[-24:]}')"
+        )
+    return None
+
 
 # 영역 태그 → 표시 이름. 뜻의 속성이지 키의 일부가 아니다. 표시 이름은 저장하지 않고 여기서 찾는다. 늘리는 것은 코드 변경이다 (08 문서 Q-30)
 DOMAINS: dict[str, str] = {
@@ -98,7 +125,8 @@ class GlossarySense(BaseModel):
     headword_key: str
     domains: list[str] = Field(min_length=1)  # DOMAINS 의 슬러그. 첫째가 주 영역
     term_ko: str | None = None  # 뜻마다 표기가 다를 때만. 없으면 표제어 값
-    definition: str  # 2문장 이하, "~다" 어미
+    # 사전체 명사구(D-88). 추출 계약과 승인이 검사한다. 규칙 전 정의는 "~다" 문장일 수 있다(check 가 알린다)
+    definition: str
     distinguisher: str = ""  # 한 줄. 표제어에 승인된 뜻이 둘 이상이면 필수
     status: GlossaryStatus = GlossaryStatus.PROPOSED
     post_ids: list[str] = Field(default_factory=list)  # 이 뜻을 가리키는 발행 글 (Post BE 게시글 id)

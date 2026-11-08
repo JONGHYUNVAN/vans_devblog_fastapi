@@ -279,15 +279,13 @@ Post BE(`vans_story_be_post`)는 바꾸지 않는다. 이 서비스가 사람이
 `READY_TO_PUBLISH → PUBLISHED`:
 
 1. 승인 토글(`PUBLISH_REQUIRES_APPROVAL`)이 켜져 있으면 사람 승인을 기다린다(내부 API `approve`). 기다리는 동안 글 코루틴은 돌지 않고, 승인이 저장되면 다음 스캔이 띄운다.
-2. 피어 리뷰 요약 노트 생성(템플릿, LLM 호출 없음):
-   - 저자 슬롯의 표시 이름, 리뷰어 둘의 표시 이름과 렌즈
-   - 버전 수, 차단 등급 항목 수, 수용/기각 수
-   - 기각된 항목과 그 이유
-   - fast-track 으로 남은 MINOR·NITPICK 은 "발행을 막지 않아 수정하지 않음"으로 구분한다
-   - 중재가 있었으면 판정
+2. 글 끝 "AI Information" 표기 생성(코드, LLM 호출 없음. 05 문서 5절, 09 문서 D-80·D-87):
+   - 작성 모델, 리뷰 모델과 렌즈
+   - 작성 모델과 다른 모델이 고쳤으면 수정 모델, 중재가 있었으면 중재 모델, 다듬기 패치가 적용됐으면 다듬기 모델
+   - 버전 수·지적 건수·기각 이유·중재 판정은 넣지 않는다. 제작 기록 블록(08 문서)이 보인다
 3. 글과 라운드를 다시 읽는다. 글이 `READY_TO_PUBLISH`가 아니거나 라운드가 `IN_PROGRESS`가 아니면 발행을 호출하지 않는다.
 4. `failed_at`이 없는 `publication_intent`가 남아 있으면 직전 호출이 Post BE에 닿았는지 모른다(호출 중 프로세스 종료). 다시 호출하지 않고 `ESCALATED(PUBLISH_UNCERTAIN)`로 보낸다. 그래서 정상 종료(`runner.stop`)는 발행 호출 중인 코루틴을 끊지 않고 결과 반영까지 기다린다. 끊으면 재배포마다 이 격리가 생긴다.
-5. 최종 버전 본문 뒤에 요약 노트를 붙여 아래 변환표로 Tiptap JSON을 만들고, 아래 매핑표로 `CreatePostDto`를 채운다.
+5. 최종 버전 본문 뒤에 글 끝 표기를 붙여 아래 변환표로 Tiptap JSON을 만들고, 아래 매핑표로 `CreatePostDto`를 채운다.
 6. `status==READY_TO_PUBLISH`인 문서에만 `attempt = publish_attempts + 1`인 발행 의도를 저장한다. 이 쓰기가 실패하면 발행을 호출하지 않는다.
 7. 글을 쓴 슬롯의 벤더 전용 관리자 계정(D-45)으로 `vans_story_be`의 `POST /api/v1/auth/login`에 로그인해 액세스 토큰(기본 900초)을 받고, Bearer 토큰으로 `POST /api/v1/posts`를 호출한다. 토큰은 저장하지 않고 발행마다 받는다. 게시글 작성자는 이 계정이다.
 8. 성공하면 `status==READY_TO_PUBLISH`인 글에만 `Publication`(응답의 게시글 id)과 상태 `PUBLISHED`를 조건 갱신하고, 이어서 레지스트리를 `PUBLISHED`로 쓴다(1절 순서). 검색 색인은 Post BE가 생성 시 스스로 요청한다. 그 뒤 글 단위 파생 문서(`post_glossary`·`post_provenance`, 08 문서)를 따라 쓰고, 여기서 실패하면 로그만 남기고 정리가 마저 쓴다.

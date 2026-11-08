@@ -6,7 +6,7 @@ from app.core.exceptions import LLMTransportError
 from app.models.enums import AgentSlot, PostStatus, RevisionCause
 from app.services.pipeline_views import build_escalation_summary
 from app.services.polishing import _Document, _fix_phrases, _tone_violation
-from app.services.publishing import build_peer_review_note
+from app.services.publishing import build_publish_note
 from app.services.validation import ValidationGate
 from tests.factories import assess_level_output, draft_output, final_read_output, polish_output, review_output
 from tests.fakes import PipelineHarness
@@ -196,16 +196,15 @@ async def test_long_paragraphs_are_reported_not_rewritten():
     assert len(draft.polish.long_paragraphs) == 1
 
 
-async def test_note_does_not_count_the_polished_version_and_summary_shows_the_diff():
+async def test_note_names_the_polisher_and_summary_shows_the_diff():
     harness, draft = await _drive(POLISH_TONE=[polish_output((FIRST, "첫 문장이다. 둘째 문장으로 이어진다."))])
     publishing_round = await harness.round_service.get(draft.round_id)
 
-    note = build_peer_review_note(draft, publishing_round)
+    note = build_publish_note(draft, publishing_round)
     summary = build_escalation_summary(draft)
 
     assert len(draft.versions) == 2
-    assert "- 버전: v1 → v1" in note
-    assert "fake-b-1 다듬기" in note
+    assert note.endswith("- 다듬기: fake-b-1\n")  # 다듬기 패치가 적용됐을 때만 줄이 생긴다
     assert (summary.final_version, summary.diff) == (2, "")
     assert "+첫 문장이다. 둘째 문장으로 이어진다." in summary.polish_diff
 

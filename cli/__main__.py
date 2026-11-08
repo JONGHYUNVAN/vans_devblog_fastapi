@@ -893,7 +893,9 @@ def glossary_approve_headword(
 def glossary_approve_sense(
     sense_key: str,
     approved_by: Annotated[str, typer.Option()] = "cli",
-    definition: Annotated[str | None, typer.Option(help="정의를 고쳐 승인 (2문장 이하, ~다)")] = None,
+    definition: Annotated[
+        str | None, typer.Option(help="정의를 고쳐 승인 (사전체 명사구: '…객체들의 묶음'. ~다 어미 금지)")
+    ] = None,
     distinguisher: Annotated[str | None, typer.Option(help="다른 뜻과 가르는 한 줄")] = None,
     domains: Annotated[str | None, typer.Option(help="영역 슬러그, 쉼표로 (db,backend)")] = None,
     term_ko: Annotated[str | None, typer.Option(help="이 뜻만의 표기")] = None,

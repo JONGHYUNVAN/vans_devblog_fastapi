@@ -72,7 +72,7 @@ async def _seed(database: FakeAsyncDatabase) -> None:
             "s00001",
             "token",
             ["auth"],
-            "서버가 서명해 발급하는 인증용 문자열이다.",
+            "서버가 서명해 발급하는 인증용 문자열",
             "언어 모델 토큰이 아니라 인증용 서명 문자열",
             post_ids=[POST_1],
         ),
@@ -80,7 +80,7 @@ async def _seed(database: FakeAsyncDatabase) -> None:
             "s00002",
             "token",
             ["llm"],
-            "언어 모델이 글을 자르는 입력 단위다.",
+            "언어 모델이 글을 자르는 입력 단위",
             "인증 토큰이 아니라 언어 모델의 입력 단위",
             post_ids=[POST_2],
         ),
@@ -88,12 +88,10 @@ async def _seed(database: FakeAsyncDatabase) -> None:
             "s00003",
             "stateless",
             ["backend", "network"],
-            "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계다.",
+            "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계",
             post_ids=[POST_1],
         ),
-        _sense(
-            "s00004", "nori", ["search"], "한국어 형태소 분석기다.", status=GlossaryStatus.PROPOSED, post_ids=[POST_1]
-        ),
+        _sense("s00004", "nori", ["search"], "한국어 형태소 분석기", status=GlossaryStatus.PROPOSED, post_ids=[POST_1]),
     ):
         await glossary.add_sense(sense)
     await glossary.save_post_glossary(

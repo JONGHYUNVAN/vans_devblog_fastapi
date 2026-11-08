@@ -120,23 +120,23 @@ class PolishParameters(BaseModel):
     length_slack_ratio: float = 0.25
 
 
-class PublishNoteParameters(BaseModel):
-    """발행 본문 끝 머리말의 문구 (05 문서 5절). 치환은 string.Template 이고 줄의 구조는 build_peer_review_note 코드다.
+NOTE_LINE_FIELDS = ("writer", "reviewers", "revisers", "arbiters", "polishers")
 
-    1a 는 지금 머리말 문구 그대로다. 짧은 표기(D-80)는 1b 에서 바꾼다.
+
+class PublishNoteParameters(BaseModel):
+    """발행 본문 끝 "AI Information" 표기의 문구 (09 문서 D-80·D-87). 어느 줄을 넣을지는 build_publish_note 코드다.
+
+    줄마다 "역할: 모델" 한 줄이고 $models 를 string.Template 으로 치환한다. 버전 수·지적 건수·기각 인용은 넣지 않는다.
+    그 이력은 제작 기록 블록(08 문서 D-67)이 보이므로 글 끝에서 되풀이하지 않는다(사용자 결정 2026-11-07·11-08).
+    옛 버전 문서의 긴 머리말 필드(intro·versions_line 등)는 extra 로 무시된다.
     """
 
-    heading: str = "## 이 글은 어떻게 만들어졌나"
-    intro: str = "이 글은 **$writer_model** 모델이 작성하고 $lens_labels 관점의 교차 리뷰를 거쳐 완성되었습니다."
-    versions_line: str = "- 버전: v1 → v$final_version"
-    blocking_line: str = "- 발행을 막은 사항: CRITICAL $critical, MAJOR $major"
-    non_blocking_line: str = "- 기록만 남긴 사항: MINOR $minor, NITPICK $nitpick (발행을 막지 않아 수정하지 않음)"
-    resolutions_line: str = "- 작성자가 수용한 사항: $accepted건 / 근거를 들어 유지한 사항: $rejected건"
-    models_line: str = "- 모델: $models"
-    arbitrations_line: str = "- 의견이 갈려 제3자 판정을 받은 사항: $count건"
-    reviewer_quote: str = "> **$lens 리뷰의 지적**: $comment"
-    author_quote: str = "> **작성자의 입장**: $reason"
-    verdict_quote: str = "> **판정**: $outcome — $reasoning"
+    heading: str = "## AI Information"
+    writer: str = "- 작성: $models"
+    reviewers: str = "- 리뷰: $models"  # 모델(렌즈, 렌즈) 꼴. 같은 모델이 두 렌즈를 맡으면 한 번만 적는다
+    revisers: str = "- 수정: $models"  # 작성 모델과 다른 모델이 고쳤을 때만
+    arbiters: str = "- 중재: $models"  # 중재가 있었을 때만
+    polishers: str = "- 다듬기: $models"  # 다듬기 패치가 적용됐을 때만
     lens_labels: dict[str, str] = Field(
         default_factory=lambda: {
             "LOGIC_READABILITY": "논리·가독성",
@@ -144,24 +144,10 @@ class PublishNoteParameters(BaseModel):
             "CRITICAL_PRACTICAL": "비판·실무",
         }
     )
-    outcome_text: dict[str, str] = Field(
-        default_factory=lambda: {"UPHOLD_REVIEWER": "리뷰어 의견을 인용", "UPHOLD_AUTHOR": "작성자 입장을 인정"}
-    )
-    # 모델 줄의 역할 접미: "{model} 작성", "{model}(렌즈)… 리뷰", "{models} 수정", "{models} 중재", "{models} 다듬기"
-    model_roles: dict[str, str] = Field(
-        default_factory=lambda: {
-            "writer": "작성",
-            "review": "리뷰",
-            "revise": "수정",
-            "arbitrate": "중재",
-            "polish": "다듬기",
-        }
-    )
-    max_rejected_shown: int = 3  # 노트에 노출하는 기각 항목 수. 나머지는 건수만
 
 
 class PublishParameters(BaseModel):
-    """발행 조절 값: 승인 토글과 머리말 문구. 토글은 라운드가 고정한 버전에서 읽으므로 환경 변수로는 바꾸지 않는다(D-73)."""
+    """발행 조절 값: 승인 토글과 글 끝 AI Information 문구. 토글은 라운드가 고정한 버전에서 읽으므로 환경 변수로는 바꾸지 않는다(D-73)."""
 
     requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다 (D-17)
     note: PublishNoteParameters = Field(default_factory=PublishNoteParameters)

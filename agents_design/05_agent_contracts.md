@@ -269,31 +269,20 @@ class TonePreservationRule(BaseModel):
     author_tone_markers: list[str] = []  # v4 부터 항상 비어 있다. 옛 영수증 호환용
 ```
 
-## 5. 피어 리뷰 요약 노트 템플릿
+## 5. 글 끝 AI Information 표기
 
-LLM 호출 없이 템플릿으로 만든다. 발행 본문 하단에 붙는다.
+LLM 호출 없이 코드(`services/publishing.build_publish_note`)가 만든다. 발행 본문 하단에 붙는다. 문구는 버전 문서의 `parameters.publish.note` 이고 어느 줄을 넣을지는 코드다(09 문서 D-80·D-87).
 
 ```markdown
 ---
 
-## 이 글은 어떻게 만들어졌나
+## AI Information
 
-이 글은 **{author_display}**가 작성하고 {lens_labels} 관점의 교차 리뷰를 거쳐 완성되었습니다.
-
-- 버전: v1 → v{final_version}
-- 발행을 막은 사항: CRITICAL {n_critical}, MAJOR {n_major}
-- 기록만 남긴 사항: MINOR {n_minor}, NITPICK {n_nitpick} (fast-track 이면 수정 없이 발행)
-- 작성자가 수용한 사항: {n_accepted}건 / 근거를 들어 유지한 사항: {n_rejected}건
-- 모델: {author_model} 작성, {model}({lens})… 리뷰{, 수정 모델이 다르면 수정}{, 중재가 있었으면 중재}{, 패치가 적용됐으면 다듬기}
-{if arbitrations}
-- 의견이 갈려 제3자 판정을 받은 사항: {n_arbitrations}건
-{endif}
-
-{for r in rejected_items}
-> **{r.lens_label} 리뷰의 지적**: {r.comment}
-> **작성자의 입장**: {r.reason}
-{if r.arbitration}> **판정**: {r.outcome_text} — {r.reasoning}{endif}
-{endfor}
+- 작성: {writer_model}
+- 리뷰: {model}({lens}, {lens}), {model}({lens})
+{수정 모델이 작성 모델과 다르면}- 수정: {models}
+{중재가 있었으면}- 중재: {models}
+{다듬기 패치가 적용됐으면}- 다듬기: {models}
 ```
 
-기각 항목은 최대 3건까지만 노출하고(CRITICAL > MAJOR 순), 나머지는 건수만 적는다. 노트는 본문 뒤에 붙여 함께 Tiptap으로 변환하므로(04 문서 8절) 변환표의 문법만 쓴다. 노트에 넣는 LLM 텍스트(`comment`, `reason`, `reasoning`)는 줄바꿈을 공백으로 바꾸고 마크다운·HTML 특수문자를 이스케이프해 문단 텍스트로만 들어가게 한다. 그래서 노트는 항상 변환된다.
+버전 수·지적 건수·기각 인용·중재 판정은 넣지 않는다. 그 이력은 제작 기록 블록(08 문서 D-67)이 보인다. 전체 읽기·수준 평가·용어 추출은 본문을 바꾸지 않아 적지 않는다. 줄에 들어가는 값은 라우트의 모델 id 와 렌즈 라벨뿐이라 LLM 텍스트 이스케이프가 필요 없다. 노트는 본문 뒤에 붙여 함께 Tiptap 으로 변환하므로(04 문서 8절) 변환표의 문법(가로줄·제목·목록)만 쓴다. 2026-11-08 이전에 발행된 글 끝의 "이 글은 어떻게 만들어졌나" 머리말은 D-16 의 긴 템플릿이었다.

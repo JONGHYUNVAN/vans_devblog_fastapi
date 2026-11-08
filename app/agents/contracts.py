@@ -21,6 +21,7 @@ from app.models.enums import (
     ReviewLens,
     ReviewVerdict,
 )
+from app.models.glossary import dictionary_style_problem, normalize_definition
 from app.models.level import LevelCriteria
 from app.models.post_draft import ItemCheck, ItemResolution, ReviewItem, VerificationChecklist
 from app.models.sections import REQUIRED_SECTIONS, normalize_section_id
@@ -531,8 +532,18 @@ class SenseProposal(BaseModel):
     """새 뜻 제안. 기존 정의가 이 글에서 틀린 말이 될 때만 낸다(08 문서 2.3절)."""
 
     domains: list[str] = Field(min_length=1, max_length=3)  # allowed_domains 의 슬러그만. 첫째가 주 영역
-    definition: str = Field(min_length=1, max_length=240)  # 2문장 이하, "~다"
+    definition: str = Field(min_length=1, max_length=240)  # 사전체 명사구, 끝 마침표 없음 (D-88)
     distinguisher: str = Field(default="", max_length=80)  # 한 줄. 표제어에 다른 뜻이 있을 때 채운다
+
+    @field_validator("definition")
+    @classmethod
+    def _dictionary_style(cls, value: str) -> str:
+        # "~이다." 로 끝난 정의는 계약 위반으로 돌린다. AgentCallService 가 직전 출력과 이 사유를 붙여 다시 불러
+        # 모델이 고쳐 쓴다(D-88). 어미를 코드가 바꾸지 않는 이유는 "~한다" 의 명사형을 코드가 정할 수 없어서다
+        problem = dictionary_style_problem(value)
+        if problem is not None:
+            raise ValueError(problem)
+        return normalize_definition(value)
 
 
 class GlossaryCandidate(BaseModel):

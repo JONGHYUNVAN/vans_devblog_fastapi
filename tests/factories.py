@@ -496,7 +496,7 @@ GLOSSARY_BODY = (
 
 def new_sense(
     domains: Iterable[str] = ("backend",),
-    definition: str = "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계다.",
+    definition: str = "요청 사이에 서버가 클라이언트 상태를 저장하지 않는 설계",
     distinguisher: str = "",
 ) -> dict[str, Any]:
     return {"domains": list(domains), "definition": definition, "distinguisher": distinguisher}

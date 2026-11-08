@@ -37,7 +37,8 @@ def test_parameter_defaults_reproduce_the_pre_1a_settings_and_constants():
     ]
     assert parameters.polish.phrase_fixes[0] == ("하십시오", "한다")
     assert parameters.publish.requires_approval is True
-    assert parameters.publish.note.heading == "## 이 글은 어떻게 만들어졌나"
+    assert parameters.publish.note.heading == "## AI Information"
+    assert parameters.publish.note.writer == "- 작성: $models"
     assert (parameters.glossary.min_terms, parameters.glossary.max_terms, parameters.glossary.full_list_max) == (
         8,
         12,

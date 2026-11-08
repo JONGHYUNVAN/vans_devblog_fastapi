@@ -18,7 +18,7 @@ from app.agents.prompts.registry import (
     templates_for_route,
 )
 from app.models.enums import AgentSlot
-from app.models.pipeline import PipelineVersionBody, content_hash_of
+from app.models.pipeline import NOTE_LINE_FIELDS, PipelineVersionBody, content_hash_of
 from app.models.routing import build_snapshot, validate_snapshot
 
 Level = Literal["error", "warning"]
@@ -197,7 +197,10 @@ def _r09_parameters(body: PipelineVersionBody) -> list[Finding]:
             )
     require(parameters.polish.length_slack_chars >= 0, "polish.length_slack_chars must be 0 or more")
     require(0.0 <= parameters.polish.length_slack_ratio <= 1.0, "polish.length_slack_ratio must be between 0 and 1")
-    require(parameters.publish.note.max_rejected_shown >= 0, "publish.note.max_rejected_shown must be 0 or more")
+    # 글 끝 표기의 줄 문구에서 $models 가 빠지면 그 줄이 누가 했는지 없이 역할만 남는다. edit-param 오타를 시드 전에 잡는다
+    note = parameters.publish.note
+    for field in NOTE_LINE_FIELDS:
+        require("$models" in getattr(note, field), f"publish.note.{field} must contain $models")
     glossary = parameters.glossary
     require(0 < glossary.min_terms <= glossary.max_terms, "glossary.min_terms must be positive and at most max_terms")
     require(glossary.full_list_max >= 0 and glossary.surface_max_chars > 0, "glossary limits must be positive")

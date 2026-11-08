@@ -56,7 +56,7 @@ app/
 │  ├─ draft_decision.py        DraftDecisionService: 사람 결정(승인, 격리 해소, 재개, 폐기). 충돌이면 다시 읽어 재적용, 종결이면 레지스트리·close_if_complete 따라 쓰기
 │  ├─ validation.py            ValidationGate(min_chars, max_chars, min_code_blocks).validate(draft) -> list[str]: 결정론적 검사 (LLM 없음). Tiptap 변환 가능 여부 포함. 전이는 호출자가 한다
 │  ├─ evaluation.py            derive_verdict, evaluate 규칙 (순수 함수)
-│  ├─ publishing.py            PublishingService(DraftPublisher 구현): 결과 불명 판정, 백오프, build_peer_review_note(요약 노트, 순수 함수), build_payload(Tiptap 변환·CreatePostDto 매핑), 의도 저장, Publisher 호출, 결과 반영과 레지스트리 PUBLISHED
+│  ├─ publishing.py            PublishingService(DraftPublisher 구현): 결과 불명 판정, 백오프, build_publish_note(글 끝 AI Information 표기, 순수 함수), build_payload(Tiptap 변환·CreatePostDto 매핑), 의도 저장, Publisher 호출, 결과 반영과 레지스트리 PUBLISHED
 │  ├─ runner.py                PipelineRunner: 코루틴 표(running), 주기 스캔, 기동·종료, 코루틴 경계의 INTERNAL_ERROR 처리
 │  ├─ metrics.py               compute_metrics(drafts, calls) -> PipelineMetrics: 07 문서 4절 지표 (순수 함수)
 │  ├─ pipeline_views.py        PipelineViewService: 읽기 전용(라운드 목록·상세·진행 상태, 글 이력, 격리 요약, 영수증, 지표)과 엔티티 → 응답 변환 함수(build_round_public·build_draft_public·build_escalation_summary·…). 라우터·CLI 는 리포지토리 대신 이것을 부른다
@@ -202,7 +202,7 @@ class DraftPipelineService:
 
 ### `services/publishing.py`
 
-- `PublishingService.publish(draft, round)`가 04 문서 8절을 그대로 따른다. 글·라운드 재확인(3단계)과 승인 대기(1단계)는 글 코루틴이 매 걸음 다시 읽어 검사하므로 되풀이하지 않는다. 순서: `has_uncertain_publication`이면 호출 없이 `ESCALATED(PUBLISH_UNCERTAIN)` → 작성 슬롯 벤더의 계정이 없으면 `ValueError`(D-45) → 직전 의도가 결과 확정 실패면 지수 백오프(`2 × 2^(attempt-1)`초, `sleep` 주입) → `build_peer_review_note`(05 문서 5절 템플릿, 순수 함수) → `build_payload`(발행본 + 노트를 `markdown_to_tiptap`, `CreatePostDto` 매핑) → `begin_publish` 저장 → `Publisher.publish(payload, provider)` → 성공이면 `publish` 저장과 레지스트리 `PUBLISHED`, `PublishFailedError`면 `fail_publish`, `PublishUncertainError`면 `escalate(PUBLISH_UNCERTAIN)`.
+- `PublishingService.publish(draft, round)`가 04 문서 8절을 그대로 따른다. 글·라운드 재확인(3단계)과 승인 대기(1단계)는 글 코루틴이 매 걸음 다시 읽어 검사하므로 되풀이하지 않는다. 순서: `has_uncertain_publication`이면 호출 없이 `ESCALATED(PUBLISH_UNCERTAIN)` → 작성 슬롯 벤더의 계정이 없으면 `ValueError`(D-45) → 직전 의도가 결과 확정 실패면 지수 백오프(`2 × 2^(attempt-1)`초, `sleep` 주입) → `build_publish_note`(05 문서 5절 표기, 순수 함수) → `build_payload`(발행본 + 노트를 `markdown_to_tiptap`, `CreatePostDto` 매핑) → `begin_publish` 저장 → `Publisher.publish(payload, provider)` → 성공이면 `publish` 저장과 레지스트리 `PUBLISHED`, `PublishFailedError`면 `fail_publish`, `PublishUncertainError`면 `escalate(PUBLISH_UNCERTAIN)`.
 - `begin_publish` 저장 뒤의 호출과 결과 반영은 별도 태스크로 띄워 `asyncio.shield`로 기다린다. 글 코루틴이 cancel 돼도(`runner.stop`) 결과를 반영해야 재배포마다 `PUBLISH_UNCERTAIN`이 생기지 않는다. `drain()`이 진행 중인 발행을 기다리고, `DraftPublisher` 계약에도 `drain`이 있다.
 - 성공 반영 저장이 충돌하면(라운드 중단) 글을 다시 읽어 상태와 무관하게 `publication_intent.external_post_id`만 남기고 `ConcurrentUpdateError`를 다시 던진다. 운영자가 그 id로 블로그 글을 회수한다(8절 9단계). 요약 응답(`DraftPublic`)과 `agents status`의 `external_post_id`가 `Publication`이 없으면 이 값을 보여 준다.
 - 노트의 LLM 텍스트(`comment`, `reason`, `reasoning`)는 줄바꿈을 공백으로 바꾸고 ASCII 구두점을 백슬래시로 이스케이프해 문단 텍스트로만 들어간다. 기각 항목은 CRITICAL > MAJOR 순으로 3건까지 인용문으로 넣고, 인용문 안의 줄은 줄 끝 `\`(hardBreak)로 나눈다.
