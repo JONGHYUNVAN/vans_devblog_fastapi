@@ -33,9 +33,11 @@ from app.models.glossary import (
     PostGlossaryItem,
     ProposalSource,
 )
+from app.models.model_binding import CallModel
 from app.models.pipeline import GlossaryParameters, PipelineVersion
 from app.models.post_draft import DraftVersion, PostDraft
 from app.models.publishing_round import PublishingRound
+from app.models.routing import ROUTE_GLOSSARY
 from app.models.sections import find_anchors, mask_code_fences
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.glossary import GlossaryRepository
@@ -113,7 +115,14 @@ class GlossaryService:
             raise InvalidRequestError(f"draft {draft_id} has no version that passed validation")
         # 라운드가 고정한 파이프라인 버전(프롬프트·용어 조절 값)을 쓴다. 지금 활성 버전이 아니다(09 문서, 라운드 단위 고정)
         pipeline_version = await self._versions.for_round(publishing_round)
-        record = await self._run(draft, version, publishing_round, pipeline_version)
+        # 보충 대상은 대개 GLOSSARY 라우트가 생기기 전의 라운드다(2026-11-08 b48cf759). 라운드 스냅샷에 라우트가 없으면
+        # 최신 개정의 라우트로 뽑는다. 프롬프트·조절 값은 그대로 라운드 개정이다(D-73)
+        extractor = DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor
+        if extractor is None:
+            latest = await self._versions.latest()
+            candidates = latest.routes.get(ROUTE_GLOSSARY, []) if latest is not None else []
+            extractor = candidates[0] if candidates else None
+        record = await self._run(draft, version, publishing_round, pipeline_version, extractor=extractor)
         draft.glossary = record
         await self._drafts.save(draft)
         # 발행된 글이면 post_glossary 와 뜻의 글 목록까지 바로 덮어쓴다(따라 쓰기는 이미 지나갔다). 사람의 resolve·drop 은 사라진다
@@ -153,12 +162,16 @@ class GlossaryService:
         version: DraftVersion,
         publishing_round: PublishingRound,
         pipeline_version: PipelineVersion,
+        extractor: CallModel | None = None,
     ) -> GlossaryRecord:
-        """추출 호출 한 번과 그 뒤 등록 확인. 어떤 경우에도 GlossaryRecord 를 돌려주고 예외를 내지 않는다(건너뛴 사유는 skipped)."""
+        """추출 호출 한 번과 그 뒤 등록 확인. 어떤 경우에도 GlossaryRecord 를 돌려주고 예외를 내지 않는다(건너뛴 사유는 skipped).
+
+        extractor 를 주면 라운드 스냅샷 대신 그 모델로 부른다(보충 경로). 없으면 라운드의 GLOSSARY 라우트다.
+        """
         parameters = pipeline_version.parameters.glossary
         record = GlossaryRecord(target_version=version.version_number, extracted_at=self._now())
         # GLOSSARY 는 선택 라우트다(D-64). 배포된 라우트 문서에 아직 없거나 이 기능 전에 만든 라운드면 호출 없이 지나간다
-        model = DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor
+        model = extractor or DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor
         if model is None:
             record.skipped = "no GLOSSARY route"
             return record
