@@ -108,7 +108,7 @@ class FinalReadParameters(BaseModel):
 class TellPattern(BaseModel):
     """다듬기 전에 코드가 찾는 AI 문체 패턴 하나 (D-90). id 는 epoko77-ai/im-not-ai(MIT) 분류를 따르고, T-1 만 이 블로그 글에서 뽑았다.
 
-    min_count: 글 전체(문단 산문, 인라인 코드 제외)에서 이 수 이상 나와야 모델에 알린다. 부정 대구처럼 한 번은 사람도 쓰는 패턴은 2 다.
+    min_count: 글 전체(문단 산문, 인라인 코드 제외)에서 이 수 이상 나와야 모델에 알린다. 기본 패턴은 모두 1 이다.
     """
 
     id: str
@@ -117,23 +117,16 @@ class TellPattern(BaseModel):
     min_count: int = 1
 
 
+# 이 블로그의 사람 글(35편)보다 AI 글에 더 많이 나오는 패턴만 둔다. 사람 글에도 같은 만큼 나오는 패턴을 지우게 하면
+# 다듬기가 블로그 주인의 문체를 지운다. 2026-11-09 측정(1000어절당 사람 대 AI)에서 부정 대구 C-8(2.69 대 3.07)은 비슷했고,
+# A-7·A-8·A-9·D-1 은 사람 글이 더 많아 뺐다. D-8 은 비슷했지만 사용자가 어색하다고 확인한 문장이라 남긴다 (D-90 개정)
 DEFAULT_TELL_PATTERNS = (
     TellPattern(
         id="D-14", label="무거운 비유", pattern=r"봉합|청사진|적신호|경고등|신호탄|(?:구조|설계)(?:의)? ?신호|붙잡"
     ),
-    TellPattern(
-        id="C-8",
-        label="부정 대구(A가 아니라 B)",
-        pattern=r"아니라(?=[\s,])|것[이은] 아닙니다|것[이은] 아니다",
-        min_count=2,
-    ),
     TellPattern(id="D-8", label="분열문(핵심은·결정은 ~)", pattern=r"(?:핵심|관건|요점|결정|필요한 것|중요한 것)은 "),
     TellPattern(id="D-10", label="도치 결산(~하는 이유입니다)", pattern=r"이유(?:입니다|이다|다)\."),
     TellPattern(id="T-1", label="영어식 서술어(따라갑니다)", pattern=r"따라갑니다|따라가 ?(?:봅니다|보겠습니다)"),
-    TellPattern(id="A-7", label="가지고 있다(have 직역)", pattern=r"[을를] (?:가지고 있|갖고 있)"),
-    TellPattern(id="A-8", label="이중 피동", pattern=r"되어지|되어진|지게 됩니다|지게 된다"),
-    TellPattern(id="A-9", label="~에 의해", pattern=r"에 의해"),
-    TellPattern(id="D-1", label="결산 접속어", pattern=r"결론적으로|요약하면|정리하자면"),
 )
 
 

@@ -7,7 +7,7 @@ import pytest
 from app.agents.contracts import ParagraphForPolish
 from app.core.exceptions import LLMTransportError
 from app.models.enums import AgentSlot, PostStatus, RevisionCause
-from app.models.pipeline import DEFAULT_TELL_PATTERNS
+from app.models.pipeline import DEFAULT_TELL_PATTERNS, PolishParameters, TellPattern
 from app.services.pipeline_views import build_escalation_summary
 from app.services.polishing import _Document, _find_tells, _fix_phrases, _tone_violation
 from app.services.publishing import build_publish_note
@@ -113,6 +113,12 @@ def test_contrastive_anira_is_not_counted_as_negation():  # D-90
 
     assert _tone_violation(before, "순환 참조는 생성 순서보다 경계의 문제다") is None
     assert _tone_violation("이것은 버그가 아니다", "이것은 버그다") is not None  # 극성을 바꾸는 부정은 그대로 막는다
+    assert _tone_violation("이것은 버그가 아닙니다.", "이것은 버그입니다.") is not None  # 한 음절 "아닙"도 센다
+    assert (
+        _tone_violation("취향이 아니라 경로를 닫는 수단입니다.", "취향 문제가 아닌, 경로를 닫는 수단입니다.")
+        is not None
+    )
+    assert _tone_violation("A가 아니고 B입니다.", "A가 아닌 B입니다.") is None  # 활용만 바뀐 부정은 같은 수다
 
 
 def test_find_tells_reports_matches_outside_inline_code():
@@ -209,7 +215,14 @@ async def test_polished_body_that_fails_the_gate_at_the_end_is_discarded(monkeyp
 async def test_tells_reach_the_polisher_from_min_count_and_are_counted_before_and_after():  # D-90
     body = BODY.replace("첫 문장이다. 둘째 문장이다.", "이 봉합은 임시다. 순서가 아니라 경계가 문제다.")
     patched = "이 우회는 임시다. 순서가 아니라 경계가 문제다."
-    harness, draft = await _drive(WRITE_DRAFT=[draft_output(body)], POLISH_TONE=[polish_output((FIRST, patched))])
+    # 기본 패턴은 모두 min_count 1 이라 운영에서 넣을 수 있는 min_count 2 패턴을 하나 더한다
+    contrast = TellPattern(id="C-8", label="부정 대구", pattern=r"아니라(?=[\s,])", min_count=2)
+    harness = PipelineHarness(
+        _scripts(WRITE_DRAFT=[draft_output(body)], POLISH_TONE=[polish_output((FIRST, patched))]),
+        polish=PolishParameters(tell_patterns=[*DEFAULT_TELL_PATTERNS, contrast]),
+    )
+    await harness.seed_round()
+    draft = await harness.drive(A)
 
     call = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_TONE")
     sent = call.messages[1].content

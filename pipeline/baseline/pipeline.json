@@ -1,8 +1,8 @@
 {
   "meta": {
     "label": "baseline",
-    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성, 2026-11-09 D-90(다듬기 문체 패턴 탐지·polish_tone 규칙)으로 재생성",
-    "content_hash": "sha256:ed9ea0d8d345c5ff3b30ca4c8e31e24d1a03b803f761d4909445b2df6a217cc0"
+    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성, 2026-11-09 D-90(다듬기 문체 패턴 탐지·polish_tone 규칙)과 그 개정(예시 교체·부정어 아닌/아닙, 사람 글 기준 패턴 정리)으로 재생성",
+    "content_hash": "sha256:bd2f098c33a9727b67dc91d7b33173aab05b845e3642a182b50b6cea3ac7eb75"
   },
   "schema_version": 1,
   "slots": {
@@ -376,12 +376,6 @@
           "min_count": 1
         },
         {
-          "id": "C-8",
-          "label": "부정 대구(A가 아니라 B)",
-          "pattern": "아니라(?=[\\s,])|것[이은] 아닙니다|것[이은] 아니다",
-          "min_count": 2
-        },
-        {
           "id": "D-8",
           "label": "분열문(핵심은·결정은 ~)",
           "pattern": "(?:핵심|관건|요점|결정|필요한 것|중요한 것)은 ",
@@ -397,30 +391,6 @@
           "id": "T-1",
           "label": "영어식 서술어(따라갑니다)",
           "pattern": "따라갑니다|따라가 ?(?:봅니다|보겠습니다)",
-          "min_count": 1
-        },
-        {
-          "id": "A-7",
-          "label": "가지고 있다(have 직역)",
-          "pattern": "[을를] (?:가지고 있|갖고 있)",
-          "min_count": 1
-        },
-        {
-          "id": "A-8",
-          "label": "이중 피동",
-          "pattern": "되어지|되어진|지게 됩니다|지게 된다",
-          "min_count": 1
-        },
-        {
-          "id": "A-9",
-          "label": "~에 의해",
-          "pattern": "에 의해",
-          "min_count": 1
-        },
-        {
-          "id": "D-1",
-          "label": "결산 접속어",
-          "pattern": "결론적으로|요약하면|정리하자면",
           "min_count": 1
         }
       ]
