@@ -90,6 +90,7 @@ async def test_web_search_returns_text_and_citations_without_inline_links():
 
     body = json.loads(requests[0].content)
     assert body["tools"] == [{"type": "web_search"}]
+    assert body["max_turns"] == 3
     assert body["include"] == ["no_inline_citations"]
     assert "text" not in body
     assert [citation.url for citation in response.citations] == ["https://docs.x.ai/a", "https://docs.x.ai/b"]

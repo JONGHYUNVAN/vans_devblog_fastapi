@@ -8,6 +8,8 @@ from app.clients.llm.base import LLMCitation, LLMMessage, LLMParams, LLMResponse
 from app.clients.llm.http import post_json
 
 XAI_BASE_URL = "https://api.x.ai/v1"
+# 검색 루프의 prompt_tokens 는 단계마다 누적 대화 전체를 다시 세어 글 예산을 넘기므로 도구 호출 턴 수를 막는다
+_MAX_SEARCH_TURNS = 3
 
 
 class XAIClient:
@@ -45,6 +47,7 @@ class XAIClient:
             body["text"] = {"format": {"type": "json_schema", "name": "output", "schema": schema}}
         if params.web_search:
             body["tools"] = [{"type": "web_search"}]
+            body["max_turns"] = _MAX_SEARCH_TURNS
             body["include"] = [
                 "no_inline_citations"
             ]  # 본문에 [[1]](url) 이 끼면 다음 단계가 읽기 나쁘다. 출처는 필드로 받는다

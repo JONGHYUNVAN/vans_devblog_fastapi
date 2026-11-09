@@ -10,7 +10,14 @@ from app.clients.llm.base import LLMCitation, LLMMessage, LLMParams, LLMResponse
 from app.core.exceptions import LLMTransportError
 
 # 기본값(코드 실행 경유, 동적 필터링)은 응답 text 블록에 citations 가 오지 않아(e2e 재현) 사실 확인의 출처가 모두 사라진다. 직접 호출로 받는다
-_WEB_SEARCH_TOOL = {"type": "web_search_20260318", "name": "web_search", "allowed_callers": ["direct"]}
+# 직접 호출은 검색 결과 전체가 입력 토큰으로 쌓여 글 예산을 넘기므로 검색 횟수를 막는다. pause_turn 이어 받기까지 합쳐 센다
+_MAX_SEARCHES = 5
+_WEB_SEARCH_TOOL = {
+    "type": "web_search_20260318",
+    "name": "web_search",
+    "allowed_callers": ["direct"],
+    "max_uses": _MAX_SEARCHES,
+}
 _MAX_CONTINUATIONS = 5  # 긴 검색이 pause_turn 으로 멈췄을 때 이어 가는 횟수
 
 
