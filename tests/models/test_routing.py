@@ -44,12 +44,22 @@ def _replacing(route_id: str, *candidates: dict) -> list[dict]:
 
 
 def test_reviewers_avoid_the_writing_vendor_and_prefer_distinct_vendors():
-    chosen = select_reviewers(_snapshot(), "fake-a", ReviewLens)
+    chosen = select_reviewers(_snapshot(), "fake-a", [ReviewLens.LOGIC_READABILITY, ReviewLens.CRITICAL_PRACTICAL])
 
     assert {lens: model.provider for lens, model in chosen.items()} == {
         ReviewLens.LOGIC_READABILITY: "fake-b",
+        ReviewLens.CRITICAL_PRACTICAL: "fake-c",
+    }
+
+
+def test_search_lens_takes_the_first_candidate_even_from_the_writing_vendor():
+    # 사실 확인은 웹 검색 호출이라 라우트 첫 후보(운영은 Gemini)로 고정한다. 작성 벤더의 글도 같은 검색 모델이 본다 (D-92)
+    chosen = select_reviewers(_snapshot(), "fake-c", ReviewLens)  # 픽스처의 검색 렌즈 첫 후보가 fake-c 다
+
+    assert {lens: model.provider for lens, model in chosen.items()} == {
+        ReviewLens.LOGIC_READABILITY: "fake-a",
         ReviewLens.FACT_STRUCTURE: "fake-c",
-        ReviewLens.CRITICAL_PRACTICAL: "fake-b",  # 벤더 셋이면 작성 벤더를 뺀 둘이 렌즈 셋을 맡아 겹친다
+        ReviewLens.CRITICAL_PRACTICAL: "fake-b",
     }
 
 
@@ -98,10 +108,14 @@ def test_missing_slots_document_fails_the_snapshot():
 
 
 def test_validation_fails_when_a_lens_has_no_vendor_outside_the_writer():
-    documents = _replacing("REVIEW:FACT_STRUCTURE", fake_model("fake-a"))
+    documents = _replacing("REVIEW:LOGIC_READABILITY", fake_model("fake-a"))
 
-    with pytest.raises(ValueError, match="REVIEW:FACT_STRUCTURE"):
+    with pytest.raises(ValueError, match="REVIEW:LOGIC_READABILITY"):
         validate_snapshot(_snapshot(documents=documents))
+
+
+def test_search_lens_with_a_single_vendor_passes_validation():
+    validate_snapshot(_snapshot(documents=_replacing("REVIEW:FACT_STRUCTURE", fake_model("fake-b"))))
 
 
 def test_validation_fails_when_no_arbiter_is_left():
@@ -208,4 +222,6 @@ def test_routes_example_file_passes_the_same_checks_as_round_creation():
     ):
         assert snapshot.candidates(f"WRITE_DRAFT:{persona_id}")[0].provider == writer_vendor
         reviewers = select_reviewers(snapshot, writer_vendor, ReviewLens)
+        # 검색 렌즈는 작성 벤더와 상관없이 Gemini 다 (D-92). 나머지 렌즈는 작성 벤더를 피한다
+        assert reviewers.pop(ReviewLens.FACT_STRUCTURE).provider == "google"
         assert writer_vendor not in {model.provider for model in reviewers.values()}

@@ -317,7 +317,7 @@ class ReviewItem(BaseModel):
     comment: str
     suggested_fix: str | None
     is_new_in_version: bool = False     # SPOT_CHECK 신규 CRITICAL 만 True. 오케스트레이터가 설정
-    from_fact_check: bool = False       # 사실 확인 주장에서 코드가 만든 지적. 분쟁이면 중재자도 검색한다
+    from_fact_check: bool = False       # 사실 확인 주장에서 코드가 만든 지적. 분쟁이면 사실 확인 모델이 다시 검색해 중재자에게 근거를 준다
 ```
 
 `resolution_status`는 여기 두지 않는다. 결정은 다음 `DraftVersion`의 `ItemResolution`에 있다.

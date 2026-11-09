@@ -25,6 +25,8 @@ ROUTE_POLISH_FORMAT = "POLISH_FORMAT"  # v4 에서 뺐다. 옛 스냅샷·영수
 ROUTE_POLISH_TONE = "POLISH_TONE"
 ROUTE_FACT_TRANSFORM = "FACT_TRANSFORM"
 ROUTE_GLOSSARY = "GLOSSARY"  # 용어 추출. 없으면 단계를 건너뛴다 (설계 08 문서 D-64). 배포된 라우트에 뒤늦게 더해진 유일한 선택 라우트
+# 웹 검색을 하는 렌즈. 이 렌즈의 모델이 사실 확인 검색과 그 지적의 중재 검색을 모두 한다 (09 문서 D-92)
+WEB_SEARCH_LENS = ReviewLens.FACT_STRUCTURE
 
 _DEFAULT_MAX_OUTPUT = 64_000  # 비스트리밍 호출로 받는 상한. 그 이상은 스트리밍이 필요하다
 
@@ -159,14 +161,19 @@ def select_reviewers(
     """렌즈 순서대로 고른다. 작성 벤더는 항상 피하고, 같은 글의 앞선 리뷰 벤더는 다른 벤더가 있을 때만 피한다.
 
     벤더가 셋이면 작성 벤더를 뺀 둘로 렌즈 셋을 맡아야 하므로 겹칠 수 있다. 다른 회사의 모델만 독립 검증으로 친다.
+    예외는 웹 검색 렌즈(사실 확인)다. 라우트 첫 후보로 고정하고 작성 벤더도 피하지 않는다 (09 문서 D-92).
     """
     chosen: dict[ReviewLens, CallModel] = {}
     used: set[str] = set()
     for lens in lenses:
         route_id = review_route(lens)
-        model = _first_avoiding(snapshot, route_id, {writer_vendor} | used) or _first_avoiding(
-            snapshot, route_id, {writer_vendor}
-        )
+        if lens == WEB_SEARCH_LENS:
+            # 검색은 한 벤더로 모은다. 작성 벤더를 피하면 그 벤더의 글만 다른 검색 도구로 확인하게 된다
+            model = snapshot.candidates(route_id)[0]
+        else:
+            model = _first_avoiding(snapshot, route_id, {writer_vendor} | used) or _first_avoiding(
+                snapshot, route_id, {writer_vendor}
+            )
         chosen[lens] = _required(snapshot, model, route_id, f"outside writing vendor {writer_vendor}")
         used.add(chosen[lens].provider)
     return chosen

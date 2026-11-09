@@ -29,7 +29,7 @@
       {"provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000},
       {"provider": "xai", "model_id": "grok-4.7", "effort": "high", "max_output_tokens": 16000}
     ],
-    "note": "웹 검색 호출이다. 응답을 FACT_TRANSFORM 이 JSON 으로 옮긴다"
+    "note": "웹 검색 호출이다. 응답을 FACT_TRANSFORM 이 JSON 으로 옮긴다. 다른 렌즈와 달리 작성 벤더를 피하지 않고 첫 후보만 쓴다. 중재 검색도 이 모델이 한다 (09 문서 D-92)"
   },
   {
     "_id": "REVIEW:CRITICAL_PRACTICAL",

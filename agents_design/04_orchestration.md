@@ -115,7 +115,7 @@ DraftPipelineService.drive(draft_id):
 
 ## 4. Phase 3: FULL 리뷰
 
-- `IN_REVIEW`에서 `reviewer_assignments`의 렌즈 중 아직 리뷰가 없는 렌즈에 FULL 리뷰를 병렬 호출한다. 모델은 라운드 스냅샷의 `REVIEW:{lens}` 후보에서 고른다(07 문서 D-51·D-52).
+- `IN_REVIEW`에서 `reviewer_assignments`의 렌즈 중 아직 리뷰가 없는 렌즈에 FULL 리뷰를 병렬 호출한다. 모델은 라운드 스냅샷의 `REVIEW:{lens}` 후보에서 고른다(07 문서 D-51·D-52). 사실 확인 렌즈만 작성 벤더를 피하지 않고 첫 후보를 쓴다(09 문서 D-92).
 - `FACT_STRUCTURE` 렌즈는 웹 검색 호출과 변환 호출, 두 호출이다(아래 "사실 확인").
 - **블라인드**: 리뷰어 입력에 `author_slot`, 모델명, 페르소나명을 넣지 않는다. 본문·주제·렌즈 지시만 넣는다. 주제는 `rationale`(왜 이 성향의 작성자가 쓰는지, 사실상 페르소나 서술)을 뺀 `TopicForReviewer`로, SPOT_CHECK·중재의 지적은 `reviewer_slot`·`source_review_id`를 뺀 `ReviewItemForReviewer`로 넘긴다. `item_id`는 SPOT_CHECK가 그대로 돌려줘야 해 유지한다(슬롯 글자는 모델에게 불투명하다). 블라인드는 리뷰 단계 한정이며 요약 노트에는 저자가 드러난다.
 - 리뷰 출력은 `ReviewOutput` 스키마(05 문서). 스키마 위반은 같은 호출 재시도. 재시도를 소진한 리뷰어를 빼고 진행하지 않는다. 리뷰 한 건으로 발행을 결정하지 않는다(07 문서 D-06). 다른 리뷰 호출이 끝나기를 기다려 성공한 리뷰는 저장하고 글을 `FAILED`로 둔다. 재개하면 빠진 리뷰만 호출한다.
@@ -194,7 +194,7 @@ else:
 
 - 중재 모델은 `ARBITRATE` 라우트에서 작성 벤더와 그 항목의 리뷰 벤더를 피해 고른다. 렌즈는 **그 `ReviewItem.lens`**(리뷰어가 해당 항목에 태그한 주/보조 렌즈)를 그대로 쓴다.
 - 입력은 해당 섹션의 전후 본문, 지적(`ReviewItemForReviewer`, 슬롯 필드 없음), 처리 방식(`dispute_kind`), 기각 사유, `resolved=False` 사유, 글의 범위(`core_mechanism`, `out_of_scope`, 범위 선언 섹션)다. 블라인드를 유지한다.
-- 사실 확인에서 나온 지적의 분쟁이면 중재자가 먼저 검색해 근거를 모은 뒤(`arbitrate_search`) 판정한다.
+- 사실 확인에서 나온 지적의 분쟁이면 사실 확인 렌즈 모델이 먼저 검색해 근거를 모으고(`arbitrate_search`), 중재자가 그 근거로 판정한다(09 문서 D-92).
 - 교착 항목마다 `ARBITRATE`를 병렬 호출한다. `add_arbitration` 은 저장만 한다. 교착 항목이 모두 모이면 `apply_evaluation` 이 전이한다. 일부가 재시도를 소진하면 리뷰와 같이 성공분을 저장하고 `FAILED`다.
 - `UPHOLD_AUTHOR` 항목은 종결되어 `open_blocking_items` 에서 빠진다.
 - `UPHOLD_REVIEWER` 항목은 `open_blocking_items` 에 남고 다음 수정에서 기각할 수 없다(`must_accept=True`).

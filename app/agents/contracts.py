@@ -302,7 +302,7 @@ class ArbitrateInput(BaseModel):
     core_mechanism: str
     out_of_scope: list[str]
     scope_declaration: str  # 본문의 범위 선언 섹션(tradeoff, 없으면 conclusion)
-    search_evidence: str | None = None  # 사실 확인 지적의 분쟁이면 중재자가 검색해 모은 근거
+    search_evidence: str | None = None  # 사실 확인 지적의 분쟁이면 사실 확인 렌즈 모델이 검색해 모은 근거 (D-92)
 
 
 class ArbitrateSearchInput(BaseModel):

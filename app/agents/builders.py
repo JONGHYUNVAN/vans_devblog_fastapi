@@ -329,7 +329,7 @@ def build_arbitrate_input(draft: PostDraft, item: ReviewItem, search_evidence: s
 
 
 def build_arbitrate_search_input(draft: PostDraft, item: ReviewItem) -> ArbitrateSearchInput:
-    """사실 확인 지적의 분쟁에서 중재자가 판정 전에 검색할 입력. 수정 뒤 섹션과 기각 사유만 준다.
+    """사실 확인 지적의 분쟁에서 중재 판정 전에 검색할 입력. 검색은 사실 확인 렌즈 모델이 한다(D-92). 수정 뒤 섹션과 기각 사유만 준다.
 
     항목이 사유 없이 기각됐으면 ValueError(교착 정의에 어긋난다).
     """

@@ -72,6 +72,7 @@ from app.models.post_draft import (
     VerificationChecklist,
 )
 from app.models.publishing_round import PublishingRound
+from app.models.routing import WEB_SEARCH_LENS
 from app.models.sections import find_anchors, markdown_links
 from app.repositories.post_draft import PostDraftRepository
 from app.services.agent_calls import AgentCallService
@@ -603,15 +604,20 @@ class DraftPipelineService:
     async def _call_arbitrate(
         self, draft: PostDraft, publishing_round: PublishingRound, version: PipelineVersion, item: ReviewItem
     ) -> Arbitration:
-        """중재자는 작성·리뷰 벤더가 아닌 ARBITRATE 후보다. 사실 확인 지적의 분쟁이면 기억이 아니라 검색한 근거로 판정한다."""
-        model = DraftRoutes(publishing_round, draft, version.personas).arbiter(draft.reviewer_of(item))
+        """중재자는 작성·리뷰 벤더가 아닌 ARBITRATE 후보다. 사실 확인 지적의 분쟁이면 기억이 아니라 검색한 근거로 판정한다.
+
+        검색은 중재자가 아니라 사실 확인 렌즈 모델이 한다(D-92). 검색 호출은 판정하지 않고 근거만 모은다.
+        """
+        routes = DraftRoutes(publishing_round, draft, version.personas)
+        model = routes.arbiter(draft.reviewer_of(item))
         version_number = draft.current_version.version_number
         evidence = None
         if item.from_fact_check:
+            searcher = routes.reviewer(WEB_SEARCH_LENS)
             searched = await self._calls.search(
                 round_id=draft.round_id,
-                binding=model,
-                messages=render_messages(build_arbitrate_search_input(draft, item), version.prompts, model),
+                binding=searcher,
+                messages=render_messages(build_arbitrate_search_input(draft, item), version.prompts, searcher),
                 draft=draft,
                 target_version=version_number,
                 item_id=item.item_id,

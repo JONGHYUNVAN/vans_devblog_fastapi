@@ -397,6 +397,11 @@ async def test_disputed_fact_item_gives_the_arbiter_search_evidence():
     arbitrate = next(call for call in harness.llm.calls if "리뷰 분쟁을 판정" in call.messages[0].content)
     evidence = call_input_of(arbitrate.messages)["search_evidence"]
     assert "문서에 따르면 작성자가 맞다" in evidence and "https://docs.example.com/a" in evidence
+    # 중재 검색은 중재자가 아니라 사실 확인 검색 모델이 한다 (D-92)
+    fact_search = next(call for call in harness.llm.calls if "사실 확인 담당" in call.messages[0].content)
+    dispute_search = next(call for call in harness.llm.calls if "분쟁의 근거를 찾는" in call.messages[0].content)
+    assert dispute_search.params.web_search is True
+    assert dispute_search.params.model_id == fact_search.params.model_id != arbitrate.params.model_id
 
 
 async def test_spot_check_without_changes_or_items_skips_the_search():

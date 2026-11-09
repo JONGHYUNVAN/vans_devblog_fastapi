@@ -262,7 +262,12 @@ def route_documents(with_glossary: bool = False) -> list[dict[str, Any]]:
             {"_id": f"WRITE_DRAFT:{persona_id}", "candidates": own},
             {"_id": f"REVISE_DRAFT:{persona_id}", "candidates": own},
         ]
-    documents += [{"_id": f"REVIEW:{lens}", "candidates": everyone} for lens in ReviewLens]
+    # 검색 렌즈는 첫 후보만 쓴다(D-92). 작성 A 시나리오의 사실 확인 모델이 작성 벤더 밖(fake-c)이도록 fake-c 를 앞에 둔다
+    search_first = [fake_model(vendor) for vendor in ("fake-c", "fake-a", "fake-b")]
+    documents += [
+        {"_id": f"REVIEW:{lens}", "candidates": search_first if lens == ReviewLens.FACT_STRUCTURE else everyone}
+        for lens in ReviewLens
+    ]
     documents += [
         {"_id": route_id, "candidates": everyone}
         for route_id in ("ARBITRATE", "FINAL_READ", "ASSESS_LEVEL", "POLISH_TONE", "FACT_TRANSFORM")
