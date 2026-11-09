@@ -463,10 +463,21 @@ class ParagraphForPolish(BaseModel):
     text: str
 
 
+class PolishFinding(BaseModel):
+    """코드가 문단에서 찾은 AI 문체 패턴 후보 하나 (D-90). 고칠지는 모델이 문장을 보고 정한다."""
+
+    index: int  # 문단 index
+    rule: str  # 프롬프트 규칙 id (C-8, D-14 …)
+    label: str
+    match: str  # 걸린 구절
+
+
 class PolishToneInput(BaseModel):
     """문체 다듬기 입력(D-58). 문단 목록만 주고 전체 재작성을 받지 않는다."""
 
     paragraphs: list[ParagraphForPolish]  # v4: tone_markers 없음. 줄바꿈 다듬기(POLISH_FORMAT)는 뺐다
+    # 글 전체 횟수가 패턴의 min_count 이상인 것만 (D-90). 옛 템플릿은 이 필드를 언급하지 않아도 입력 JSON 에 함께 간다
+    findings: list[PolishFinding] = Field(default_factory=list)
 
 
 class ParagraphPatch(BaseModel):

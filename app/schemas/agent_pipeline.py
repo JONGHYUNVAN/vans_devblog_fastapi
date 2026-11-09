@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Self
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -265,3 +265,32 @@ class RoundProgress(BaseModel):
     abort_reason: RoundAbortReason | None
     topic_attempts: int
     drafts: list[DraftProgress]
+
+
+# ---------- 파이프라인 버전 넣기 (D-89) ----------
+
+
+class PromptEdit(BaseModel):
+    """POST pipeline/prompts/{family}/{name}/ 본문. 템플릿 하나를 통째로 바꾼 자식 버전을 만든다(CLI edit-prompt 와 같다)."""
+
+    text: str = Field(min_length=1, description="템플릿 전문. 일부만 보내면 나머지가 지워진다")
+    note: str = ""
+
+
+class ParameterEdit(BaseModel):
+    """POST pipeline/parameters/ 본문. 점 경로 → 값(CLI edit-param 과 같다). 예: {"polish.length_slack_chars": 40}."""
+
+    assignments: dict[str, Any] = Field(min_length=1)
+    note: str = ""
+
+
+class PipelineVersionCreated(BaseModel):
+    """새로 넣은 버전. 다음에 만드는 라운드부터 이 버전을 고정한다. warnings 는 저장을 막지 않은 검증 경고다."""
+
+    version_id: str
+    parent_version_id: str | None
+    content_hash: str
+    source: str
+    note: str
+    created_at: datetime
+    warnings: list[str]

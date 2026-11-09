@@ -169,6 +169,8 @@ def _outcome(kind: ProvenanceStageKind, call_ids: set[str], draft: PostDraft, pu
             if polish is None:
                 return "기록 없음"
             text = f"적용 {polish.applied}·버림 {len(polish.discarded)}"
+            if polish.tells_before:  # AI 문체 패턴 횟수(D-90). 기록이 없는 옛 글은 붙이지 않는다
+                text += f", 문체 패턴 {sum(polish.tells_before.values())}→{sum(polish.tells_after.values())}"
             if version is not None:
                 text += f", 새 버전 v{version.version_number}"
             if polish.skipped:

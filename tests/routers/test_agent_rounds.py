@@ -274,3 +274,44 @@ def test_metrics_cover_the_round_and_404_for_unknown_round(client, database):
     assert body["tokens_by_kind"] == {"WRITE_DRAFT": 240}
     assert client.get("/api/v1/agents/metrics/", headers=KEY).json()["drafts"] == 3
     assert client.get("/api/v1/agents/metrics/", headers=KEY, params={"round_id": "nope"}).status_code == 404
+
+
+def test_pipeline_prompt_edit_makes_a_child_version_and_rejects_unknown_or_same(client, database):  # D-89
+    text = "[template:polish_tone] 새 교정 규칙. 입력(JSON)을 읽고 JSON 으로만 답한다."
+    url = "/api/v1/agents/pipeline/prompts/common/polish_tone/"
+    asyncio.run(PipelineVersionRepository(database).next_seq())  # 픽스처가 v1 을 순번 발급 없이 넣었다
+    assert client.post(url, json={"text": text}).status_code == 403
+
+    response = client.post(url, headers=KEY, json={"text": text, "note": "D-90"})
+
+    assert response.status_code == 201
+    created = response.json()
+    assert (created["version_id"], created["parent_version_id"], created["source"]) == ("v2", "v1", "edit-prompt")
+    assert created["note"] == "D-90" and created["warnings"] == []
+    stored = asyncio.run(PipelineVersionRepository(database).get("v2"))
+    assert stored is not None and stored.prompts["common"]["polish_tone"] == text and stored.created_by == "api"
+    # 같은 내용, 없는 템플릿·가족, 빈 본문
+    assert client.post(url, headers=KEY, json={"text": text}).status_code == 400
+    assert (
+        client.post("/api/v1/agents/pipeline/prompts/common/nope/", headers=KEY, json={"text": text}).status_code == 400
+    )
+    assert (
+        client.post("/api/v1/agents/pipeline/prompts/x/polish_tone/", headers=KEY, json={"text": text}).status_code
+        == 400
+    )
+    assert client.post(url, headers=KEY, json={"text": ""}).status_code == 400  # 형식 오류도 이 앱은 400
+
+
+def test_pipeline_parameter_edit_makes_a_child_version_and_rejects_bad_paths(client, database):  # D-89
+    url = "/api/v1/agents/pipeline/parameters/"
+    asyncio.run(PipelineVersionRepository(database).next_seq())  # 픽스처가 v1 을 순번 발급 없이 넣었다
+
+    response = client.post(url, headers=KEY, json={"assignments": {"polish.length_slack_chars": 40}})
+
+    assert response.status_code == 201 and response.json()["source"] == "edit-param"
+    stored = asyncio.run(PipelineVersionRepository(database).get(response.json()["version_id"]))
+    assert stored is not None and stored.parameters.polish.length_slack_chars == 40
+    assert client.post(url, headers=KEY, json={"assignments": {"polish.nope": 1}}).status_code == 400
+    assert client.post(url, headers=KEY, json={"assignments": {"max_iterations": "many"}}).status_code == 400
+    assert client.post(url, headers=KEY, json={"assignments": {"max_iterations": 0}}).status_code == 400  # R-09
+    assert client.post(url, headers=KEY, json={"assignments": {}}).status_code == 400  # 형식 오류도 이 앱은 400

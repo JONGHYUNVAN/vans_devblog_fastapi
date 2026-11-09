@@ -86,6 +86,8 @@ def test_r09_checks_parameter_ranges():
     body = make_pipeline_body(draft_min_chars=50, draft_max_chars=10, max_iterations=0)
     body.parameters.structure.required_sections = ["body-1"]
     body.parameters.polish.phrase_fixes = [("(unclosed", "x")]
+    body.parameters.polish.tell_patterns[0].pattern = "(unclosed"
+    body.parameters.polish.tell_patterns[1].id = body.parameters.polish.tell_patterns[2].id
     body.parameters.publish.note.reviewers = "- 리뷰: $model"  # edit-param 오타. 줄에 모델이 빠진다
 
     messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-09"]
@@ -95,6 +97,8 @@ def test_r09_checks_parameter_ranges():
     assert any("must include intro" in message for message in messages)
     assert any("does not compile" in message for message in messages)
     assert "publish.note.reviewers must contain $models" in messages
+    assert any("polish.tell_patterns D-14 pattern" in message for message in messages)
+    assert "polish.tell_patterns ids must be unique" in messages
 
 
 def test_r10_checks_slots_and_distinct_personas_and_lenses():

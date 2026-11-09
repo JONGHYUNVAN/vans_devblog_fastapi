@@ -58,7 +58,9 @@ def _published_draft():
     draft.apply_evaluation(evaluate(draft, 2))
     draft.add_arbitration(make_arbitration(draft, item, ArbitrationOutcome.UPHOLD_AUTHOR))
     draft.apply_evaluation(evaluate(draft, 2))
-    draft.polish = PolishRecord(base_version=2, applied=1, model_ids=["fake-1"])
+    draft.polish = PolishRecord(
+        base_version=2, applied=1, model_ids=["fake-1"], tells_before={"C-8": 2, "D-14": 1}, tells_after={"C-8": 1}
+    )
     draft.final_read = FinalRead(
         target_version=2,
         findings=[FinalReadFinding(kind="OBSERVATION", section_id="intro", quote="본문", comment="c")],
@@ -164,7 +166,7 @@ def test_build_provenance_groups_receipts_into_stages_with_outcomes():
         CallKind.FACT_CHECK,
         CallKind.ARBITRATE,
     ]
-    assert by_kind[ProvenanceStageKind.POLISH].outcome == "적용 1·버림 0"
+    assert by_kind[ProvenanceStageKind.POLISH].outcome == "적용 1·버림 0, 문체 패턴 3→1"
     assert by_kind[ProvenanceStageKind.FINAL_READ].outcome == "지적 1건(차단 0)"
     assert by_kind[ProvenanceStageKind.ASSESS_LEVEL].outcome == "수준 300"
     assert by_kind[ProvenanceStageKind.GLOSSARY].outcome == "용어 0건(보류 0, 버림 0)"

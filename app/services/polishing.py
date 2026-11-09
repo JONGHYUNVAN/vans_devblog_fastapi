@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from functools import partial
 
 from app.agents.builders import render_messages
-from app.agents.contracts import ParagraphForPolish, PolishOutput, PolishToneInput
+from app.agents.contracts import ParagraphForPolish, PolishFinding, PolishOutput, PolishToneInput
 from app.models.enums import CallKind
-from app.models.pipeline import PipelineVersion, PolishParameters
+from app.models.pipeline import PipelineVersion, PolishParameters, TellPattern
 from app.models.post_draft import DiscardedPatch, PolishRecord, PostDraft
 from app.models.publishing_round import PublishingRound
 from app.models.sections import ANCHOR_PATTERN, find_anchors
@@ -29,7 +29,8 @@ _INLINE_CODE = re.compile(r"`[^`\n]+`")
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _URL = re.compile(r"https?://[^\s)\]]+")
 _LATIN = re.compile(r"[A-Za-z][A-Za-z0-9_+./-]*")
-_NEGATION = re.compile(r"[않못없]|아니|(?<![가-힣])안(?= )|말아|말고")
+# "A가 아니라 B" 의 대조 연결 "아니라"는 세지 않는다. 부정 대구(C-8)를 고치면 이 "아니"가 빠지는데, 극성을 바꾸는 것이 아니다 (D-90)
+_NEGATION = re.compile(r"[않못없]|아니(?!라)|(?<![가-힣])안(?= )|말아|말고")
 _PARAGRAPH_TOKENS = frozenset({"paragraph_open", "inline", "paragraph_close"})
 _PLAIN_INLINE = frozenset({"text", "softbreak", "hardbreak"})
 # 정규식 어미 치환·허용폭·긴 문단 기준의 기본값. 실행 때는 라운드 버전 문서의 polish 조절 값을 쓴다 (09 문서 2.4절)
@@ -125,6 +126,25 @@ def _tone_violation(
     return _preserved_violation(before, after)
 
 
+def _find_tells(
+    paragraphs: Iterable[ParagraphForPolish], patterns: Iterable[tuple[TellPattern, re.Pattern[str]]]
+) -> list[PolishFinding]:
+    """문단 산문(인라인 코드 제외)에서 AI 문체 패턴을 모두 찾는다 (D-90). 고치지 않는다. 고칠지는 다듬기 모델이 정한다."""
+    found: list[PolishFinding] = []
+    for paragraph in paragraphs:
+        prose = _INLINE_CODE.sub(" ", paragraph.text)
+        for tell, compiled in patterns:
+            found += [
+                PolishFinding(index=paragraph.index, rule=tell.id, label=tell.label, match=match.group(0))
+                for match in compiled.finditer(prose)
+            ]
+    return found
+
+
+def _count_tells(found: Iterable[PolishFinding]) -> dict[str, int]:
+    return dict(Counter(each.rule for each in found))
+
+
 def _fix_phrases(text: str, fixes: Iterable[tuple[re.Pattern[str], str]] = _PHRASE_FIXES) -> str:
     pieces = re.split(f"({_INLINE_CODE.pattern})", text)
     for index in range(0, len(pieces), 2):  # 홀수 칸이 인라인 코드다
@@ -154,6 +174,13 @@ class PolishingService:
         document = _Document.parse(base.content_markdown)
         last_call_id = ""
 
+        # 다듬기 전 패턴. 글 전체 횟수가 min_count 이상인 규칙만 모델에 알린다(부정 대구는 한 번은 사람도 쓴다)
+        tells = [(each, re.compile(each.pattern)) for each in polish.tell_patterns]
+        found = _find_tells(document.paragraphs(), tells)
+        record.tells_before = _count_tells(found)
+        min_count = {each.id: each.min_count for each in polish.tell_patterns}
+        findings = [each for each in found if record.tells_before[each.rule] >= min_count[each.rule]]
+
         fixes = [(re.compile(pattern), replacement) for pattern, replacement in polish.phrase_fixes]
         patches = [(each.index, _fix_phrases(each.text, fixes)) for each in document.paragraphs()]
         self._apply(document, "regex", patches, _preserved_violation, level, record, gate)
@@ -169,7 +196,9 @@ class PolishingService:
                 kind=CallKind.POLISH_TONE,
                 round_id=draft.round_id,
                 binding=model,
-                messages=render_messages(PolishToneInput(paragraphs=document.paragraphs()), version.prompts, model),
+                messages=render_messages(
+                    PolishToneInput(paragraphs=document.paragraphs(), findings=findings), version.prompts, model
+                ),
                 schema=PolishOutput,
                 draft=draft,
                 target_version=base.version_number,
@@ -194,6 +223,7 @@ class PolishingService:
                 record.model_ids.append(model.model_id)
 
         polished = document.text()
+        record.tells_after = dict(record.tells_before)  # 새 버전을 만들지 않으면 본문은 그대로다
         if record.applied == 0:
             draft.finish_polish(record)
             return
@@ -204,6 +234,7 @@ class PolishingService:
             record.model_ids = []
             draft.finish_polish(record)
             return
+        record.tells_after = _count_tells(_find_tells(document.paragraphs(), tells))
         draft.attach_polished_version(
             content_markdown=polished,
             section_ids=find_anchors(polished),

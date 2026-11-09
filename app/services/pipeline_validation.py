@@ -195,6 +195,19 @@ def _r09_parameters(body: PipelineVersionBody) -> list[Finding]:
             findings.append(
                 Finding("R-09", "error", f"polish.phrase_fixes pattern {pattern!r} does not compile: {exc}")
             )
+    # 패턴 탐지(D-90): 다듬기 단계에서 컴파일하므로 여기서 먼저 잡는다. id 가 겹치면 횟수 기록이 섞인다
+    tell_ids = [tell.id for tell in parameters.polish.tell_patterns]
+    require(len(tell_ids) == len(set(tell_ids)), "polish.tell_patterns ids must be unique")
+    for tell in parameters.polish.tell_patterns:
+        require(tell.min_count >= 1, f"polish.tell_patterns {tell.id} min_count must be 1 or more")
+        try:
+            re.compile(tell.pattern)
+        except re.error as exc:
+            findings.append(
+                Finding(
+                    "R-09", "error", f"polish.tell_patterns {tell.id} pattern {tell.pattern!r} does not compile: {exc}"
+                )
+            )
     require(parameters.polish.length_slack_chars >= 0, "polish.length_slack_chars must be 0 or more")
     require(0.0 <= parameters.polish.length_slack_ratio <= 1.0, "polish.length_slack_ratio must be between 0 and 1")
     # 글 끝 표기의 줄 문구에서 $models 가 빠지면 그 줄이 누가 했는지 없이 역할만 남는다. edit-param 오타를 시드 전에 잡는다

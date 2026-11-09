@@ -1,8 +1,8 @@
 {
   "meta": {
     "label": "baseline",
-    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성",
-    "content_hash": "sha256:0f0b1bcb49784e79eaf1c481f7e0d9e7b2651133f8718d16f34bc5250c05ef8a"
+    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성, 2026-11-09 D-90(다듬기 문체 패턴 탐지·polish_tone 규칙)으로 재생성",
+    "content_hash": "sha256:ed9ea0d8d345c5ff3b30ca4c8e31e24d1a03b803f761d4909445b2df6a217cc0"
   },
   "schema_version": 1,
   "slots": {
@@ -367,7 +367,63 @@
       ],
       "long_paragraph_chars": 300,
       "length_slack_chars": 30,
-      "length_slack_ratio": 0.25
+      "length_slack_ratio": 0.25,
+      "tell_patterns": [
+        {
+          "id": "D-14",
+          "label": "무거운 비유",
+          "pattern": "봉합|청사진|적신호|경고등|신호탄|(?:구조|설계)(?:의)? ?신호|붙잡",
+          "min_count": 1
+        },
+        {
+          "id": "C-8",
+          "label": "부정 대구(A가 아니라 B)",
+          "pattern": "아니라(?=[\\s,])|것[이은] 아닙니다|것[이은] 아니다",
+          "min_count": 2
+        },
+        {
+          "id": "D-8",
+          "label": "분열문(핵심은·결정은 ~)",
+          "pattern": "(?:핵심|관건|요점|결정|필요한 것|중요한 것)은 ",
+          "min_count": 1
+        },
+        {
+          "id": "D-10",
+          "label": "도치 결산(~하는 이유입니다)",
+          "pattern": "이유(?:입니다|이다|다)\\.",
+          "min_count": 1
+        },
+        {
+          "id": "T-1",
+          "label": "영어식 서술어(따라갑니다)",
+          "pattern": "따라갑니다|따라가 ?(?:봅니다|보겠습니다)",
+          "min_count": 1
+        },
+        {
+          "id": "A-7",
+          "label": "가지고 있다(have 직역)",
+          "pattern": "[을를] (?:가지고 있|갖고 있)",
+          "min_count": 1
+        },
+        {
+          "id": "A-8",
+          "label": "이중 피동",
+          "pattern": "되어지|되어진|지게 됩니다|지게 된다",
+          "min_count": 1
+        },
+        {
+          "id": "A-9",
+          "label": "~에 의해",
+          "pattern": "에 의해",
+          "min_count": 1
+        },
+        {
+          "id": "D-1",
+          "label": "결산 접속어",
+          "pattern": "결론적으로|요약하면|정리하자면",
+          "min_count": 1
+        }
+      ]
     },
     "publish": {
       "requires_approval": true,

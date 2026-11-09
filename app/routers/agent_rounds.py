@@ -2,6 +2,7 @@
 
 상태를 바꾸는 요청은 DB 만 바꾸고, 진행은 다음 스캔이 이어 간다(최대 SCAN_INTERVAL_S 지연). 상태 전이 위반은 409.
 읽기는 PipelineViewService, 결정은 DraftDecisionService, 라운드 생성·중단은 RoundService 다.
+파이프라인 버전은 넣기만 한다(09 문서 D-89, CLI edit-prompt·edit-param 과 같다). 조회·되돌리기는 두지 않는다(D-77).
 """
 
 from typing import Annotated
@@ -11,11 +12,13 @@ from fastapi import APIRouter, Depends, Query
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.dependencies import (
     get_draft_decision_service,
+    get_pipeline_version_service,
     get_pipeline_view_service,
     get_round_service,
     verify_agents_key,
 )
 from app.models.enums import RoundStatus
+from app.models.pipeline import COMMON_FAMILY, PROMPT_FAMILIES, PipelineVersion
 from app.schemas.agent_pipeline import (
     CallPublic,
     DraftApproval,
@@ -25,12 +28,17 @@ from app.schemas.agent_pipeline import (
     DraftRetry,
     EscalationDecision,
     EscalationSummary,
+    ParameterEdit,
+    PipelineVersionCreated,
+    PromptEdit,
     RoundCreate,
     RoundDetail,
     RoundPublic,
 )
 from app.services.draft_decision import DraftDecisionService
 from app.services.metrics import PipelineMetrics
+from app.services.pipeline_validation import validate_version
+from app.services.pipeline_versions import PipelineVersionService
 from app.services.pipeline_views import PipelineViewService, build_draft_public, build_round_public
 from app.services.round import RoundService
 
@@ -39,6 +47,7 @@ router = APIRouter(prefix="/api/v1/agents", tags=["Agents"], dependencies=[Depen
 RoundServiceDep = Annotated[RoundService, Depends(get_round_service)]
 DecisionServiceDep = Annotated[DraftDecisionService, Depends(get_draft_decision_service)]
 ViewServiceDep = Annotated[PipelineViewService, Depends(get_pipeline_view_service)]
+VersionServiceDep = Annotated[PipelineVersionService, Depends(get_pipeline_version_service)]
 
 
 @router.post("/rounds/", summary="라운드 생성·시작", status_code=201)
@@ -127,3 +136,45 @@ async def list_calls(
 async def get_metrics(views: ViewServiceDep, round_id: Annotated[str | None, Query()] = None) -> PipelineMetrics:
     """07 문서 4절 지표. round_id 가 없으면 모든 라운드."""
     return await views.compute_metrics(round_id)
+
+
+@router.post("/pipeline/prompts/{family}/{name}/", summary="프롬프트 템플릿 하나 바꾸기", status_code=201)
+async def edit_prompt(family: str, name: str, body: PromptEdit, versions: VersionServiceDep) -> PipelineVersionCreated:
+    """최신 버전을 부모로 템플릿 하나만 바꾼 새 버전. 다음 라운드부터 쓴다. 검증 오류·최신과 같은 내용이면 400.
+
+    최신 버전에 없는 템플릿 이름은 400 이다. 오타가 아무도 읽지 않는 템플릿을 만들고 바꾼 줄 알게 되는 것을 막는다.
+    """
+    if family not in (*PROMPT_FAMILIES, COMMON_FAMILY):
+        raise InvalidRequestError(f"unknown prompt family {family}")
+    try:
+        latest = await versions.require_latest()
+        if name not in latest.prompts.get(family, {}):
+            raise InvalidRequestError(f"template {family}/{name} does not exist in {latest.version_id}")
+        version = await versions.edit_prompt(family, name, body.text, note=body.note)
+    except ValueError as exc:  # 검증 오류, 최신과 같은 내용, 버전 없음
+        raise InvalidRequestError(str(exc)) from exc
+    return _created(version)
+
+
+@router.post("/pipeline/parameters/", summary="조절 값 바꾸기", status_code=201)
+async def edit_parameters(body: ParameterEdit, versions: VersionServiceDep) -> PipelineVersionCreated:
+    """점 경로 → 값으로 조절 값만 바꾼 새 버전. 없는 경로·타입 오류·검증 오류·최신과 같은 내용이면 400."""
+    try:
+        version = await versions.edit_parameters(body.assignments, note=body.note)
+    except ValueError as exc:  # pydantic ValidationError 도 ValueError 다
+        raise InvalidRequestError(str(exc)) from exc
+    return _created(version)
+
+
+def _created(version: PipelineVersion) -> PipelineVersionCreated:
+    """create() 는 경고를 로그로만 남긴다. 원격에서 넣는 사람은 로그를 못 보므로 같은 검증을 다시 돌려 경고를 돌려준다."""
+    warnings = [str(finding) for finding in validate_version(version.body()) if finding.level == "warning"]
+    return PipelineVersionCreated(
+        version_id=version.version_id,
+        parent_version_id=version.parent_version_id,
+        content_hash=version.content_hash,
+        source=version.source,
+        note=version.note,
+        created_at=version.created_at,
+        warnings=warnings,
+    )

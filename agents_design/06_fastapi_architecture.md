@@ -257,6 +257,8 @@ class DraftPipelineService:
 | `POST` | `/api/v1/agents/drafts/{draft_id}/discard/` | `FAILED` 글 하나만 폐기. 바디 `DraftDiscard(decided_by)` |
 | `GET` | `/api/v1/agents/calls/` | `draft_id` 또는 `round_id` 필터(둘 다 없으면 400), 토큰·지연 조회. 메시지 본문은 뺀다 |
 | `GET` | `/api/v1/agents/metrics/` | 07 문서 4절 지표(`PipelineMetrics`). `round_id` 가 없으면 모든 라운드 |
+| `POST` | `/api/v1/agents/pipeline/prompts/{family}/{name}/` | 템플릿 하나를 바꾼 새 파이프라인 버전(09 문서 D-89). 본문 `{text, note}`. 없는 가족·템플릿, 검증 오류, 최신과 같은 내용이면 400 |
+| `POST` | `/api/v1/agents/pipeline/parameters/` | 조절 값만 바꾼 새 버전(D-89). 본문 `{assignments: {점 경로: 값}, note}`. 없는 경로·타입 오류면 400 |
 
 경로는 trailing slash 포함(CONVENTIONS 2절). 상태 전이 위반은 409 `InvalidTransitionError`.
 

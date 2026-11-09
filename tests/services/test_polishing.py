@@ -1,11 +1,15 @@
 """다듬기 테스트: 안전장치, 패치 적용, 실패가 글을 멈추지 않는지, 다듬은 버전의 발행 (설계 04 문서 발행 전 단계)."""
 
+import re
+
 import pytest
 
+from app.agents.contracts import ParagraphForPolish
 from app.core.exceptions import LLMTransportError
 from app.models.enums import AgentSlot, PostStatus, RevisionCause
+from app.models.pipeline import DEFAULT_TELL_PATTERNS
 from app.services.pipeline_views import build_escalation_summary
-from app.services.polishing import _Document, _fix_phrases, _tone_violation
+from app.services.polishing import _Document, _find_tells, _fix_phrases, _tone_violation
 from app.services.publishing import build_publish_note
 from app.services.validation import ValidationGate
 from tests.factories import assess_level_output, draft_output, final_read_output, polish_output, review_output
@@ -104,6 +108,20 @@ def test_tone_safeguards_allow_a_sentence_rewrite_that_keeps_protected_tokens():
     assert _tone_violation(before, after) is None
 
 
+def test_contrastive_anira_is_not_counted_as_negation():  # D-90
+    before = "순환 참조는 생성 순서의 문제가 아니라 경계의 문제다"
+
+    assert _tone_violation(before, "순환 참조는 생성 순서보다 경계의 문제다") is None
+    assert _tone_violation("이것은 버그가 아니다", "이것은 버그다") is not None  # 극성을 바꾸는 부정은 그대로 막는다
+
+
+def test_find_tells_reports_matches_outside_inline_code():
+    tells = [(each, re.compile(each.pattern)) for each in DEFAULT_TELL_PATTERNS]
+    found = _find_tells([ParagraphForPolish(index=3, text="이 봉합은 `봉합` 함수와 다르다")], tells)
+
+    assert [(each.index, each.rule, each.match) for each in found] == [(3, "D-14", "봉합")]
+
+
 def test_fix_phrases_leaves_inline_code_alone():
     assert _fix_phrases("값을 확인하십시오. `하십시오` 는 그대로다") == "값을 확인한다. `하십시오` 는 그대로다"
     assert _fix_phrases("버그라고 볼 수 있다. 장애인 상황이다.") == "버그다. 장애이다."
@@ -186,6 +204,19 @@ async def test_polished_body_that_fails_the_gate_at_the_end_is_discarded(monkeyp
     assert len(draft.versions) == 1  # 리뷰를 통과한 버전이 그대로 발행본이다
     assert draft.polish is not None
     assert (draft.polish.applied, draft.polish.gate_errors) == (0, ["본문이 너무 길다"])
+
+
+async def test_tells_reach_the_polisher_from_min_count_and_are_counted_before_and_after():  # D-90
+    body = BODY.replace("첫 문장이다. 둘째 문장이다.", "이 봉합은 임시다. 순서가 아니라 경계가 문제다.")
+    patched = "이 우회는 임시다. 순서가 아니라 경계가 문제다."
+    harness, draft = await _drive(WRITE_DRAFT=[draft_output(body)], POLISH_TONE=[polish_output((FIRST, patched))])
+
+    call = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_TONE")
+    sent = call.messages[1].content
+    assert '"rule": "D-14"' in sent and '"match": "봉합"' in sent
+    assert '"rule": "C-8"' not in sent  # 부정 대구는 한 번뿐이라 min_count(2) 미만이다
+    assert draft.polish is not None and draft.polish.applied == 1
+    assert (draft.polish.tells_before, draft.polish.tells_after) == ({"D-14": 1, "C-8": 1}, {"C-8": 1})
 
 
 async def test_long_paragraphs_are_reported_not_rewritten():

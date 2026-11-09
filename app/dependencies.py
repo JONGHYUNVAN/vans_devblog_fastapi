@@ -155,6 +155,13 @@ def get_pipeline_view_service(
     return build_pipeline_view_service(database, settings)
 
 
+def get_pipeline_version_service(
+    database: Annotated[AsyncDatabase, Depends(get_async_database)],
+) -> PipelineVersionService:
+    """라우터용 PipelineVersionService. 내부 API 로 버전을 넣는다(09 문서 D-89). created_by 는 api 다."""
+    return PipelineVersionService(PipelineVersionRepository(database), created_by="api")
+
+
 def get_health_service(
     es: Annotated[Elasticsearch, Depends(get_es)],
     mongo_client: Annotated[MongoClient, Depends(get_mongo_client)],
