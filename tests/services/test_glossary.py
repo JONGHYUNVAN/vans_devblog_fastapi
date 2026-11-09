@@ -434,13 +434,14 @@ async def test_pending_lists_proposals_of_one_draft_and_resolve_drop_edit_the_po
     post_glossary = await harness.glossary.drop("post-42", surface="토큰은")
     assert [item.sense_key for item in post_glossary.items] == ["s00001"]
     shown = await harness.glossary.show("post-42")
-    assert [(item["sense_key"], item["visible"]) for item in shown["items"]] == [("s00001", False)]
+    # 발행 따라 쓰기가 이 글의 제안을 자동 승인했으므로 보인다(D-65 개정)
+    assert [(item["sense_key"], item["visible"]) for item in shown["items"]] == [("s00001", True)]
 
 
 # ---------- 읽기 API 의 표시 규칙 ----------
 
 
-async def test_read_api_shows_only_approved_items_with_the_other_senses_of_the_headword():
+async def test_publishing_auto_approves_proposals_and_the_read_api_shows_them_with_other_senses():
     harness = PipelineHarness(
         _scripts(
             glossary_candidate(new_sense=new_sense()),
@@ -456,27 +457,27 @@ async def test_read_api_shows_only_approved_items_with_the_other_senses_of_the_h
         _sense("s90009", "token", "언어 모델의 입력 단위", ("llm",), distinguisher="인증 토큰이 아니라")
     )
     draft = await _drive_with_glossary(harness)
+    views = GlossaryViewService(repository=harness.glossary_repository)
+    proposed = await harness.glossary_repository.get_sense("s00001")
+    assert proposed is not None and proposed.status == GlossaryStatus.PROPOSED  # 발행 전에는 승인되지 않는다
+
     draft.record_approval("사람", requires_approval=True)
     await harness.drafts.save(draft)
     await harness.drive(A)
-    views = GlossaryViewService(repository=harness.glossary_repository)
 
-    before = await views.get_post_glossary("post-42")
-    assert [item.sense_key for item in before.items] == ["s90002"]  # 무상태는 PROPOSED 라 아직 보이지 않는다
-    [token] = before.items
+    # 발행 따라 쓰기가 이 글이 제안한 표제어·뜻을 자동 승인한다(D-65 개정)
+    after = await views.get_post_glossary("post-42")
+    assert [item.sense_key for item in after.items] == ["s00001", "s90002"]
+    stateless, token = after.items
+    assert stateless.other_senses == []
     assert (token.term_ko, token.distinguisher, [d.label for d in token.domains]) == (
         "토큰",
         "언어 모델 토큰이 아니라",
         ["인증"],
     )
     assert [other.sense_key for other in token.other_senses] == ["s90009"]
-
-    await harness.glossary.approve_all(draft.draft_id, approved_by="사람")
-    after = await views.get_post_glossary("post-42")
-    assert [(item.sense_key, item.other_senses) for item in after.items] == [
-        ("s00001", []),
-        ("s90002", token.other_senses),
-    ]
+    sense = await harness.glossary_repository.get_sense("s00001")
+    assert sense is not None and (sense.status, sense.approved_by) == (GlossaryStatus.APPROVED, "auto")
     terms = await views.list_terms(q="state")
     assert [each.key for each in terms.items] == ["stateless"] and terms.total == 1
     with pytest.raises(NotFoundError):

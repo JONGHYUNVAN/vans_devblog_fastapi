@@ -18,10 +18,12 @@ from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.glossary import GlossaryRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_provenance import PostProvenanceRepository
-from app.services.glossary import build_post_glossary
+from app.services.glossary import GlossaryService, build_post_glossary
 from app.services.provenance import build_provenance
 
 logger = logging.getLogger(__name__)
+
+AUTO_APPROVER = "auto"  # 발행 따라 쓰기가 용어를 승인할 때 approved_by 에 남는 이름(D-65 개정). 사람 승인과 구분된다
 
 
 def _now() -> datetime:
@@ -39,14 +41,19 @@ class DerivedRecordsWriter:
         agent_call_repository: AgentCallRepository,
         glossary_repository: GlossaryRepository,
         provenance_repository: PostProvenanceRepository,
+        glossary_service: GlossaryService,
         now: Callable[[], datetime] = _now,
     ) -> None:
-        """리포지토리 다섯 개가 전부 필수다. 영수증 리포지토리는 제작 기록을 만들 때 라운드의 영수증을 읽는 데 쓴다."""
+        """리포지토리 다섯 개와 용어 서비스가 전부 필수다. 영수증 리포지토리는 제작 기록을 만들 때 라운드의 영수증을 읽는 데 쓴다.
+
+        용어 서비스는 발행된 글이 제안한 표제어·뜻·별칭을 자동 승인하는 데 쓴다(approve_all, D-65 개정).
+        """
         self._drafts = draft_repository
         self._rounds = round_repository
         self._calls = agent_call_repository
         self._glossary = glossary_repository
         self._provenance = provenance_repository
+        self._glossary_service = glossary_service
         self._now = now
 
     async def write(self, draft: PostDraft, *, built_by: str) -> None:
@@ -71,6 +78,13 @@ class DerivedRecordsWriter:
                 # 이미 있으면(재시도·정리) 건드리지 않는다. 사람의 resolve·drop 이 post_glossary 에만 있기 때문이다
                 await self._glossary.add_post_glossary_if_missing(post_glossary)
                 await self._glossary.add_post_to_senses([item.sense_key for item in post_glossary.items], post_id)
+                # 사람 승인 없이 이 글이 제안한 것을 승인한다(D-65 개정, 2026-11-09). PROPOSED 만 건드려 되풀이해도 같고,
+                # 사람이 거절한 것은 REJECTED 라 다시 승인되지 않는다. 불변식(사전체 정의 D-88, 구분 문구)에 걸린 뜻은 PROPOSED 로 남는다
+                result = await self._glossary_service.approve_all(draft.draft_id, approved_by=AUTO_APPROVER)
+                if result["skipped"]:
+                    logger.warning(
+                        "draft %s glossary auto-approve left proposals: %s", draft.draft_id, result["skipped"]
+                    )
         # 2) 제작 기록: 영수증이 하나도 없어도(이미 정리된 글) 글 문서만으로 만든다 (08 문서 3.4절)
         publishing_round = await self._rounds.get(draft.round_id)
         if publishing_round is None:

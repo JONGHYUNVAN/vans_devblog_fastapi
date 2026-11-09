@@ -1077,7 +1077,7 @@ def provenance_build(
             record = await service.build_for_draft(draft_id, rebuild=rebuild, built_by="cli")
             _echo(record.model_dump(mode="json"))
         else:
-            written = await build_derived_records_writer(database).write_missing(built_by="cli")
+            written = await build_derived_records_writer(database, settings).write_missing(built_by="cli")
             _echo({"written": written})
 
     _run_agents(_build)

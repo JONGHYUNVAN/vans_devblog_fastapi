@@ -339,14 +339,17 @@ def build_publisher(settings: Settings) -> PostBEPublisher | None:
     )
 
 
-def build_derived_records_writer(database: AsyncDatabase) -> DerivedRecordsWriter:
-    """발행된 글의 post_glossary·post_provenance 따라 쓰기 (설계 08 문서). 발행·결정·정리·CLI 가 같이 쓴다."""
+def build_derived_records_writer(database: AsyncDatabase, settings: Settings) -> DerivedRecordsWriter:
+    """발행된 글의 post_glossary·post_provenance 따라 쓰기와 용어 자동 승인 (설계 08 문서). 발행·결정·정리·CLI 가 같이 쓴다."""
+    glossary_repository = GlossaryRepository(database)
     return DerivedRecordsWriter(
         draft_repository=PostDraftRepository(database),
         round_repository=PublishingRoundRepository(database),
         agent_call_repository=AgentCallRepository(database),
-        glossary_repository=GlossaryRepository(database),
+        glossary_repository=glossary_repository,
         provenance_repository=PostProvenanceRepository(database),
+        # 용어 서비스는 자동 승인(approve_all)만 쓴다. LLM 이 필요 없다
+        glossary_service=GlossaryService(repository=glossary_repository, settings=settings),
     )
 
 
@@ -402,7 +405,7 @@ def build_draft_decision_service(database: AsyncDatabase, settings: Settings) ->
         round_service=build_round_service(database, settings),
         settings=settings,
         version_service=build_pipeline_version_service(database),
-        derived_writer=build_derived_records_writer(database),
+        derived_writer=build_derived_records_writer(database, settings),
     )
 
 
@@ -420,7 +423,7 @@ def build_round_service(database: AsyncDatabase, settings: Settings) -> RoundSer
         route_repository=ModelRouteRepository(database),
         providers=available_providers(settings),
         main_categories=settings.agent_main_category_values,
-        derived_writer=build_derived_records_writer(database),
+        derived_writer=build_derived_records_writer(database, settings),
     )
 
 
@@ -455,7 +458,7 @@ def build_pipeline_runner(database: AsyncDatabase, settings: Settings) -> Pipeli
             publisher=publisher,
             settings=settings,
             version_service=version_service,
-            derived_writer=build_derived_records_writer(database),
+            derived_writer=build_derived_records_writer(database, settings),
         )
         if publisher is not None
         else UnconfiguredDraftPublisher()

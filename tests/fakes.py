@@ -756,6 +756,7 @@ class PipelineHarness:
             agent_call_repository=self.calls,
             glossary_repository=self.glossary_repository,
             provenance_repository=self.provenance_repository,
+            glossary_service=GlossaryService(repository=self.glossary_repository, settings=self.settings),
         )
         self.round_service = RoundService(
             self.rounds,
