@@ -153,7 +153,8 @@ async def test_patches_make_a_new_version_that_is_not_reviewed_again():
     )  # 원문 그대로. 게이트(D-85)가 명령형을 막아 정규식이 고칠 문장이 초안에 남지 않는다
     assert draft.polish is not None
     assert draft.polish.applied == 1  # 문체 패치 하나뿐
-    assert draft.polish.model_ids == ["fake-b-1"]  # 작성 벤더(fake-a)가 아닌 모델
+    # 작성 벤더(fake-a)가 아닌 모델이 제안하고, 작성 벤더의 수정 모델이 고쳤다 (D-91)
+    assert (draft.polish.proposer_model_ids, draft.polish.model_ids) == (["fake-b-1"], ["fake-a-1"])
     assert harness.llm.kinds.count("REVIEW_FULL") == 2
     # 전체 읽기와 수준 평가는 다듬은 본문을 본다
     final_read_call = next(
@@ -170,7 +171,32 @@ async def test_only_the_violating_patch_is_discarded():
 
     assert good in draft.current_version.content_markdown
     assert draft.polish is not None
-    assert {each.reason for each in draft.polish.discarded} == {"보존 대상 변경", "없는 문단"}
+    # 없는 문단의 제안은 작성 모델에 보내지 않는다. 작성 모델이 그대로 받은 위반 패치만 버려진다
+    assert {each.reason for each in draft.polish.discarded} == {"보존 대상 변경"}
+
+
+async def test_writer_reviews_the_proposals_and_only_its_own_patches_are_applied():  # D-91
+    proposal = "첫 문장이다. 둘째 문장으로 이어진다."
+    own = "첫 문장이다. 이어서 둘째 문장이다."
+    harness, draft = await _drive(
+        POLISH_TONE=[polish_output((FIRST, proposal), (SECOND, "값을 확인해 둔다. `retry` 를 2번 호출하지 않는다."))],
+        POLISH_REVISE=[polish_output((FIRST, own))],  # 첫 제안은 제 말로 고쳐 쓰고 둘째 제안은 버렸다
+    )
+
+    call = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_REVISE")
+    assert call.model_binding.model_id == "fake-a-1" and proposal in call.messages[1].content
+    body = draft.current_version.content_markdown
+    assert own in body and proposal not in body and "값을 확인한다." in body
+
+
+async def test_writer_rejecting_every_proposal_makes_no_new_version():  # D-91
+    _, draft = await _drive(
+        POLISH_TONE=[polish_output((FIRST, "첫 문장이다. 둘째 문장으로 이어진다."))], POLISH_REVISE=[polish_output()]
+    )
+
+    assert len(draft.versions) == 1
+    assert draft.polish is not None
+    assert (draft.polish.applied, draft.polish.model_ids, draft.polish.proposer_model_ids) == (0, [], [])
 
 
 async def test_no_patches_make_no_new_version():
@@ -248,7 +274,8 @@ async def test_note_names_the_polisher_and_summary_shows_the_diff():
     summary = build_escalation_summary(draft)
 
     assert len(draft.versions) == 2
-    assert note.endswith("- 다듬기: fake-b-1\n")  # 다듬기 패치가 적용됐을 때만 줄이 생긴다
+    # 패치는 작성 모델이 썼으므로 다듬기 줄은 없고, 제안한 모델을 검토 줄에 적는다 (D-91)
+    assert note.endswith("- 다듬기 검토: fake-b-1\n") and "- 다듬기:" not in note
     assert (summary.final_version, summary.diff) == (2, "")
     assert "+첫 문장이다. 둘째 문장으로 이어진다." in summary.polish_diff
 

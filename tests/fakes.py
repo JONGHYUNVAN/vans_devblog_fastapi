@@ -536,6 +536,7 @@ _KIND_MARKERS = {
     "마지막 독자": "FINAL_READ",
     "전문성 수준을 판정": "ASSESS_LEVEL",
     "교정자": "POLISH_TONE",
+    "다듬기 제안을 검토": "POLISH_REVISE",
     "glossary extractor": "GLOSSARY",
 }
 
@@ -565,6 +566,10 @@ def default_scripts() -> dict[str, Any]:
         ),
         "FACT_TRANSFORM": fact_transform_output(fact_claim()),
         "POLISH_TONE": polish_output(),
+        # 작성 모델이 다듬기 제안을 그대로 받는다. 고쳐 쓰거나 버리는 경우는 다듬기 테스트가 따로 준다 (D-91)
+        "POLISH_REVISE": lambda call_input: polish_output(
+            *[(each["index"], each["text"]) for each in call_input["proposals"]]
+        ),
         "FINAL_READ": final_read_output(),
         "ASSESS_LEVEL": assess_level_output(),
     }

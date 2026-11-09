@@ -41,6 +41,7 @@ TEMPLATE_NAMES = (
     "final_read",
     "assess_level",
     "polish_tone",
+    "polish_revise",  # 작성 모델이 다듬기 제안을 검토해 직접 고친다 (D-91)
     "glossary",  # 용어 추출 (08 문서)
 )
 
@@ -50,7 +51,7 @@ _FAMILY_BY_PROVIDER = {"anthropic": "claude", "google": "gemini", "xai": "grok"}
 _TEMPLATES_BY_ROUTE = {
     "PROPOSE_TOPIC": ("propose_topic",),
     "WRITE_DRAFT": ("write_draft",),
-    "REVISE_DRAFT": ("revise_draft",),
+    "REVISE_DRAFT": ("revise_draft", "polish_revise"),  # 다듬기 제안을 적용하는 것도 수정 모델이다 (D-91)
     "ARBITRATE": ("arbitrate", "arbitrate_search"),
     "FINAL_READ": ("final_read",),
     "ASSESS_LEVEL": ("assess_level",),

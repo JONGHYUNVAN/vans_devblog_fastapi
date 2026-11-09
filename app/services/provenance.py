@@ -62,7 +62,7 @@ def _stage_key(call: AgentCall) -> _StageKey:
             return (ProvenanceStageKind.FACT_CHECK, call.lens, call.target_version, None)
         case CallKind.ARBITRATE:
             return (ProvenanceStageKind.ARBITRATION, None, call.target_version, call.item_id)
-        case CallKind.POLISH_FORMAT | CallKind.POLISH_TONE:
+        case CallKind.POLISH_FORMAT | CallKind.POLISH_TONE | CallKind.POLISH_REVISE:
             # polish_format 호출은 v4 에서 없어졌지만(D-62) 옛 글 영수증에 남아 있어 계속 받는다
             return (ProvenanceStageKind.POLISH, None, call.target_version, None)
         case CallKind.FINAL_READ:

@@ -184,7 +184,7 @@ PostDraft (Aggregate Root, 글 수준)        ◄── 리뷰 결과를 써도 
  │    └─ claims: FactClaim[]                사실 확인 렌즈의 주장과 판정
  ├─ arbitrations: Arbitration[]
  ├─ post_review_stage?                      POST_REVIEW 에서 다음에 할 일. POLISH → FINAL_READ → ASSESS_LEVEL → GLOSSARY → DONE
- ├─ polish?: PolishRecord                   적용·버린 패치 수와 사유, 건너뛴 호출, 긴 문단, 적용된 모델
+ ├─ polish?: PolishRecord                   적용·버린 패치 수와 사유, 건너뛴 호출, 긴 문단, 패치를 쓴 모델·제안한 모델(09 문서 D-91)
  ├─ glossary?: GlossaryRecord               용어 추출 결과(항목·보류·버림·건너뜀 사유). 발행 때 post_glossary 로 옮긴다 (08 문서 2.1절)
  ├─ final_read?: FinalRead                  findings(kind, section_id, quote, comment), overall
  ├─ level_assessment?: LevelAssessment      level, evidence(criterion, quote), reasoning, criteria_version

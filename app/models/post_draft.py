@@ -326,7 +326,8 @@ class PolishRecord(BaseModel):
     gate_errors: list[str] = Field(default_factory=list)  # 합친 결과가 게이트에 떨어져 전부 버렸을 때의 사유
     skipped: list[str] = Field(default_factory=list)  # 호출 실패로 건너뛴 다듬기와 그 이유
     long_paragraphs: list[str] = Field(default_factory=list)  # 정규식이 고칠 수 없어 사람에게 알리는 긴 문단
-    model_ids: list[str] = Field(default_factory=list)  # 패치가 실제로 적용된 모델
+    model_ids: list[str] = Field(default_factory=list)  # 패치를 쓴 모델. D-91 부터는 작성 벤더의 수정 모델
+    proposer_model_ids: list[str] = Field(default_factory=list)  # 적용된 패치의 바탕이 된 제안을 낸 모델 (D-91)
     # AI 문체 패턴(D-90) 규칙 id → 문단 산문의 횟수. 다듬기 효과를 숫자로 본다. 0 인 규칙은 빼고, 버린 다듬기면 전후가 같다
     tells_before: dict[str, int] = Field(default_factory=dict)
     tells_after: dict[str, int] = Field(default_factory=dict)

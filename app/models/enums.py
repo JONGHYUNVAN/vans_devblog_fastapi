@@ -165,7 +165,8 @@ class CallKind(StrEnum):
     FINAL_READ = "FINAL_READ"
     ASSESS_LEVEL = "ASSESS_LEVEL"
     POLISH_FORMAT = "POLISH_FORMAT"
-    POLISH_TONE = "POLISH_TONE"
+    POLISH_TONE = "POLISH_TONE"  # 작성 벤더가 아닌 모델의 문단 패치 제안. 그대로 적용하지 않는다 (D-91)
+    POLISH_REVISE = "POLISH_REVISE"  # 작성 모델이 다듬기 제안을 검토해 직접 고친 패치. 이것만 적용한다 (D-91)
     GLOSSARY = "GLOSSARY"  # 발행본에서 전제 밖 용어를 뽑고 기존 표제어·뜻과 맞춘다 (설계 08 문서 2절)
 
 

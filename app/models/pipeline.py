@@ -165,7 +165,8 @@ class PublishNoteParameters(BaseModel):
     reviewers: str = "- 리뷰: $models"  # 모델(렌즈, 렌즈) 꼴. 같은 모델이 두 렌즈를 맡으면 한 번만 적는다
     revisers: str = "- 수정: $models"  # 작성 모델과 다른 모델이 고쳤을 때만
     arbiters: str = "- 중재: $models"  # 중재가 있었을 때만
-    polishers: str = "- 다듬기: $models"  # 다듬기 패치가 적용됐을 때만
+    polishers: str = "- 다듬기: $models"  # 작성 모델과 다른 모델의 다듬기 패치가 적용됐을 때만(D-91 전 글)
+    polish_reviewers: str = "- 다듬기 검토: $models"  # 작성 모델이 다듬기 제안을 보고 고쳤을 때 제안한 모델 (D-91)
     lens_labels: dict[str, str] = Field(
         default_factory=lambda: {
             "LOGIC_READABILITY": "논리·가독성",

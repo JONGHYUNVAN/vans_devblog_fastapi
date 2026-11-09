@@ -237,7 +237,7 @@ def _role_lines(
     draft: PostDraft, publishing_round: PublishingRound, note: PublishNoteParameters
 ) -> list[tuple[str, str]]:
     """(줄 문구, 모델 표기) 목록. 본문에 영향을 준 모델만 적는다: 작성·리뷰는 항상, 수정은 작성과 다를 때,
-    중재는 있었을 때, 다듬기는 패치가 적용됐을 때.
+    중재는 있었을 때, 다듬기는 작성과 다른 모델의 패치가 적용됐을 때, 다듬기 검토는 작성 모델이 그 제안을 보고 고쳤을 때(D-91).
 
     전체 읽기·수준 평가·용어 추출은 본문을 바꾸지 않아 적지 않는다(제작 기록에 남는다). 옛 글은 슬롯 바인딩에서 찾는다.
     """
@@ -271,6 +271,11 @@ def _role_lines(
     }
     if arbiters:
         lines.append((note.arbiters, ", ".join(sorted(arbiters))))
-    if draft.polish and draft.polish.model_ids:
-        lines.append((note.polishers, ", ".join(sorted(set(draft.polish.model_ids)))))
+    if draft.polish:
+        # D-91 부터 다듬기 패치는 작성 벤더의 수정 모델이 쓴다. 작성 모델이면 "작성" 줄로 충분하고, 제안한 모델은 검토 줄에 적는다
+        polishers = set(draft.polish.model_ids) - {writer}
+        if polishers:
+            lines.append((note.polishers, ", ".join(sorted(polishers))))
+        if draft.polish.proposer_model_ids:
+            lines.append((note.polish_reviewers, ", ".join(sorted(set(draft.polish.proposer_model_ids)))))
     return lines

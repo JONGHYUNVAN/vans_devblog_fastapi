@@ -27,8 +27,8 @@ ROUTES_EXAMPLE = Path(__file__).parents[3] / "agents_design" / "routes.example.j
 PROMPTS_DIR = Path(__file__).parents[3] / "app" / "agents" / "prompts"
 # v4 명세 §2.5 의 디렉터리 표. 가족에 없는 템플릿은 그 가족이 맡지 않는 호출이다
 V4_EXPECTED = {
-    "claude": set(TEMPLATE_NAMES) - {"fact_transform", "arbitrate_search", "glossary"},
-    "gemini": set(TEMPLATE_NAMES) - {"fact_transform", "arbitrate_search", "glossary"},
+    "claude": set(TEMPLATE_NAMES) - {"fact_transform", "arbitrate_search", "glossary", "polish_revise"},
+    "gemini": set(TEMPLATE_NAMES) - {"fact_transform", "arbitrate_search", "glossary", "polish_revise"},
     "grok": {
         "propose_topic",
         "write_draft",
@@ -39,7 +39,7 @@ V4_EXPECTED = {
         "arbitrate",
     },
     "haiku": {"fact_transform", "glossary"},
-    "common": {"arbitrate_search"},
+    "common": {"arbitrate_search", "polish_revise"},
 }
 
 

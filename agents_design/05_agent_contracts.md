@@ -235,7 +235,8 @@ class ArbitrateOutput(BaseModel):
 | `FACT_TRANSFORM` | `FactTransformInput` | `FactCheckOutput`·`FactSpotCheckOutput`(리뷰 출력 + `claims[]`) |
 | `FINAL_READ` | `FinalReadInput`(제목, 주제, 본문) | `findings[]{kind, section_id, quote, comment}`, `overall` |
 | `ASSESS_LEVEL` | `AssessLevelInput`(제목, 본문, 기준표. 목표 수준 없음) | `level`, `evidence[]{criterion, quote}`, `reasoning` |
-| `POLISH_TONE` | 번호 붙은 문단. `POLISH_FORMAT` 은 v4 에서 뺐다(D-62) | `patches[]{index, text}` |
+| `POLISH_TONE` | 번호 붙은 문단. `POLISH_FORMAT` 은 v4 에서 뺐다(D-62) | `patches[]{index, text}`. 적용하지 않는 제안이다(09 문서 D-91) |
+| `POLISH_REVISE` | `PolishReviseInput`(번호 붙은 문단, `POLISH_TONE` 의 제안 `proposals[]{index, text}`, findings) | `patches[]{index, text}`. 작성 벤더의 수정 모델이 고친 최종 문단 |
 | `GLOSSARY` | `GlossaryInput`(제목·독자·전제 지식·메인 카테고리·키워드·발행본·앵커·`known_headwords[]`·`allowed_domains[]`·개수 범위). 08 문서 2.3절 | `GlossaryOutput.candidates[]{term_ko, term_en, surface, section_id, same_as, sense_key, sense_candidates[], new_sense{domains[], definition, distinguisher}}`. 스키마 위반만 재시도, 나머지는 코드가 항목 단위로 버린다 |
 
 수준 기준표는 `models/level.py` 의 기본값이고 `agent_routes` 의 `LEVEL_CRITERIA` 문서로 바꿀 수 있다. 항목 수가 아니라 한 결정의 인과를 얼마나 깊게 설명하는지로 본다.

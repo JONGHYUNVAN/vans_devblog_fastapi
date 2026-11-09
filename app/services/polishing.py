@@ -1,4 +1,6 @@
-"""발행 전 다듬기: 정규식 어미 치환과 문체(작성 벤더가 아닌 모델). 뜻을 바꾸지 않는 표현만 고친다. 줄바꿈 다듬기(POLISH_FORMAT)는 v4 에서 뺐다.
+"""발행 전 다듬기: 정규식 어미 치환과 문체. 뜻을 바꾸지 않는 표현만 고친다. 줄바꿈 다듬기(POLISH_FORMAT)는 v4 에서 뺐다.
+
+문체는 작성 벤더가 아닌 모델이 제안하고, 작성 벤더의 수정 모델이 제안을 검토해 직접 고친다. 적용하는 것은 수정 모델의 패치뿐이다 (D-91).
 
 모델이 글 전체를 다시 쓰지 못하게 문단 단위 패치만 받고, 안전장치를 통과한 패치만 적용한다. 압축된 서사를 풀어 쓰는 일은 하지 않는다.
 다듬기 실패는 글을 멈추지 않는다. 수정 루프로 돌아가지 않고, 패치가 없으면 새 버전도 만들지 않는다. 호출·게이트 실패는 PolishRecord 에 남는다.
@@ -12,14 +14,21 @@ from dataclasses import dataclass
 from functools import partial
 
 from app.agents.builders import render_messages
-from app.agents.contracts import ParagraphForPolish, PolishFinding, PolishOutput, PolishToneInput
+from app.agents.contracts import (
+    ParagraphForPolish,
+    PolishFinding,
+    PolishOutput,
+    PolishReviseInput,
+    PolishToneInput,
+)
 from app.models.enums import CallKind
+from app.models.model_binding import CallModel
 from app.models.pipeline import PipelineVersion, PolishParameters, TellPattern
 from app.models.post_draft import DiscardedPatch, PolishRecord, PostDraft
 from app.models.publishing_round import PublishingRound
 from app.models.sections import ANCHOR_PATTERN, find_anchors
 from app.models.tiptap import parse_markdown, top_level_paragraphs
-from app.services.agent_calls import AgentCallService
+from app.services.agent_calls import AgentCallService, CallResult
 from app.services.routing import DraftRoutes
 from app.services.validation import ValidationGate
 
@@ -191,37 +200,51 @@ class PolishingService:
             if len(each.text) >= polish.long_paragraph_chars
         ]
 
-        try:
-            model = routes.tone_polisher
-            result = await self._calls.call(
-                kind=CallKind.POLISH_TONE,
-                round_id=draft.round_id,
-                binding=model,
-                messages=render_messages(
-                    PolishToneInput(paragraphs=document.paragraphs(), findings=findings), version.prompts, model
-                ),
-                schema=PolishOutput,
-                draft=draft,
-                target_version=base.version_number,
-                max_attempts=parameters.max_llm_retries,
-                pipeline_version=version.version_id,
-            )
-        except Exception as exc:  # 다듬기 실패는 글을 멈추지 않는다(재시도 소진·예산 초과·벤더 거부 전부)
-            logger.warning("draft %s skipped %s: %s", draft.draft_id, CallKind.POLISH_TONE, exc)
-            record.skipped.append(f"{CallKind.POLISH_TONE}: {type(exc).__name__}")
-        else:
-            applied = self._apply(
-                document,
-                "tone",
-                [(each.index, each.text) for each in result.output.patches],
-                partial(_tone_violation, slack_chars=polish.length_slack_chars, slack_ratio=polish.length_slack_ratio),
-                level,
+        # 작성 벤더가 아닌 모델은 제안만 낸다. 제안을 작성 모델에 보내 그 모델이 직접 고친 패치만 적용한다.
+        # 다른 모델의 문장이 그대로 발행본에 들어가면 그 부분은 작성 모델의 글이 아니기 때문이다 (D-91)
+        proposer = routes.tone_polisher
+        proposed = await self._polish_call(
+            draft,
+            version,
+            CallKind.POLISH_TONE,
+            proposer,
+            PolishToneInput(paragraphs=document.paragraphs(), findings=findings),
+            base.version_number,
+            record,
+        )
+        current = {each.index: each.text for each in document.paragraphs()}
+        proposals = [
+            each
+            for each in (proposed.output.patches if proposed else [])
+            if current.get(each.index, each.text) != each.text
+        ]
+        if proposals:
+            reviser = routes.reviser
+            result = await self._polish_call(
+                draft,
+                version,
+                CallKind.POLISH_REVISE,
+                reviser,
+                PolishReviseInput(paragraphs=document.paragraphs(), proposals=proposals, findings=findings),
+                base.version_number,
                 record,
-                gate,
             )
-            if applied:
-                last_call_id = result.call_id
-                record.model_ids.append(model.model_id)
+            if result is not None:
+                applied = self._apply(
+                    document,
+                    "tone",
+                    [(each.index, each.text) for each in result.output.patches],
+                    partial(
+                        _tone_violation, slack_chars=polish.length_slack_chars, slack_ratio=polish.length_slack_ratio
+                    ),
+                    level,
+                    record,
+                    gate,
+                )
+                if applied:
+                    last_call_id = result.call_id
+                    record.model_ids.append(reviser.model_id)
+                    record.proposer_model_ids.append(proposer.model_id)
 
         polished = document.text()
         record.tells_after = dict(record.tells_before)  # 새 버전을 만들지 않으면 본문은 그대로다
@@ -242,6 +265,34 @@ class PolishingService:
             record=record,
             call_id=last_call_id or f"{draft.draft_id}:polish:regex",
         )
+
+    async def _polish_call(
+        self,
+        draft: PostDraft,
+        version: PipelineVersion,
+        kind: CallKind,
+        model: CallModel,
+        call_input: PolishToneInput | PolishReviseInput,
+        base_version: int,
+        record: PolishRecord,
+    ) -> CallResult[PolishOutput] | None:
+        """다듬기 호출 하나. 실패는 글을 멈추지 않으므로 record.skipped 에 남기고 None 이다(재시도 소진·예산 초과·벤더 거부·템플릿 없음 전부)."""
+        try:
+            return await self._calls.call(
+                kind=kind,
+                round_id=draft.round_id,
+                binding=model,
+                messages=render_messages(call_input, version.prompts, model),
+                schema=PolishOutput,
+                draft=draft,
+                target_version=base_version,
+                max_attempts=version.parameters.max_llm_retries,
+                pipeline_version=version.version_id,
+            )
+        except Exception as exc:
+            logger.warning("draft %s skipped %s: %s", draft.draft_id, kind, exc)
+            record.skipped.append(f"{kind}: {type(exc).__name__}")
+            return None
 
     def _apply(
         self,

@@ -487,6 +487,14 @@ class ParagraphPatch(BaseModel):
     text: str
 
 
+class PolishReviseInput(BaseModel):
+    """작성 모델이 다른 모델의 다듬기 제안을 검토해 직접 고친다 (D-91). 받아들이든 제 말로 고쳐 쓰든 버리든 작성 모델이 정한다."""
+
+    paragraphs: list[ParagraphForPolish]
+    proposals: list[ParagraphPatch]  # 다듬기 검토 모델(POLISH_TONE)이 낸 문단 패치. 적용되지 않은 제안이다
+    findings: list[PolishFinding] = Field(default_factory=list)
+
+
 class PolishOutput(BaseModel):
     """다듬기 계약. 패치마다 안전장치와 게이트를 통과한 것만 적용된다."""
 

@@ -76,6 +76,7 @@ _SHORT_KINDS = frozenset(
         CallKind.ASSESS_LEVEL,
         CallKind.POLISH_FORMAT,
         CallKind.POLISH_TONE,
+        CallKind.POLISH_REVISE,
     }
 )
 _OUTPUT_SCHEMAS: dict[CallKind, type[BaseModel]] = {
@@ -87,6 +88,7 @@ _OUTPUT_SCHEMAS: dict[CallKind, type[BaseModel]] = {
     CallKind.ASSESS_LEVEL: AssessLevelOutput,
     CallKind.POLISH_FORMAT: PolishOutput,
     CallKind.POLISH_TONE: PolishOutput,
+    CallKind.POLISH_REVISE: PolishOutput,
 }
 
 

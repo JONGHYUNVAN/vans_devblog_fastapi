@@ -123,7 +123,7 @@ class DraftRoutes:
 
     @property
     def tone_polisher(self) -> CallModel:
-        """문체 다듬기 모델: 작성 벤더 밖."""
+        """문체 다듬기 제안 모델: 작성 벤더 밖. 제안을 받아 실제로 고치는 것은 수정 모델(reviser)이다 (D-91)."""
         return select_independent(self._snapshot, ROUTE_POLISH_TONE, self._writer.provider)
 
     @property

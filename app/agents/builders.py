@@ -25,6 +25,7 @@ from app.agents.contracts import (
     GlossaryInput,
     KnownHeadword,
     LinkStatus,
+    PolishReviseInput,
     PolishToneInput,
     ProposeTopicInput,
     ReviewForAuthor,
@@ -63,6 +64,7 @@ _TEMPLATE_BY_INPUT: dict[type[BaseModel], str] = {
     FinalReadInput: "final_read",
     AssessLevelInput: "assess_level",
     PolishToneInput: "polish_tone",
+    PolishReviseInput: "polish_revise",
     GlossaryInput: "glossary",
 }
 

@@ -626,7 +626,7 @@ class PostProvenance(BaseModel):
 | `REVIEW`(`lens`·`target_version` 별) | `REVIEW` | "FULL/SPOT_CHECK, 판정, CRITICAL c·MAJOR m·MINOR n" |
 | `FACT_CHECK`(`item_id` 없음) + 같은 `lens`·`target_version` 의 `FACT_TRANSFORM` | `FACT_CHECK` | "주장 k건: SUPPORTED s·REFUTED r·UNVERIFIABLE u" |
 | `ARBITRATE` + 같은 `item_id` 의 `FACT_CHECK`(중재 검색) | `ARBITRATION` | "UPHOLD_REVIEWER/UPHOLD_AUTHOR" |
-| `POLISH_TONE`, `POLISH_FORMAT`(옛 글) | `POLISH` | "적용 a·버림 d, 새 버전 vN" 또는 "건너뜀" |
+| `POLISH_TONE`, `POLISH_REVISE`(09 문서 D-91), `POLISH_FORMAT`(옛 글) | `POLISH` | "적용 a·버림 d, 새 버전 vN" 또는 "건너뜀" |
 | `FINAL_READ` | `FINAL_READ` | "지적 f건(차단 b)" |
 | `ASSESS_LEVEL` | `ASSESS_LEVEL` | "수준 L" |
 | `GLOSSARY`(이 문서 2절) | `GLOSSARY` | "용어 t건(보류 p)" 또는 "건너뜀" |

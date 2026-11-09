@@ -302,6 +302,7 @@ STUB_PHRASES = {
     "final_read": "마지막 독자다",
     "assess_level": "전문성 수준을 판정한다",
     "polish_tone": "교정자다",
+    "polish_revise": "다듬기 제안을 검토해 직접 고친다",
     "glossary": "glossary extractor",
 }
 
