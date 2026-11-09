@@ -368,8 +368,14 @@ def compare_prompts(
             min=1, help="영수증의 출력 한도 대신 쓸 값. 생각 토큰이 한도를 다 써 본문이 비면 올려서 다시 돈다"
         ),
     ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            help="영수증의 모델 대신 쓸 모델. provider/model_id 꼴(예: anthropic/claude-fable-5-1). 프롬프트 가족도 이 모델을 따른다"
+        ),
+    ] = None,
 ) -> None:
-    """저장된 WRITE_DRAFT 입력을 프롬프트 집합별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다. 가족은 영수증의 모델을 따른다.
+    """저장된 WRITE_DRAFT 입력을 프롬프트 집합별로 다시 써 밀도를 비교한다. 영수증·상태는 바꾸지 않는다. 가족은 영수증의 모델(--model 을 주면 그 모델)을 따른다.
 
     --version 은 파이프라인 버전 id(v3), 내보내기 디렉터리(pipeline/next/), 저장소 프롬프트 디렉터리 이름(v4) 중 하나다. 들여오지 않고 써 볼 수 있다.
     """
@@ -381,6 +387,13 @@ def compare_prompts(
         path = out_dir / f"{label.replace('/', '_').replace(chr(92), '_')}-{run}.md"
         path.write_text(f"# {output.title}\n\n> {output.summary}\n\n{output.content_markdown}", encoding="utf-8")
         typer.echo(f"saved {path}")
+
+    model_override: tuple[str, str] | None = None
+    if model is not None:
+        provider, _, model_id = model.partition("/")
+        if not provider or not model_id:
+            raise typer.BadParameter("provider/model_id 꼴이어야 한다", param_hint="--model")
+        model_override = (provider, model_id)
 
     async def _compare(database, settings):
         service = build_agent_call_service(database, settings)
@@ -395,6 +408,7 @@ def compare_prompts(
             out_of_scope=out_of_scope,
             on_draft=_save,
             max_output_tokens=max_output_tokens,
+            model=model_override,
         )
         for label, run, density, error in rows:
             _echo(

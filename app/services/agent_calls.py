@@ -469,11 +469,12 @@ class AgentCallService:
         out_of_scope: list[str] | None = None,
         on_draft: Callable[[str, int, DraftOutput], None] | None = None,
         max_output_tokens: int | None = None,
+        model: tuple[str, str] | None = None,
     ) -> list[tuple[str, int, VersionDensity | None, str | None]]:
         """저장된 WRITE_DRAFT 입력을 여러 프롬프트 집합(라벨 → 템플릿)으로 다시 써 밀도를 잰다. 같은 주제를 새 라운드로 돌리면 중복 검사에 걸린다.
 
         옛 입력에는 범위 필드가 없어 호출자가 채운다(None 이면 입력의 값을 둔다). 영수증·상태를 바꾸지 않는다. 행은 (라벨, 회차, 밀도, 오류)다.
-        프롬프트 가족은 영수증의 모델을 따른다. on_draft 가 있으면 파싱된 글을 (라벨, 회차, 글)로 넘긴다. 글을 읽고 판단하는 용도다.
+        프롬프트 가족은 영수증의 모델을 따른다. model 은 (provider, model_id) 로 영수증 대신 보낼 모델이고, 가족도 그 모델을 따른다. on_draft 가 있으면 파싱된 글을 (라벨, 회차, 글)로 넘긴다. 글을 읽고 판단하는 용도다.
         replay 는 잘린 응답의 한도를 올리지 않으므로(D-53 은 call 에만) max_output_tokens 로 영수증보다 큰 한도를 줄 수 있다.
         """
         if call.kind != CallKind.WRITE_DRAFT:
@@ -493,6 +494,8 @@ class AgentCallService:
         binding = call.model_binding
         if max_output_tokens is not None:
             binding = binding.model_copy(update={"max_output_tokens": max_output_tokens})
+        if model is not None:
+            binding = binding.model_copy(update={"provider": model[0], "model_id": model[1]})
         rows = []
         for label, prompts in prompt_sets.items():
             messages = render_messages(write_input, prompts, binding)
