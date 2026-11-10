@@ -739,7 +739,10 @@ class PipelineHarness:
         parameters, settings = split_overrides(overrides)
         self.settings = Settings(_env_file=None, **settings)
         self.version = make_pipeline_version(
-            **({"draft_min_chars": 1, "draft_max_chars": 100_000, "max_llm_retries": 2} | parameters)
+            **(
+                {"draft_min_chars": 1, "draft_max_chars": 100_000, "draft_reject_chars": 100_000, "max_llm_retries": 2}
+                | parameters
+            )
         )
         self.version_repository = PipelineVersionRepository(self.database)
         if with_version:

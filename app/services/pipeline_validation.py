@@ -164,6 +164,10 @@ def _r09_parameters(body: PipelineVersionBody) -> list[Finding]:
             findings.append(Finding("R-09", "error", message))
 
     require(parameters.draft_min_chars < parameters.draft_max_chars, "draft_min_chars must be below draft_max_chars")
+    require(
+        parameters.draft_max_chars <= parameters.draft_reject_chars,
+        "draft_reject_chars must be at least draft_max_chars",
+    )
     require(parameters.min_code_blocks >= 0, "min_code_blocks must be 0 or more")
     for name in (
         "max_iterations",

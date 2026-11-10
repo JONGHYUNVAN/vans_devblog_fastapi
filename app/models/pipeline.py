@@ -230,7 +230,9 @@ class Parameters(BaseModel):
     topic_avoid_lookback_days: int = 180
     # 구조·게이트
     draft_min_chars: int = 4000
-    draft_max_chars: int = 20000
+    draft_max_chars: int = 20000  # 작성·수정 프롬프트가 보는 상한
+    # 게이트가 퇴짜 놓는 길이. 프롬프트 상한보다 넉넉히 두어 리뷰 반영으로 조금 넘친 글을 버리지 않는다 (D-93)
+    draft_reject_chars: int = 25000
     min_code_blocks: int = 1
     structure: StructureParameters = Field(default_factory=StructureParameters)
     review: ReviewParameters = Field(default_factory=ReviewParameters)

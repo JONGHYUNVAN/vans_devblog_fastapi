@@ -133,7 +133,11 @@ def test_parameters_default_matches_the_fixture_harness_overrides():
     """하네스는 길이 하한 1·재시도 2·승인 켜짐만 바꾸고 나머지는 기본값이다. 시나리오가 기본 동작 위에서 돈다는 뜻이다."""
     harness = PipelineHarness()
     expected = Parameters(
-        draft_min_chars=1, draft_max_chars=100_000, max_llm_retries=2, publish={"requires_approval": True}
+        draft_min_chars=1,
+        draft_max_chars=100_000,
+        draft_reject_chars=100_000,
+        max_llm_retries=2,
+        publish={"requires_approval": True},
     )
 
     assert harness.version.parameters == expected

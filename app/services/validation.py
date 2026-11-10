@@ -49,7 +49,7 @@ class ValidationGate:
         """라운드 버전의 조절 값으로 게이트를 만든다. 글마다 라운드가 다를 수 있어 걸음마다 부른다."""
         return cls(
             min_chars=parameters.draft_min_chars,
-            max_chars=parameters.draft_max_chars,
+            max_chars=parameters.draft_reject_chars,  # 프롬프트 상한(draft_max_chars)이 아니라 퇴짜 기준 (D-93)
             min_code_blocks=parameters.min_code_blocks,
             structure=parameters.structure,
             style=parameters.style,
