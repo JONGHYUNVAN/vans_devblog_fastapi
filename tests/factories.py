@@ -327,6 +327,8 @@ def make_pipeline_body(
 ) -> PipelineVersionBody:
     """가짜 벤더 라우트·기본 페르소나·스텁 프롬프트의 본문. parameter_overrides 는 Parameters 필드(중첩은 dict)다."""
     slots, level_criteria, routes = split_route_documents(route_documents(with_glossary))
+    # 운영 기본값은 자동 발행이지만 픽스처는 승인 흐름을 전제로 쓴 테스트가 많아 승인을 켠 채로 둔다
+    parameter_overrides["publish"] = {"requires_approval": True, **parameter_overrides.get("publish", {})}
     return PipelineVersionBody(
         slots=slots,
         personas={key: value.model_copy(deep=True) for key, value in PERSONAS.items()},

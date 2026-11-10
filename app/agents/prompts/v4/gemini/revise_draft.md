@@ -20,6 +20,7 @@ Include every remaining blocking item (`CRITICAL`, `MAJOR`) in `resolutions` wit
 - Preserve existing `<!-- sec:id -->` anchors (if merged/renamed, set `section_id_after` to the new anchor).
 - Keep all `<!-- sec:code-N -->` anchors, valid language tags (`python`/`typescript`/`json` vs `-snippet`), character limits (`min_chars`..`max_chars`), and `evidence` integrity rules.
 - Keep the register of `previous` consistent (do not switch between 합니다 and 다 styles) and add no recap paragraphs or generic closers. New code for a fix is a `-snippet` excerpt unless a complete file is the only way to prove the point, with Korean comments at the points that matter (the validation gate rejects long blocks without comments).
+- Keep `previous.title` unless `human_instruction` or a review item concerns it, or the revision changes what the article promises. A replaced title is a blog headline of at most 40 characters with one promise, no parentheses, and no colon subtitle.
 
 ## Output Format
 Return ONLY a single raw JSON object (no markdown fences):

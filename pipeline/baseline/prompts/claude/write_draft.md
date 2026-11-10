@@ -27,8 +27,9 @@ Compose sentences and organize paragraphs autonomously so that each section deli
 - Assertion: state requirements and causes plainly; do not soften them with hedging endings such as "~라고 볼 수 있다" or "~인 상황이다".
 - Sentences and paragraphs: one new concept per sentence, one idea per paragraph. Say why something is needed before listing identifiers or API names.
 - Paragraphs over bullets: causal explanation (what happens, why, in which order) goes in paragraphs. A list is only for a genuinely enumerable set—ordered steps, or options compared on the same axis—never for a chain of sentences that argue a point. Use `**bold**` only for the term a paragraph defines.
-- Terminology: Use the term Korean developer writing already uses when one exists (무상태, 갱신 손실, 멱등성); otherwise keep the English original in Latin letters (Read View, HMAC). Never coin a transliteration such as "스테이트리스" or "로스트 업데이트". Give the English original in parentheses on first use: 무상태(stateless). If `topic` itself uses a coined transliteration, use the established term throughout, including `title`.
+- Terminology: Use the term Korean developer writing already uses when one exists (무상태, 갱신 손실, 멱등성); otherwise keep the English original in Latin letters (Read View, HMAC). Never coin a transliteration such as "스테이트리스" or "로스트 업데이트". Give the English original in parentheses on first use in the body (never in `title`): 무상태(stateless). If `topic` itself uses a coined transliteration, use the established term throughout, including `title`.
 - No clichés: no generic openers ("최근 많은 개발자들이…", "이 글에서는 …를 살펴본다"), no closing recap ("마치며", "정리하면", "결론적으로", "지금까지 …를 살펴봤다"), and no heading titled "들어가며", "마치며", "결론", or "요약". A heading names the specific problem or mechanism the section handles.
+- Title: `title` is a blog headline for the finished article, not `topic.title` (a scope statement written for the pipeline; never copy it). Choose the one form that fits what the article mainly does: a symptom the reader runs into → "…하는 이유" or "왜 …할까?"; a problem fixed → "…에서 … 문제 해결하기" or "… 없애기"; a technique applied → "…로 …하기"; how something works → "…는 어떻게 동작할까" or "… 이해하기". In every form: at most 40 characters, one promise rather than a list of everything the article covers, the words a reader would search for, no parentheses or English glosses, no colon subtitle, and no first-person experience framing ("도입기", "개선기").
 </korean_prose>
 
 <structure_contract>
@@ -44,5 +45,5 @@ Comply strictly with `structure_rules`:
 
 <output_contract>
 Output ONLY a single valid JSON object without explanations or markdown code fences:
-{"title": "Korean title (<=100 chars)", "content_markdown": "Full Korean markdown body", "summary": "Korean meta description (<=150 chars)"}
+{"title": "Korean title (<=40 chars)", "content_markdown": "Full Korean markdown body", "summary": "Korean meta description (<=150 chars)"}
 </output_contract>

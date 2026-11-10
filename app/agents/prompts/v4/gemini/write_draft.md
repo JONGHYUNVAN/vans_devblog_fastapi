@@ -19,8 +19,9 @@ Write the article in Korean so each section achieves its purpose for the reader:
 3. **Say It Once**: State each proposition once, in the section where it belongs—not in `intro`, again around the code, and again in the final section.
 4. **Code Comments**: Every code block of a dozen lines or more carries Korean comments where it matters—why this branch exists, which invariant a line protects, what a reader must not change. A file-path header alone does not count; put at least one comment every 20–25 lines. The validation gate rejects long blocks without comments. State requirements plainly, without hedging endings ("~라고 볼 수 있다", "~인 상황이다").
 5. **Sentence Discipline**: One new concept per sentence and one idea per paragraph. Say why something is needed before listing identifiers or API names. Use `**bold**` only for the term a paragraph defines.
-6. **Terminology**: Use the term Korean developer writing already uses when one exists (무상태, 갱신 손실, 멱등성); otherwise keep the English original in Latin letters (Read View, HMAC). Never coin a transliteration such as "스테이트리스" or "로스트 업데이트". Give the English original in parentheses on first use: 무상태(stateless). If `topic` itself uses a coined transliteration, use the established term throughout, including `title`.
+6. **Terminology**: Use the term Korean developer writing already uses when one exists (무상태, 갱신 손실, 멱등성); otherwise keep the English original in Latin letters (Read View, HMAC). Never coin a transliteration such as "스테이트리스" or "로스트 업데이트". Give the English original in parentheses on first use in the body (never in `title`): 무상태(stateless). If `topic` itself uses a coined transliteration, use the established term throughout, including `title`.
 7. **No Clichés**: No generic openers ("최근 많은 개발자들이…", "이 글에서는 …를 살펴본다"), no closing recap ("마치며", "정리하면", "결론적으로", "지금까지 …를 살펴봤다"), and no heading titled "들어가며", "마치며", "결론", or "요약". A heading names the specific problem or mechanism the section handles.
+8. **Title**: `title` is a blog headline for the finished article, not `topic.title` (a scope statement written for the pipeline; never copy it). Choose the one form that fits what the article mainly does: a symptom the reader runs into → "…하는 이유" or "왜 …할까?"; a problem fixed → "…에서 … 문제 해결하기" or "… 없애기"; a technique applied → "…로 …하기"; how something works → "…는 어떻게 동작할까" or "… 이해하기". In every form: at most 40 characters, one promise rather than a list of everything the article covers, the words a reader would search for, no parentheses or English glosses, no colon subtitle, and no first-person experience framing ("도입기", "개선기").
 
 ## Step 4: Structural & Syntax Validation (`structure_rules`)
 1. Section Anchors: Place `<!-- sec:{id} -->` at the start of every section in the exact order: `intro` → `body-1`, `body-2`, … → remaining `required_sections`.
@@ -31,4 +32,4 @@ Write the article in Korean so each section achieves its purpose for the reader:
 
 ## Output Format
 Return ONLY a single raw JSON object (no markdown fences, no preamble):
-{"title": "Korean title (<=100 chars)", "content_markdown": "Full Korean markdown body", "summary": "Korean meta description (<=150 chars)"}
+{"title": "Korean title (<=40 chars)", "content_markdown": "Full Korean markdown body", "summary": "Korean meta description (<=150 chars)"}

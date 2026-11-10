@@ -330,7 +330,7 @@ CONCURRENCY = Concurrency()
     "fact_check": {"severity": {"REFUTED": "CRITICAL", "UNVERIFIABLE": "MINOR"}},
     "final_read": {"blocking_kinds": ["BODY_CODE_CONTRADICTION", "CORE_MECHANISM_MISSING"]},
     "polish": {"length_slack_chars": 30, "length_slack_ratio": 0.25},
-    "publish": {"requires_approval": true,
+    "publish": {"requires_approval": false,
                 "note": {"writer": "작성 AI - $models", "reviewers": "리뷰 AI - $models", "revisers": "수정 AI - $models",
                          "arbiters": "중재 AI - $models", "polishers": "다듬기 AI - $models",
                          "lens_labels": {"LOGIC_READABILITY": "논리·가독성", "FACT_STRUCTURE": "사실·구조", "CRITICAL_PRACTICAL": "비판·실무"}}},

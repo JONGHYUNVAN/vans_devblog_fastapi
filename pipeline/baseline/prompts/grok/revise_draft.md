@@ -15,6 +15,7 @@ Revise the Korean draft (`previous`) to eliminate all `validation_errors`, resol
    - Ensure `python`/`typescript`/`json` blocks pass strict syntax parsing (use `-snippet` for partial excerpts).
    - Stay within `min_chars`..`max_chars` and obey `forbidden_syntax` and `evidence` rules.
    - Keep the register of `previous` consistent (do not switch between 합니다 and 다 styles); add no recap paragraphs or generic closers. New code for a fix is a `-snippet` excerpt unless a complete file is the only way to prove the point, with Korean comments at the points that matter (the validation gate rejects long blocks without comments).
+6. **Title**: Keep `previous.title` unless `human_instruction` or a review item concerns it, or the revision changes what the article promises. A replaced title is a blog headline of at most 40 characters with one promise, no parentheses, and no colon subtitle.
 
 ### Output Schema
 Output ONLY the raw JSON object (no ```json fences):

@@ -2,7 +2,7 @@
   "meta": {
     "label": "baseline",
     "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성, 2026-11-09 D-90(다듬기 문체 패턴 탐지·polish_tone 규칙)과 그 개정(예시 교체·부정어 아닌/아닙, 사람 글 기준 패턴 정리)으로 재생성, 2026-11-09 D-91(다듬기 제안을 작성 모델이 검토해 적용, common/polish_revise)로 재생성",
-    "content_hash": "sha256:62406c945bf08970c333f115ea81364f3817ed38e2f7ff68d61ff6b6a7c2f1c0"
+    "content_hash": "sha256:302e82293b7b350c06b34ca34130297d42821a65ef8f021cbdbc8dd0ca1d8421"
   },
   "schema_version": 1,
   "slots": {
@@ -396,7 +396,7 @@
       ]
     },
     "publish": {
-      "requires_approval": true,
+      "requires_approval": false,
       "note": {
         "heading": "## AI Information",
         "writer": "- 작성: $models",

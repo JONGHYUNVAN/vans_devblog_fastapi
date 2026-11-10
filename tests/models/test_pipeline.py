@@ -36,7 +36,7 @@ def test_parameter_defaults_reproduce_the_pre_1a_settings_and_constants():
         FinalReadKind.CORE_MECHANISM_MISSING,
     ]
     assert parameters.polish.phrase_fixes[0] == ("하십시오", "한다")
-    assert parameters.publish.requires_approval is True
+    assert parameters.publish.requires_approval is False
     assert parameters.publish.note.heading == "## AI Information"
     assert parameters.publish.note.writer == "- 작성: $models"
     assert (parameters.glossary.min_terms, parameters.glossary.max_terms, parameters.glossary.full_list_max) == (

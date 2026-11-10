@@ -179,7 +179,8 @@ class PublishNoteParameters(BaseModel):
 class PublishParameters(BaseModel):
     """발행 조절 값: 승인 토글과 글 끝 AI Information 문구. 토글은 라운드가 고정한 버전에서 읽으므로 환경 변수로는 바꾸지 않는다(D-73)."""
 
-    requires_approval: bool = True  # 켜져 있으면 READY_TO_PUBLISH 에서 사람 승인을 기다린다 (D-17)
+    # 켜면 READY_TO_PUBLISH 에서 사람 승인을 기다린다. 기본은 자동 발행이다: 마음에 안 드는 글은 발행 뒤 지운다 (D-17 개정)
+    requires_approval: bool = False
     note: PublishNoteParameters = Field(default_factory=PublishNoteParameters)
 
 

@@ -18,6 +18,7 @@ Revise the previous Korean draft (`previous`) to resolve validation errors, revi
 - Maintain existing `<!-- sec:id -->` anchors. If a section referenced by an item is merged or removed, record the new anchor in `section_id_after`.
 - Adhere to all `structure_rules`, code tag rules (`python`/`typescript`/`json` vs `-snippet`), and `evidence` rules from `write_draft`.
 - Keep the register of `previous` consistent (do not switch between 합니다 and 다 styles while editing) and add no recap paragraphs or generic closers. When a fix needs new code, add a `-snippet` excerpt unless a complete file is the only way to prove the point, with Korean comments at the points that matter (the validation gate rejects long blocks without comments).
+- Keep `previous.title` unless `human_instruction` or a review item concerns it, or the revision changes what the article promises. A replaced title is a blog headline of at most 40 characters with one promise, no parentheses, and no colon subtitle.
 </resolution_rules>
 
 <length_budget>
