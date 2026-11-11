@@ -55,7 +55,9 @@ from app.services.round import category_options
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_WORDS = 3000  # 기존 draft_max_chars 20000자의 60~70%를 영어 단어로 어림한 값이다. 재 보지 않았다
+# 5단계 영어 본문(코드 제외)의 단어 상한. 첫 실행(2026-11-11)에서 영어 2,794단어 + 표·용어 정리 1,014단어가 한국어 22,945자
+# (코드 7,900자 포함, 영어 1단어 ≈ 한국어 3.9자)가 되어 작성 상한 20,000자를 넘었다. 표를 줄인 것과 합쳐 19,000자 안팎을 겨눈다
+DEFAULT_MAX_WORDS = 2200
 LAST_STAGE = len(STAGES)
 RUN_ID_PREFIX = "expository-"  # 실행 id 이자 영수증의 round_id. 라운드 id 와 섞이지 않게 앞에 붙인다
 TOPIC_KEYS = ("topic", "core_argument", "focus_mechanisms", "out_of_scope")

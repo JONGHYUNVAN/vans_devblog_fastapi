@@ -41,8 +41,10 @@ python -m cli.expository run --theme spring
 부를 때의 최신 버전을 쓴다. 최신 버전에 설명문 프롬프트가 없으면 시작하지 않는다(`seed` 먼저).
 
 - `--topic-file topic.json`: 1단계 결과(topic·core_argument·focus_mechanisms·out_of_scope)를 직접 준다. 1단계를 부르지 않는다.
-- `--stop-after 4`: 그 단계까지만 돌린다. `--run-dir <폴더>` 로 이어 한다.
-- `--max-words 3000`: 5단계 영어 본문의 단어 상한(코드 제외). 3000 은 기존 `draft_max_chars` 20000자의 60~70%를 어림한 값이고 재 보지 않았다.
+- `--stop-after 4`: 그 단계까지만 돌린다. `--run-id <실행 id>` 로 이어 한다.
+- `--redo-from 5`: 그 단계부터의 결과를 지우고 다시 부른다.
+- `--out post.md`: 끝난 글을 파일로 쓴다.
+- `--max-words 2200`: 5단계 영어 본문의 단어 상한(코드 제외). 첫 실행에서 3000(실제 2,794단어)이 표·용어 정리를 더해 한국어 22,945자가 되어 20,000자를 넘었다. 2200 은 19,000자 안팎을 겨눈 값이고 실제 실행으로 다시 재야 한다.
 - 환경 변수의 Mongo 접속 값과 벤더 키(`ANTHROPIC_API_KEY`·`GOOGLE_API_KEY`)를 쓴다. 단계 라우트 후보 중 키가 있는 첫 벤더를 부른다. `POST_BE_URL` 이 있으면 1단계에 카테고리 목록을 넣고, 없으면 카테고리 없이 고른다.
 
 ### 운영 컨테이너에서

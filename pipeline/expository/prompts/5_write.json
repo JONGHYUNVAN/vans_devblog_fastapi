@@ -14,7 +14,7 @@
   "article_structure": [
     "intro: Open with two or three sentences that state the problem and the article's point of view (core_message). A later step builds the meta description from this paragraph alone, so it must stand on its own. Then develop problem_statement as a concrete scenario with a short code excerpt, and end with the question the rest of the article answers.",
     "concept: Develop concept_definition. Define each core concept once, in the terms the later sections rely on.",
-    "mech-1, mech-2, ...: One section per item of outline.deep_dive_sections, in order, titled after its sub_topic. Open with the first sentence of principle as the topic sentence, develop it with supporting sentences and code or a text diagram, apply it to the intro scenario through mechanism_explanation, and close with the second sentence of principle as the concluding sentence.",
+    "mech-1, mech-2, ...: One section per item of outline.deep_dive_sections, in order, titled after its sub_topic. Open with the first sentence of principle as the topic sentence, develop it with supporting sentences and code or a text diagram, and apply it to the intro scenario through mechanism_explanation. The second sentence of principle is the point the section must have established by its end: work it into the last explanatory paragraph in your own words instead of appending it as a separate closing line.",
     "application: Develop practical_application.architecture_pattern with code that resolves the intro scenario. This is the first place the article presents the solution.",
     "exceptions: Develop practical_application.exception_case, giving the condition under which each exception applies.",
     "conclusion: Restate core_message in light of the mechanisms, then give a short checklist of questions a developer should ask before applying it."
@@ -23,6 +23,7 @@
     "output_language: Write in English. A later step translates the finished article into Korean.",
     "fidelity: Every claim about engine, runtime, or framework behavior must come from inputs.outline or follow directly from it. Do not add mechanisms, sections, or edge cases the outline does not contain. Details needed to make code complete (imports, annotations, method bodies) are allowed.",
     "argument_placement: Do not end mechanism sections with the solution. The mech sections explain why the problem happens; the solution first appears in application.",
+    "section_endings: Never end a section with a standalone one-sentence paragraph that sums the section up, and never open a section's last sentence with a summing-up adverb (Ultimately, In the end, In short, In other words, Put simply). A section ends when its explanation ends. No two mech sections may end with the same sentence pattern.",
     "paragraphs: Put causal explanation in paragraphs. Link sentences with however, in contrast, therefore, or in other words where the logic turns; do not chop an explanation into a string of one-fact sentences. Use lists only for ordered steps and the conclusion checklist.",
     "reader_questions: Where the explanation turns, you may ask the reader the question they would have at that point and answer it right away.",
     "no_tables: Do not write summary or comparison tables. A later step adds them.",
