@@ -1,0 +1,15 @@
+{
+  "topic": "Why self-invocation bypasses Spring @Transactional",
+  "core_argument": "Moving methods that need a transaction boundary into a separate bean, so that every call goes through the proxy, structurally prevents the self-invocation problem.",
+  "focus_mechanisms": [
+    "How Spring AOP creates proxies (CGLIB subclassing and JDK dynamic proxies)",
+    "How an internal call through the this reference bypasses the proxy",
+    "Thread binding in TransactionInterceptor and TransactionSynchronizationManager",
+    "Why the REQUIRES_NEW propagation setting is ignored on self-invocation"
+  ],
+  "out_of_scope": [
+    "Distributed transactions (XA, 2PC)",
+    "AspectJ compile-time and load-time weaving",
+    "Reactive transactions (R2DBC)"
+  ]
+}

@@ -615,3 +615,95 @@ def make_tarball(tree: str, commit_sha: str = "a" * 40) -> bytes:
     ) as archive:
         archive.add(CODE_GRAPH_TREES / tree, arcname=f"{tree}-main")
     return buffer.getvalue()
+
+
+# 설명문 파이프라인(pipeline/expository) 단계 출력. 검사를 통과하는 최소 모양이다
+
+
+def make_expository_topic() -> dict[str, Any]:
+    return {
+        "topic": "Why self-invocation bypasses Spring @Transactional",
+        "core_argument": "Moving methods that need a transaction boundary into a separate bean prevents the problem.",
+        "focus_mechanisms": ["Proxy creation", "Internal calls through this", "Thread-bound transaction resources"],
+        "out_of_scope": ["Distributed transactions"],
+        "keywords": ["spring", "transaction", "proxy"],
+        "main_category_id": "main-1",
+        "sub_category_id": "sub-1",
+    }
+
+
+def make_expository_section(number: int) -> dict[str, str]:
+    return {
+        "sub_topic": f"Mechanism {number}",
+        "principle": (
+            f"The container wraps bean {number} in a proxy that runs advice before it delegates. "
+            "Therefore only calls that enter through the proxy get the advice."
+        ),
+        "mechanism_explanation": (
+            f"When placeOrder calls saveFailureLog through this, due to rule {number}, the setting is never read."
+        ),
+        "key_takeaway": f"Advice runs only on proxy entry {number}",
+    }
+
+
+def make_expository_outline(core_argument: str, section_count: int = 3) -> dict[str, Any]:
+    return {
+        "core_message": core_argument,
+        "introduction": {
+            "problem_statement": "OrderService calls saveFailureLog on itself, and the log row disappears on rollback.",
+            "concept_definition": "A proxy is the object the container registers in place of the bean.",
+        },
+        "deep_dive_sections": [make_expository_section(number) for number in range(1, section_count + 1)],
+        "practical_application": {
+            "architecture_pattern": "Move saveFailureLog into a separate OrderFailureLogger bean.",
+            "exception_case": "A helper that joins the outer transaction can stay a private method.",
+        },
+    }
+
+
+def expository_section_ids(section_count: int = 3) -> list[str]:
+    mechanisms = [f"mech-{number}" for number in range(1, section_count + 1)]
+    return ["intro", "concept", *mechanisms, "application", "exceptions", "conclusion"]
+
+
+def make_expository_markdown(sentence: str, section_count: int = 3, glossary: bool = False) -> str:
+    """섹션마다 제목 하나와 문단 하나. application 에 code-1 코드 블록이 있다. sentence 의 {id} 는 섹션 id 로 바뀐다."""
+    parts: list[str] = []
+    ids = expository_section_ids(section_count) + (["glossary"] if glossary else [])
+    for number, section_id in enumerate(ids, start=1):
+        parts.append(f"<!-- sec:{section_id} -->\n## {number}. {section_id}\n\n{sentence.format(id=section_id)}\n")
+        if section_id == "application":
+            parts.append("<!-- sec:code-1 -->\n```java-snippet\n@Service\nclass OrderFailureLogger {}\n```\n")
+    return "\n".join(parts)
+
+
+def make_expository_english_article(section_count: int = 3) -> str:
+    sentence = "The {id} part explains how the proxy decides which calls get the transaction. It names no options."
+    return make_expository_markdown(sentence, section_count)
+
+
+def make_expository_korean_article(section_count: int = 3, glossary: bool = True) -> str:
+    sentence = (
+        "{id} 절은 프록시가 어떤 호출에 트랜잭션을 붙이는지 설명합니다. 같은 객체 안의 호출은 프록시를 거치지 않습니다."
+    )
+    return make_expository_markdown(sentence, section_count, glossary)
+
+
+def make_expository_summaries(section_count: int = 3) -> list[dict[str, Any]]:
+    rows = [{"item": "Proxy", "explanation": "Runs advice first."}, {"item": "Target", "explanation": "Does the work."}]
+    return [
+        {"section_id": section_id, "title": f"Part {section_id}", "rows": rows}
+        for section_id in expository_section_ids(section_count)[:-1]
+    ]
+
+
+def make_expository_terms() -> list[dict[str, Any]]:
+    return [
+        {
+            "term_en": "proxy",
+            "term_ko": "프록시",
+            "keep_english": False,
+            "definition": "an object that stands in for another",
+        },
+        {"term_en": "propagation", "term_ko": "전파 속성", "keep_english": False, "definition": ""},
+    ]

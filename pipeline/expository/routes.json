@@ -1,0 +1,31 @@
+{
+  "1_topic_thesis": [
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 8000 }
+  ],
+  "2_outline": [
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000 }
+  ],
+  "3_outline_review": [
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000 }
+  ],
+  "4_outline_fact_check": [
+    { "provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000 },
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000 }
+  ],
+  "5_write": [
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 32000 }
+  ],
+  "6_article_fact_check": [
+    { "provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000 },
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000 }
+  ],
+  "7_summary_glossary": [
+    { "provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000 }
+  ],
+  "8_translate": [
+    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 32000 }
+  ],
+  "9_summarize": [
+    { "provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 2000 }
+  ]
+}

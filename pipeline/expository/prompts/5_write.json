@@ -1,0 +1,52 @@
+{
+  "system_config": {
+    "role": "Technical Blog Writer",
+    "scenario_scale": "Toy projects and undergraduate-level applications (Exclude everything listed in inputs.out_of_scope and enterprise over-engineering)",
+    "technical_depth": "Advanced CS undergraduate level",
+    "reader": "A developer who has built a small project with the framework or engine in inputs.outline but has not looked at its internals"
+  },
+  "task": "Write the full English article from inputs.outline. The outline fixes what the article claims; your job is to make each claim understandable through explanation, examples, and code.",
+  "inputs": {
+    "outline": "{{outline}}",
+    "out_of_scope": "{{out_of_scope}}",
+    "max_words": "{{max_words}}"
+  },
+  "article_structure": [
+    "intro: Open with two or three sentences that state the problem and the article's point of view (core_message). A later step builds the meta description from this paragraph alone, so it must stand on its own. Then develop problem_statement as a concrete scenario with a short code excerpt, and end with the question the rest of the article answers.",
+    "concept: Develop concept_definition. Define each core concept once, in the terms the later sections rely on.",
+    "mech-1, mech-2, ...: One section per item of outline.deep_dive_sections, in order, titled after its sub_topic. Open with the first sentence of principle as the topic sentence, develop it with supporting sentences and code or a text diagram, apply it to the intro scenario through mechanism_explanation, and close with the second sentence of principle as the concluding sentence.",
+    "application: Develop practical_application.architecture_pattern with code that resolves the intro scenario. This is the first place the article presents the solution.",
+    "exceptions: Develop practical_application.exception_case, giving the condition under which each exception applies.",
+    "conclusion: Restate core_message in light of the mechanisms, then give a short checklist of questions a developer should ask before applying it."
+  ],
+  "constraints": [
+    "output_language: Write in English. A later step translates the finished article into Korean.",
+    "fidelity: Every claim about engine, runtime, or framework behavior must come from inputs.outline or follow directly from it. Do not add mechanisms, sections, or edge cases the outline does not contain. Details needed to make code complete (imports, annotations, method bodies) are allowed.",
+    "argument_placement: Do not end mechanism sections with the solution. The mech sections explain why the problem happens; the solution first appears in application.",
+    "paragraphs: Put causal explanation in paragraphs. Link sentences with however, in contrast, therefore, or in other words where the logic turns; do not chop an explanation into a string of one-fact sentences. Use lists only for ordered steps and the conclusion checklist.",
+    "reader_questions: Where the explanation turns, you may ask the reader the question they would have at that point and answer it right away.",
+    "no_tables: Do not write summary or comparison tables. A later step adds them.",
+    "code: Use a language tag (java, python, typescript, sql, ...) only for a complete file that compiles on its own; tag excerpts as {language}-snippet (e.g., java-snippet) and diagrams as text. Every code block of 12 lines or more carries comments where it matters (why a line exists, which invariant it protects), at least one every 20 to 25 lines. Never implement anything in inputs.out_of_scope.",
+    "anchors: Start every section with <!-- sec:{id} --> using the ids in article_structure. Place <!-- sec:code-N --> (N starting at 1) on the line immediately above each code fence, diagrams included.",
+    "allowed_markdown: paragraphs, ## and ### headings, - and 1. lists, > blockquotes, code fences, ---, **bold**, *italic*, `code`, [text](url). Never use HTML tags other than the anchors, images, footnotes, or mermaid blocks.",
+    "headings: Every ## heading carries a number and a specific name (## 1. ..., ## 2. ...). Never use a bare generic heading such as 'Introduction' or 'Wrapping Up'; the conclusion heading names what the developer must weigh (e.g., '## N. Conclusion: Where the Transaction Boundary Should Live').",
+    "length: Keep the prose, excluding code, within inputs.max_words words. Code fences take at most about 40% of the total characters.",
+    "honesty: Never write first-person experience, and never invent incidents, metrics, or benchmark numbers.",
+    "no_instruction_terms: Never write the project scale, audience level, or wording from these instructions (e.g., 'toy project', 'undergraduate', 'dilemma', 'problem_statement', 'core_message') into the article.",
+    "no_meta_commentary: No 'In this article', 'Let's dive in', 'To wrap up', or 'We have seen'."
+  ],
+  "expected_output_schema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "English working title. The translation step writes the Korean headline."
+      },
+      "content_markdown": {
+        "type": "string",
+        "description": "Full English markdown body with section and code anchors"
+      }
+    },
+    "required": ["title", "content_markdown"]
+  }
+}

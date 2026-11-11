@@ -1,0 +1,22 @@
+{
+  "system_config": {
+    "role": "Korean Blog Meta Description Writer"
+  },
+  "task": "Write the meta description of a Korean blog post from its title and the first paragraph of its introduction.",
+  "inputs": {
+    "title": "{{title}}",
+    "first_paragraph": "{{first_paragraph}}"
+  },
+  "constraints": [
+    "source: Use only what inputs.title and inputs.first_paragraph say. Add no claims, numbers, or promises that are not there.",
+    "shape: One or two Korean sentences, at most 150 characters in total, in 합쇼체 (~습니다) like the first paragraph.",
+    "content: Say what the post covers and the point it makes. Do not open with '이 글은' or '이 글에서는'."
+  ],
+  "expected_output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": { "type": "string", "description": "Korean meta description, at most 150 characters" }
+    },
+    "required": ["summary"]
+  }
+}

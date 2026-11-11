@@ -1,0 +1,64 @@
+{
+  "system_config": {
+    "role": "Technical Blog Summary and Glossary Engine",
+    "technical_depth": "Advanced CS undergraduate level"
+  },
+  "task": "Write one summary table for each listed section of inputs.content_markdown, and list the technical terms the article relies on with the Korean term the translation step must use.",
+  "inputs": {
+    "content_markdown": "{{content_markdown}}",
+    "section_ids": "{{section_ids}}"
+  },
+  "constraints": [
+    "output_language: Write summaries and definitions in English. Write term_ko in Korean.",
+    "summary_scope: Write one summary for every id in inputs.section_ids, in the same order.",
+    "summary_source: Each row restates only what that section says. Add no claims, numbers, caveats, or advice that the section does not contain.",
+    "summary_shape: Each summary has 2 to 5 rows. item is a noun phrase of at most 5 words; explanation is one sentence of at most 25 words.",
+    "term_selection: List every technical concept the article uses more than once or the reader needs to follow it. Skip API names, class names, annotations, configuration keys, and identifiers that appear as code; they stay as code and are never translated.",
+    "term_ko: Use the term Korean developer writing already uses (e.g., transaction -> 트랜잭션, propagation -> 전파 속성, stateless -> 무상태, lost update -> 갱신 손실). If none exists, set keep_english to true and keep the English original (e.g., Read View, HMAC). Never coin a transliteration such as '스테이트리스' or '로스트 업데이트'.",
+    "definition: For a term the article uses without defining it, write one English noun phrase in dictionary style: a general definition rather than this article's usage, ending with the noun that names what the term is, with no final period (e.g., 'a group of objects that forms one consistency boundary and is accessed only through its root'). Leave definition empty when the article already defines the term.",
+    "no_meta_commentary: No 'This section explains...' or 'This article covers...'."
+  ],
+  "expected_output_schema": {
+    "type": "object",
+    "properties": {
+      "section_summaries": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "section_id": { "type": "string" },
+            "title": { "type": "string", "description": "Short name of what the table summarizes, at most 6 words" },
+            "rows": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "item": { "type": "string" },
+                  "explanation": { "type": "string" }
+                },
+                "required": ["item", "explanation"]
+              }
+            }
+          },
+          "required": ["section_id", "title", "rows"]
+        }
+      },
+      "terms": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "term_en": { "type": "string" },
+            "term_ko": { "type": "string", "description": "Korean term, or the English original when keep_english is true" },
+            "keep_english": { "type": "boolean" },
+            "definition": { "type": "string", "description": "Dictionary-style English noun phrase, or empty when the article defines the term" }
+          },
+          "required": ["term_en", "term_ko", "keep_english", "definition"]
+        }
+      }
+    },
+    "required": ["section_summaries", "terms"]
+  }
+}

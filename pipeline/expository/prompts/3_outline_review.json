@@ -1,0 +1,60 @@
+{
+  "system_config": {
+    "role": "Technical Blog Outline Review Engine",
+    "scenario_scale": "Toy projects and undergraduate-level applications (Exclude everything listed in inputs.out_of_scope and enterprise over-engineering)",
+    "technical_depth": "Advanced CS undergraduate level (Focus on the internal mechanisms listed in inputs.focus_mechanisms)"
+  },
+  "task": "Review inputs.outline.deep_dive_sections. Remove sections that are weakly related or duplicated. If fewer than 3 sections remain, write new sections to bring the count back to 3. Return the full outline in the same structure.",
+  "inputs": {
+    "topic": "{{topic}}",
+    "core_argument": "{{core_argument}}",
+    "focus_mechanisms": "{{focus_mechanisms}}",
+    "out_of_scope": "{{out_of_scope}}",
+    "outline": "{{outline}}"
+  },
+  "review_criteria": [
+    "out_of_scope: Remove a section whose explanation depends on anything listed in inputs.out_of_scope.",
+    "weak_relevance: Remove a section if deleting it would leave the cause of the problem in outline.introduction.problem_statement explained just as well, i.e., its mechanism_explanation does not lead to the observed wrong result.",
+    "duplication: If two sections rely on the same principle, keep the one with the clearer causal chain and remove the other. Judge by principle, not by wording: two sections that end in a similar observed result but rest on different principles are not duplicates."
+  ],
+  "constraints": [
+    "output_language: Write every string value in English, except core_message, which stays exactly as given.",
+    "remove_only_by_criteria: Remove a section only when it meets one of review_criteria. Never remove a section just to shorten the outline.",
+    "preserve_verbatim: Copy every kept section and every field outside deep_dive_sections exactly as given. Do NOT rewrite, polish, merge, or reorder them.",
+    "refill_only_when_short: Add new sections only if fewer than 3 sections remain after removal, and add exactly as many as needed to reach 3. If 3 or more remain, add nothing.",
+    "refill_source: Each new section must cover an item of inputs.focus_mechanisms that no section in inputs.outline (kept or removed) covered. If none is left, use a closely related mechanism that explains the problem in problem_statement. A new section must not meet any review_criteria itself.",
+    "refill_position: Insert each new section where it fits the logical flow among the kept sections.",
+    "argument_placement: A new section explains why the problem in problem_statement occurs. Do NOT state the core_argument's solution in it.",
+    "principle_shape: Write principle of every new section as exactly two sentences: (1) a topic sentence stating how the mechanism works, which the paragraph will develop, and (2) a concluding sentence stating what necessarily follows from it, independent of the scenario. Name a framework class or method only if the reader will meet it in logs, stack traces, or while debugging.",
+    "causal_mechanism: Write mechanism_explanation of every new section as one declarative causal sentence following the structure: 'When [A: the code path from the problem situation] executes, due to [B: the principle], [C: the observed result] occurs.'",
+    "no_instruction_terms: Never write the project scale, audience level, or wording from these instructions (e.g., 'toy project', 'undergraduate', 'dilemma') into output text.",
+    "no_meta_commentary: Strictly forbid meta-statements explaining the purpose of the article (e.g., 'This article explores...', 'Let's take a look at...').",
+    "concise_takeaway: Compress key_takeaway of every new section into a single English noun phrase of at most 10 words."
+  ],
+  "expected_output_schema": {
+    "type": "object",
+    "properties": {
+      "outline": {
+        "type": "object",
+        "description": "Revised outline with exactly the same keys and structure as inputs.outline; deep_dive_sections has at least 3 items"
+      },
+      "review_log": {
+        "type": "array",
+        "description": "One entry per removed or added section; empty array if nothing changed",
+        "items": {
+          "type": "object",
+          "properties": {
+            "action": { "type": "string", "enum": ["removed", "added"] },
+            "sub_topic": { "type": "string" },
+            "reason": {
+              "type": "string",
+              "description": "One English sentence. For removed: which review_criteria applied and why. For added: which gap it fills."
+            }
+          },
+          "required": ["action", "sub_topic", "reason"]
+        }
+      }
+    },
+    "required": ["outline", "review_log"]
+  }
+}

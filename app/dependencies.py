@@ -7,6 +7,7 @@ import secrets
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial
+from pathlib import Path
 from typing import Annotated, Any
 
 from elasticsearch import Elasticsearch
@@ -16,6 +17,7 @@ from pymongo import MongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.database import Database
 
+from app.agents.expository import load_prompts, load_routes
 from app.clients.es import create_es, is_es_reachable
 from app.clients.github import GitHubClient
 from app.clients.kis.stream import KISStreamManager
@@ -35,6 +37,7 @@ from app.repositories.agent_call import AgentCallRepository
 from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.code_graph import CodeGraphRepository
 from app.repositories.code_graph_repo_config import CodeGraphRepoConfigRepository
+from app.repositories.expository_run import ExpositoryRunRepository
 from app.repositories.glossary import GlossaryRepository
 from app.repositories.model_route import ModelRouteRepository
 from app.repositories.pipeline_version import PipelineVersionRepository
@@ -50,6 +53,7 @@ from app.services.code_graph import AnalysisTracker, CodeGraphRepoConfigService,
 from app.services.derived_records import DerivedRecordsWriter
 from app.services.draft_decision import DraftDecisionService
 from app.services.draft_pipeline import DraftPipelineService, DraftPublisher
+from app.services.expository import ExpositoryPipeline
 from app.services.glossary import GlossaryService
 from app.services.glossary_views import GlossaryViewService
 from app.services.health import HealthService
@@ -343,6 +347,22 @@ def build_publisher(settings: Settings) -> PostBEPublisher | None:
         settings.publish_timeout_s,
         user_service_url=settings.user_service_url,
         accounts=build_publisher_accounts(settings),
+    )
+
+
+def build_expository_pipeline(settings: Settings, run_dir: Path) -> ExpositoryPipeline:
+    """설명문 파이프라인 러너. 프롬프트·라우트는 pipeline/expository 의 파일이고 결과는 run_dir 에 쓴다.
+
+    프롬프트·라우트 파일이 없거나 JSON 이 아니면 여기서 던진다. Mongo 는 쓰지 않는다. Post BE 는 1단계 카테고리 목록에만 쓴다.
+    """
+    return ExpositoryPipeline(
+        registry=build_llm_registry(settings),
+        routes=load_routes(),
+        prompts=load_prompts(),
+        repository=ExpositoryRunRepository(run_dir),
+        publisher=build_publisher(settings),
+        main_categories=settings.agent_main_category_values,
+        timeout_s=settings.draft_timeout_s,
     )
 
 
