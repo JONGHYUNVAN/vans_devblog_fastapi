@@ -1,13 +1,12 @@
-"""설명문 파이프라인 CLI. `python -m cli.expository seed` 로 프롬프트·라우트를 파이프라인 버전에 넣고, `run` 으로 글 하나를 만든다.
+"""설명문 파이프라인 CLI. `seed` 로 프롬프트·라우트를 파이프라인 버전에 넣고, `run` 으로 글 하나를 만들고, `show` 로 결과를 본다.
 
 프롬프트·단계별 모델은 Mongo 파이프라인 버전에 있다(09 문서 D-99). 한 단계만 고칠 때는 기존 명령
-`python -m cli agents pipeline edit-prompt expository <단계> --file …`·`edit-route EXPOSITORY:<단계> …` 를 쓴다.
+`python -m cli agents pipeline edit-prompt expository <단계> --file …` 을 쓴다. 실행 결과는 Mongo `expository_runs` 다(D-100).
 """
 
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,11 +15,11 @@ import typer
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.dependencies import build_expository_pipeline, build_pipeline_version_service, open_async_database
-from app.services.expository import DEFAULT_MAX_WORDS, LAST_STAGE, RunSeed
+from app.schemas.expository import ExpositoryResult
+from app.services.expository import DEFAULT_MAX_WORDS, LAST_STAGE, RunSeed, new_run_id
 from app.services.pipeline_versions import meta_of
 
 EXPOSITORY_DIR = Path(__file__).resolve().parents[1] / "pipeline" / "expository"  # 버전에 넣는 입력(프롬프트·라우트)
-RUNS_DIR = EXPOSITORY_DIR / "runs"
 
 app = typer.Typer(help="설명문 파이프라인 (pipeline/expository)", no_args_is_help=True)
 
@@ -46,6 +45,17 @@ def _run[T](coroutine_factory: Callable[..., Awaitable[T]]) -> T:
         raise typer.Exit(1) from exc
 
 
+def _write_markdown(result: ExpositoryResult, out: Path | None) -> None:
+    """끝난 글을 파일로 쓰거나(--out) 표준 출력에 찍는다. 끝나지 않은 실행은 끝난 단계만 알린다."""
+    if result.markdown is None:
+        typer.echo(f"{result.run_id}: 끝난 단계 {result.finished_stages}. 이어 하려면 run --run-id {result.run_id}")
+    elif out is None:
+        typer.echo(result.markdown)
+    else:
+        out.write_text(result.markdown, encoding="utf-8", newline="\n")
+        typer.echo(f"{result.run_id}: {out} (파이프라인 버전 {result.pipeline_version})")
+
+
 @app.command()
 def seed(
     directory: Annotated[
@@ -64,8 +74,8 @@ def seed(
 
 @app.command()
 def run(
-    run_dir: Annotated[
-        Path | None, typer.Option("--run-dir", help="이어 할 실행 폴더. 없으면 runs/ 아래에 새로 만든다")
+    run_id: Annotated[
+        str | None, typer.Option("--run-id", help="이어 할 실행 id. 없으면 새 실행(expository-<UTC 시각>)")
     ] = None,
     theme: Annotated[str, typer.Option("--theme", help="주제 키워드(1단계 입력)")] = "",
     avoid: Annotated[list[str] | None, typer.Option("--avoid", help="겹치면 안 되는 주제. 여러 번 줄 수 있다")] = None,
@@ -79,24 +89,43 @@ def run(
     stop_after: Annotated[
         int, typer.Option("--stop-after", min=1, max=LAST_STAGE, help="이 단계까지만 돌린다")
     ] = LAST_STAGE,
+    redo_from: Annotated[
+        int | None,
+        typer.Option("--redo-from", min=1, max=LAST_STAGE, help="이 단계부터의 결과를 지우고 다시 부른다"),
+    ] = None,
     max_words: Annotated[
         int, typer.Option("--max-words", help="5단계 영어 본문의 단어 상한(코드 제외)")
     ] = DEFAULT_MAX_WORDS,
+    out: Annotated[Path | None, typer.Option("--out", help="끝난 글(마크다운)을 쓸 파일. 없으면 찍지 않는다")] = None,
 ) -> None:
-    """1~9단계를 최신 파이프라인 버전으로 돌린다. 같은 --run-dir 로 다시 부르면 입력이 바뀌지 않은 단계는 건너뛴다."""
-    target = run_dir or RUNS_DIR / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    """1~9단계를 최신 파이프라인 버전으로 돌린다. 같은 --run-id 로 다시 부르면 입력이 바뀌지 않은 단계는 건너뛴다."""
+    target = run_id or new_run_id()
     topic = json.loads(topic_file.read_text(encoding="utf-8")) if topic_file else None
     seed_values = RunSeed(theme_keyword=theme, avoid_topics=avoid or [], topic=topic, max_words=max_words)
-    typer.echo(f"실행 폴더: {target}")
+    typer.echo(f"실행 id: {target}")
 
-    async def _pipeline(database, settings) -> dict[str, Any] | None:
-        return await build_expository_pipeline(database, settings, target).run(seed_values, stop_after)
+    async def _pipeline(database, settings) -> ExpositoryResult:
+        pipeline = build_expository_pipeline(database, settings)
+        return await pipeline.run(target, seed_values, stop_after=stop_after, redo_from=redo_from)
 
-    final = _run(_pipeline)
-    if final is None:
-        typer.echo(f"{stop_after}단계까지 마쳤다. 이어 하려면 --run-dir {target}")
+    result = _run(_pipeline)
+    if result.markdown is None or out is not None:
+        _write_markdown(result, out)
     else:
-        typer.echo(f"완료: {target / 'final.md'} (파이프라인 버전 {final['pipeline_version']})")
+        typer.echo(f"완료: {result.run_id} (파이프라인 버전 {result.pipeline_version}). 글은 show {result.run_id}")
+
+
+@app.command()
+def show(
+    run_id: Annotated[str, typer.Argument(help="실행 id")],
+    out: Annotated[Path | None, typer.Option("--out", help="글을 쓸 파일. 없으면 표준 출력")] = None,
+) -> None:
+    """실행의 끝난 글(제목·요약·본문 마크다운)을 찍는다. 끝나지 않았으면 끝난 단계만 알린다."""
+
+    async def _show(database, settings) -> ExpositoryResult:
+        return await build_expository_pipeline(database, settings).get_result(run_id)
+
+    _write_markdown(_run(_show), out)
 
 
 if __name__ == "__main__":

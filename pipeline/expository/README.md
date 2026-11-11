@@ -47,25 +47,35 @@ python -m cli.expository run --theme spring
 
 ### 운영 컨테이너에서
 
-키가 운영 환경 변수에 있으므로 CloudType 컨테이너 터미널(작업 폴더 `/srv`)에서 돌린다. 이미지에 이 폴더가 들어 있고 `runs/` 만 쓸 수 있다(Dockerfile). 배포 뒤 `python -m cli.expository seed` 를 한 번 돌려 둔다. 한 번에 수십 분 걸리므로 터미널이 끊겨도 돌도록 `nohup` 으로 띄운다.
+키가 운영 환경 변수에 있으므로 CloudType 컨테이너 터미널(작업 폴더 `/srv`)에서 돌린다. 배포 뒤 `python -m cli.expository seed` 를 한 번 돌려 둔다. 한 번에 수십 분 걸리므로 터미널이 끊겨도 돌도록 `nohup` 으로 띄운다.
 
 ```bash
 nohup python -m cli.expository run --topic-file pipeline/expository/examples/spring_self_invocation.topic.json > /tmp/expository.log 2>&1 &
 ```
 
-진행은 실행 폴더에 단계 결과 파일(`{단계}.json`)이 생기는 것으로 본다. 호출별 모델·토큰·검사 오류·원문은 영수증(`agent_calls`, `round_id` 가 `expository-<실행 폴더 이름>`)에 있다. 끝나면 `cat /tmp/expository.log` 에 실행 폴더와 성공·실패가 나오고, 결과는 `cat pipeline/expository/runs/<시각>/final.md` 로 본다. 컨테이너 파일은 재배포·재시작 때 사라지므로 필요한 결과는 그 전에 옮긴다.
+`/tmp/expository.log` 첫 줄에 실행 id(`expository-<UTC 시각>`)가 나온다. 끝난 글은 그 id 로 본다.
 
-결과는 `runs/<시각>/`(git 제외)에 단계마다 남는다.
+```bash
+python -m cli.expository show expository-20261111-120000
+```
 
-| 파일 | 내용 |
+끝나지 않은 실행이면 끝난 단계 목록을 찍는다. 결과가 Mongo 에 있으므로 컨테이너가 다시 떠도 남고, 다른 PC 에서도 같은 id 로 이어 하거나 볼 수 있다.
+
+### 실행 결과가 남는 곳
+
+실행 하나가 Mongo `expository_runs` 문서 하나다(`_id` 가 실행 id, 09 문서 D-100).
+
+| 필드 | 내용 |
 |---|---|
-| `{단계}.prompt.json` | 입력을 채운 프롬프트 |
-| `{단계}.json` | 검사를 통과한 결과 |
-| `6_article_fact_check.article.md`, `.rejected_patches.json` | 패치를 적용한 영어 본문, 버린 패치 |
-| `7_summary_glossary.article.md` | 표·용어 정리를 넣은 영어 본문(번역 입력) |
-| `final.md`, `final.json` | 한국어 제목·요약·본문, 키워드·카테고리, 마지막 실행의 `pipeline_version` |
+| `stage_outputs.{단계}` | 검사를 통과한 결과 |
+| `stage_prompts.{단계}` | 그 결과를 만든 프롬프트(입력을 채운 것) |
+| `checked_markdown`, `rejected_patches` | 6단계 패치를 적용한 영어 본문, 버린 패치 |
+| `assembled_markdown` | 표·용어 정리를 넣은 영어 본문(번역 입력) |
+| `article` | 한국어 제목·요약·본문, 키워드·카테고리, 글을 끝낸 실행의 `pipeline_version` |
 
-같은 `--run-dir` 로 다시 돌리면 결과 파일이 있고 입력을 채운 프롬프트가 지난번과 같은 단계는 건너뛴다. 앞 단계 결과를 고치거나 버전의 프롬프트가 바뀌면 그 단계부터 다시 부른다(실행은 버전을 고정하지 않는다). 한 단계를 다시 부르려면 그 단계의 `.json` 을 지운다.
+호출별 모델·토큰·검사 오류·원문은 영수증(`agent_calls`, `round_id` 가 실행 id, `item_id` 가 단계)에 있다.
+
+같은 `--run-id` 로 다시 돌리면 결과가 있고 입력을 채운 프롬프트가 그 결과를 만든 프롬프트와 같은 단계는 건너뛴다. 앞 단계 결과가 달라지거나 버전의 프롬프트가 바뀌면 그 단계부터 다시 부른다(실행은 버전을 고정하지 않는다). 프롬프트가 그대로인데 다시 부르려면 `--redo-from` 을 쓴다.
 
 ## 단계
 
@@ -90,9 +100,9 @@ nohup python -m cli.expository run --topic-file pipeline/expository/examples/spr
 - 1 뒤: focus_mechanisms 3개 이상, keywords 3개, 카테고리 쌍이 categories 에 있다, topic 에 `vs`·`versus`·`difference between` 이 없다. `--topic-file` 로 준 값은 앞의 네 필드만 본다.
 - 2 뒤: `core_message == core_argument`, 섹션 수 == focus_mechanisms 수, principle 두 문장, mechanism_explanation 한 문장, key_takeaway 10단어 이하, 지시문 낱말(`toy project`, `undergraduate`, `dilemma`, 필드 이름)이 없다.
 - 3 뒤: 출력 섹션마다 입력 섹션과 글자까지 같거나 review_log 에 `added` 로 있다. 빠진 섹션은 `removed` 로 있다. deep_dive_sections 밖 필드는 입력과 같다. 3개 이상 남았는데 더하지 않았다.
-- 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location 만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `2_outline.json` 을 지우고 다시 돌린다.
+- 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location 만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `--redo-from 2` 로 뼈대부터 다시 돌린다.
 - 5 뒤: 섹션 앵커가 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion` 순서다. 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
-- 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 `rejected_patches.json` 에 남는다.
+- 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 실행 문서의 `rejected_patches` 에 남는다.
 - 7 뒤(코드): `conclusion` 을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 결론 끝에 뼈대의 sub_topic | key_takeaway 로 `**📊 Overview**` 표, 정의가 있는 용어로 `<!-- sec:glossary -->` 용어 정리 절을 붙인다.
 - 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 영어본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 길이(`draft_min_chars`~`draft_reject_chars`, 버전의 조절 값)·변환·합쇼체·명령형·코드 주석 검사.
 - 9 뒤: 요약 150자 이하, "이 글"로 시작하지 않는다.
@@ -112,6 +122,5 @@ nohup python -m cli.expository run --topic-file pipeline/expository/examples/spr
 ## 아직 없는 것
 
 - 실제 모델로 돌린 결과. 단위 테스트는 가짜 LLM 이다(`tests/services/test_expository*.py`, `tests/agents/test_expository.py`). 2단계 뼈대만 대화 세션에서 한 번 돌렸다(2026-11-11, 영어 출력으로 바꾸기 전 버전).
-- 발행. `final.json` 을 Post BE 로 올리는 길은 없다.
-- 단계 결과의 Mongo 저장. 이어 하기용 결과는 실행 폴더 파일이라 컨테이너가 다시 뜨면 사라진다(영수증은 남는다).
+- 발행. 끝난 글(`article`)을 Post BE 로 올리는 길은 없다.
 - 실행이 고칠 수 없는 사실 오류(blocking)에서 뼈대를 자동으로 다시 만드는 것. 지금은 멈추고 사람이 다시 돌린다.
