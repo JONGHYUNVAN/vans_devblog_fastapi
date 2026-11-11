@@ -135,6 +135,16 @@ async def test_exhausting_retries_raises_after_max_attempts_without_final_sleep(
     assert harness.sleeps == [1.0, 2.0]
 
 
+async def test_timeout_is_retried_only_once():
+    # 같은 입력의 시간 초과는 대개 되풀이된다. 처음 시도와 재시도 1회까지만 부른다 (D-97)
+    harness = Harness([LLMTransportError("read timeout", timed_out=True)] * 3 + [GOOD], max_llm_retries=3)
+
+    with pytest.raises(LLMRetriesExhaustedError, match="failed 2 times"):
+        await harness.call()
+
+    assert len(harness.llm.calls) == 2
+
+
 async def test_budget_exceeded_before_call_leaves_no_receipt():
     harness = Harness([GOOD])
     draft = make_draft(token_limit=1_000)

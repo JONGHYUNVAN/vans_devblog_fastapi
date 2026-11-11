@@ -67,11 +67,12 @@ class LLMTransportError(AppError):
     status_code = 503
     error = "LLM call failed"
 
-    def __init__(self, message: str, *, rate_limited: bool = False) -> None:
+    def __init__(self, message: str, *, rate_limited: bool = False, timed_out: bool = False) -> None:
         super().__init__(message)
         self.rate_limited = (
             rate_limited  # 429. 호출 서비스가 그 벤더의 동시 호출을 잠시 1건으로 줄인다 (설계 04 문서 9절)
         )
+        self.timed_out = timed_out  # 제한 시간 초과. 같은 입력이면 대개 또 넘으므로 한 번만 다시 부른다 (D-97)
 
 
 class LLMOutputError(AppError):

@@ -26,7 +26,9 @@ async def post_json(
         async with httpx2.AsyncClient(transport=transport, timeout=timeout) as client:
             response = await client.post(url, headers=headers, json=body)
     except httpx2.HTTPError as exc:
-        raise LLMTransportError(f"{vendor}: {type(exc).__name__}: {exc}") from exc
+        raise LLMTransportError(
+            f"{vendor}: {type(exc).__name__}: {exc}", timed_out=isinstance(exc, httpx2.TimeoutException)
+        ) from exc
     if response.status_code == _RATE_LIMITED or response.status_code >= 500:
         raise LLMTransportError(
             f"{vendor}: HTTP {response.status_code}: {response.text[:200]}",

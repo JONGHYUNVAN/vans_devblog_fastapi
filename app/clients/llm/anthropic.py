@@ -58,7 +58,7 @@ class AnthropicClient:
         for _ in range(_MAX_CONTINUATIONS + 1):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise LLMTransportError("anthropic: timed out across pause_turn continuations")
+                raise LLMTransportError("anthropic: timed out across pause_turn continuations", timed_out=True)
             response = await self._create(request | {"messages": chat, "timeout": remaining})
             prompt_tokens += response.usage.input_tokens
             completion_tokens += response.usage.output_tokens
@@ -82,7 +82,9 @@ class AnthropicClient:
         try:
             return await self._client.messages.create(**request)
         except anthropic.APIConnectionError as exc:  # 타임아웃(APITimeoutError) 포함
-            raise LLMTransportError(f"anthropic: {type(exc).__name__}: {exc}") from exc
+            raise LLMTransportError(
+                f"anthropic: {type(exc).__name__}: {exc}", timed_out=isinstance(exc, anthropic.APITimeoutError)
+            ) from exc
         except anthropic.APIStatusError as exc:
             if exc.status_code == 429 or exc.status_code >= 500:
                 raise LLMTransportError(

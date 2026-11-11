@@ -65,6 +65,9 @@ _RATE_LIMIT_COOLDOWN_S = 30.0  # 429 뒤 그 벤더의 동시 호출을 1건으�
 _DEFAULT_MAX_ATTEMPTS = (
     Parameters().max_llm_retries
 )  # 호출자가 라운드 버전의 값을 넘기지 않을 때(도구·테스트)의 재시도 수
+# 시간 초과는 처음 시도를 포함해 이 횟수까지만 부른다 (D-97). 같은 입력은 대개 또 넘고(Grok 11건, 시도당 600~1500초),
+# 영수증은 0 토큰이어도 벤더가 생성을 끝까지 해 과금했을 수 있다. 429·5xx·네트워크 오류는 max_attempts 그대로다
+_MAX_TIMEOUT_ATTEMPTS = 2
 _SEARCH_TOKEN_ESTIMATE = 30_000  # 검색 결과는 입력 토큰으로 잡히는데 메시지 문자 수에 없다. 예산 추정에 더한다
 # 본문 전체를 새로 쓰지 않는 호출은 REVIEW_TIMEOUT_S, 나머지와 검색 호출은 DRAFT_TIMEOUT_S 다
 _SHORT_KINDS = frozenset(
@@ -310,6 +313,7 @@ class AgentCallService:
         attempt_messages = list(messages)
         max_attempts = max_attempts if max_attempts is not None else _DEFAULT_MAX_ATTEMPTS
         last_error = ""
+        timeouts = 0
         label = f"{kind} for {round_id}/{slot or lens or item_id or ''}"
 
         for attempt in range(1, max_attempts + 1):
@@ -329,6 +333,7 @@ class AgentCallService:
                     )
             except LLMTransportError as exc:
                 error = f"transport: {exc.message}"
+                timeouts += exc.timed_out
                 if exc.rate_limited:
                     self._llm.gate(binding.provider).throttle(_RATE_LIMIT_COOLDOWN_S)
             else:
@@ -383,7 +388,7 @@ class AgentCallService:
                     raise LLMOutputTruncatedError(f"{label} was truncated: {last_error}")
                 binding = binding.model_copy(update={"max_output_tokens": raised})
                 continue
-            if attempt == max_attempts:
+            if attempt == max_attempts or timeouts >= _MAX_TIMEOUT_ATTEMPTS:
                 break
             if response is None:
                 await self._sleep(_BACKOFF_BASE_S * 2 ** (attempt - 1))
@@ -395,7 +400,7 @@ class AgentCallService:
                 ]
             # 본문이 빈 응답은 빈 assistant 메시지를 붙일 수 없어(벤더가 400 으로 거부한다) 같은 메시지로 다시 부른다
 
-        raise LLMRetriesExhaustedError(f"{label} failed {max_attempts} times: {last_error}")
+        raise LLMRetriesExhaustedError(f"{label} failed {attempt} times: {last_error}")
 
     async def get(self, call_id: str) -> AgentCall:
         """영수증 하나. 없으면 NotFoundError. replay 의 입력이다."""
