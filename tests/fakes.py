@@ -335,6 +335,10 @@ class FakeAsyncCursor:
         self._docs.sort(key=lambda doc: doc.get(key), reverse=direction < 0)
         return self
 
+    def limit(self, count: int) -> "FakeAsyncCursor":
+        self._docs = self._docs[:count]
+        return self
+
     async def to_list(self) -> list[dict[str, Any]]:
         return self._docs
 

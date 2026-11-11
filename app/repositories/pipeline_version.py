@@ -49,8 +49,8 @@ class PipelineVersionRepository:
 
     async def latest(self) -> PipelineVersion | None:
         """순번이 가장 큰 버전. 없으면 None."""
-        # 버전은 수십 건을 넘지 않으므로 전부 읽어 첫 건을 쓴다. 테스트의 FakeAsyncCollection 도 같은 호출 모양을 지원한다
-        docs = await self._versions.find({}).sort("seq", -1).to_list()
+        # 한 건만 읽는다. 문서마다 프롬프트 전문이 들어 있어 전부 읽으면 버전이 20건을 넘었을 때 소켓 타임아웃(20초)에 걸렸다(2026-11-11)
+        docs = await self._versions.find({}).sort("seq", -1).limit(1).to_list()
         return PipelineVersion.model_validate(docs[0]) if docs else None
 
     async def list_all(self) -> list[PipelineVersion]:
