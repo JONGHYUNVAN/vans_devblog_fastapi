@@ -172,7 +172,29 @@ def _inline_nodes(children: list[Token]) -> list[dict[str, Any]]:
                 raise ValueError(f"HTML 은 변환하지 않는다: {token.content[:40]}")
             case _:
                 raise ValueError(f"변환표에 없는 인라인 문법이다: {token.type}")
-    return nodes
+    return _rescue_unclosed_bold(nodes)
+
+
+# CommonMark 는 닫는 ** 앞이 문장부호이고 뒤가 글자면 닫힘으로 보지 않는다. 한국어는 조사가 붙어
+# "**작업 스레드(worker thread)**가" 가 별표째 남았다(2026-11-11 DeferredResult 글). 남은 쌍만 굵게로 되살린다
+_UNCLOSED_BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+
+
+def _rescue_unclosed_bold(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rescued: list[dict[str, Any]] = []
+    for node in nodes:
+        marks = node.get("marks", [])
+        if node["type"] != "text" or "**" not in node["text"] or any(mark["type"] == "code" for mark in marks):
+            rescued.append(node)
+            continue
+        text, position = node["text"], 0
+        for match in _UNCLOSED_BOLD.finditer(text):
+            _append_text(rescued, text[position : match.start()], marks)
+            bold = marks if any(mark["type"] == "bold" for mark in marks) else [*marks, {"type": "bold"}]
+            _append_text(rescued, match.group(1), bold)
+            position = match.end()
+        _append_text(rescued, text[position:], marks)
+    return rescued
 
 
 def _append_text(nodes: list[dict[str, Any]], text: str, marks: list[dict[str, Any]]) -> None:

@@ -124,7 +124,14 @@ class GlossaryService:
             latest = await self._versions.latest()
             candidates = latest.routes.get(ROUTE_GLOSSARY, []) if latest is not None else []
             extractor = candidates[0] if candidates else None
-        record = await self._run(draft, version, publishing_round, pipeline_version, extractor=extractor)
+        # 글당 예산(D-20)은 글쓰기 폭주를 멈추는 장치다. 보충은 사람이 부르는 일이고 대상 글은 대개 이미 발행됐으므로
+        # 이 호출에는 적용하지 않는다(2026-11-11 B 글: 사용량 605k 에 막혀 추출이 건너뛰어졌다). 저장 전에 원래 한도로 되돌린다
+        token_limit = draft.token_limit
+        draft.token_limit = 1 << 62
+        try:
+            record = await self._run(draft, version, publishing_round, pipeline_version, extractor=extractor)
+        finally:
+            draft.token_limit = token_limit
         draft.glossary = record
         await self._drafts.save(draft)
         # 발행된 글이면 post_glossary 와 뜻의 글 목록까지 바로 덮어쓴다(따라 쓰기는 이미 지나갔다). 사람의 resolve·drop 은 사라진다

@@ -589,3 +589,20 @@ async def test_backfill_rewrites_the_post_glossary_of_a_published_draft():
     assert [i.surface for i in post_glossary.items] == ["토큰은"] and post_glossary.draft_id == draft.draft_id
     assert (await harness.drafts.get(draft.draft_id)).glossary == record
     assert await harness.glossary.list_missing_draft_ids() == []
+
+
+async def test_backfill_ignores_the_draft_budget_and_keeps_the_limit():
+    """보충은 사람이 부르는 일이라 글당 예산에 막히지 않는다. 한도 값은 그대로 저장된다."""
+    harness = PipelineHarness(_scripts(glossary_candidate(new_sense=new_sense())), publisher=FakePostBE(["post-42"]))
+    draft = await _drive_with_glossary(harness)
+    draft.record_approval("사람", requires_approval=True)
+    await harness.drafts.save(draft)
+    draft = await harness.drive(A)
+    draft.token_limit = 1  # 이미 쓴 토큰보다 작다: 예산 검사가 걸리면 추출이 건너뛰어진다
+    await harness.drafts.save(draft)
+    harness.llm.scripts["GLOSSARY"] = [glossary_output(glossary_candidate(new_sense=new_sense()))]
+
+    record = await harness.glossary.backfill(draft.draft_id)
+
+    assert record.skipped is None and record.items
+    assert (await harness.drafts.get(draft.draft_id)).token_limit == 1

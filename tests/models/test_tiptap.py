@@ -194,3 +194,14 @@ def test_inline_code_carries_only_the_code_mark():
 
     nodes = document["content"][0]["content"]
     assert [[mark["type"] for mark in node.get("marks", [])] for node in nodes] == [["code"], [], ["code"]]
+
+
+def test_bold_closed_by_punctuation_before_a_korean_particle_is_still_bold():
+    """CommonMark 는 `)**가` 의 ** 를 닫힘으로 보지 않는다. 변환기가 남은 쌍을 굵게로 되살린다. 코드 안 별표는 그대로 둔다."""
+    nodes = markdown_to_tiptap("컨테이너의 **작업 스레드(worker thread)**가 `a**b**c` 와 2 ** 3")["content"][0][
+        "content"
+    ]
+
+    assert nodes[1] == {"type": "text", "text": "작업 스레드(worker thread)", "marks": [{"type": "bold"}]}
+    assert {"type": "text", "text": "a**b**c", "marks": [{"type": "code"}]} in nodes
+    assert nodes[-1]["text"].endswith("2 ** 3")
