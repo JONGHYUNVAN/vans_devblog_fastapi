@@ -511,3 +511,39 @@ def test_output_schema_of_review_receipts_depends_on_scope():
     spot.messages = [ChatMessage(role="user", content='입력(JSON):\n{\n  "scope": "SPOT_CHECK"\n}')]
 
     assert (output_schema_of(full), output_schema_of(spot)) == (ReviewOutput, SpotCheckOutput)
+
+
+async def test_call_text_records_a_receipt_and_retries_with_the_given_guidance():
+    harness = Harness(["not json", '{"ok": true}'])
+
+    def parse(text: str) -> dict:
+        if not text.startswith("{"):
+            raise LLMOutputError("- output has no JSON object")
+        return json.loads(text)
+
+    output, call_id = await harness.service.call_text(
+        kind=CallKind.EXPOSITORY,
+        round_id="expository-run-1",
+        binding=make_call_model(),
+        messages=MESSAGES,
+        parse=parse,
+        web_search=True,
+        item_id="4_outline_fact_check",
+        pipeline_version="v3",
+        retry_guidance="Failed checks:\n{error}",
+    )
+
+    assert output == {"ok": True}
+    failed, passed = harness.calls.calls
+    assert passed.call_id == call_id
+    assert (passed.kind, passed.round_id, passed.item_id, passed.pipeline_version, passed.draft_id) == (
+        "EXPOSITORY",
+        "expository-run-1",
+        "4_outline_fact_check",
+        "v3",
+        None,
+    )
+    assert (failed.output_parsed_ok, passed.output_parsed_ok) == (False, True)
+    first, second = harness.llm.calls
+    assert first.schema is None and first.params.web_search is True
+    assert second.messages[-1].content == "Failed checks:\noutput: - output has no JSON object"

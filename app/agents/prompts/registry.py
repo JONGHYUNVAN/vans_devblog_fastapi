@@ -10,9 +10,10 @@
 from functools import lru_cache
 from pathlib import Path
 
+from app.agents.expository import STAGE_KEYS
 from app.models.enums import ReviewLens
 from app.models.model_binding import CallModel
-from app.models.pipeline import COMMON_FAMILY, PROMPT_FAMILIES, PromptSet
+from app.models.pipeline import COMMON_FAMILY, EXPOSITORY_FAMILY, PROMPT_FAMILIES, PromptSet
 from app.models.routing import RoutingSnapshot
 
 __all__ = [
@@ -116,8 +117,10 @@ def load_prompt_files(version: str | Path) -> PromptSet:
         if path.stem in TEMPLATE_NAMES:
             prompts.setdefault(COMMON_FAMILY, {})[path.stem] = path.read_text(encoding="utf-8")
     for family_dir in sorted(each for each in base.iterdir() if each.is_dir()):
+        # 설명문 파이프라인 가족은 이름이 단계 key 다. 걸러 내면 내보낸 버전을 다시 들여올 때 그 프롬프트가 사라진다 (D-99)
+        names = STAGE_KEYS if family_dir.name == EXPOSITORY_FAMILY else TEMPLATE_NAMES
         for path in sorted(family_dir.glob("*.md")):
-            if path.stem in TEMPLATE_NAMES:
+            if path.stem in names:
                 prompts.setdefault(family_dir.name, {})[path.stem] = path.read_text(encoding="utf-8")
     return prompts
 

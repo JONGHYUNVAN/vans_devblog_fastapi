@@ -12,7 +12,7 @@ RUN pip install -r requirements.txt
 
 COPY app ./app
 COPY cli ./cli
-# 설명문 파이프라인(python -m cli.expository)의 프롬프트·라우트. 실행 결과는 runs/ 에 쓰므로 그 폴더만 appuser 소유로 만든다
+# 설명문 파이프라인의 프롬프트·라우트 입력(python -m cli.expository seed 가 Mongo 버전에 넣는다). 실행 결과는 runs/ 에 쓰므로 그 폴더만 appuser 소유로 만든다
 COPY pipeline/expository ./pipeline/expository
 
 RUN useradd --create-home --uid 1000 appuser && install -d -o appuser /srv/grammars /srv/pipeline/expository/runs

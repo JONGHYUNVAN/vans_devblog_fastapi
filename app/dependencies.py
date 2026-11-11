@@ -17,7 +17,6 @@ from pymongo import MongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.database import Database
 
-from app.agents.expository import load_prompts, load_routes
 from app.clients.es import create_es, is_es_reachable
 from app.clients.github import GitHubClient
 from app.clients.kis.stream import KISStreamManager
@@ -350,19 +349,18 @@ def build_publisher(settings: Settings) -> PostBEPublisher | None:
     )
 
 
-def build_expository_pipeline(settings: Settings, run_dir: Path) -> ExpositoryPipeline:
-    """설명문 파이프라인 러너. 프롬프트·라우트는 pipeline/expository 의 파일이고 결과는 run_dir 에 쓴다.
+def build_expository_pipeline(database: AsyncDatabase, settings: Settings, run_dir: Path) -> ExpositoryPipeline:
+    """설명문 파이프라인 러너. 프롬프트·단계별 모델은 최신 파이프라인 버전에서 읽고 호출은 영수증에 남긴다 (09 문서 D-99).
 
-    프롬프트·라우트 파일이 없거나 JSON 이 아니면 여기서 던진다. Mongo 는 쓰지 않는다. Post BE 는 1단계 카테고리 목록에만 쓴다.
+    단계 결과는 run_dir 에 쓴다. Post BE 는 1단계 카테고리 목록에만 쓴다.
     """
     return ExpositoryPipeline(
-        registry=build_llm_registry(settings),
-        routes=load_routes(),
-        prompts=load_prompts(),
+        calls=build_agent_call_service(database, settings),
+        versions=build_pipeline_version_service(database),
+        providers=available_providers(settings),
         repository=ExpositoryRunRepository(run_dir),
         publisher=build_publisher(settings),
         main_categories=settings.agent_main_category_values,
-        timeout_s=settings.draft_timeout_s,
     )
 
 

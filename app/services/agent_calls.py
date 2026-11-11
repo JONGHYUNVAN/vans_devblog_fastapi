@@ -243,6 +243,45 @@ class AgentCallService:
         )
         return SearchResult(text=output.text, call_id=call_id, citations=output.citations)
 
+    async def call_text[R](
+        self,
+        *,
+        kind: CallKind,
+        round_id: str,
+        binding: CallModel,
+        messages: list[ChatMessage],
+        parse: Callable[[str], R],
+        web_search: bool = False,
+        item_id: str | None = None,
+        max_attempts: int | None = None,
+        pipeline_version: str | None = None,
+        retry_guidance: str = _RETRY_GUIDANCE,
+    ) -> tuple[R, str]:
+        """벤더 구조화 출력 없이 글로 받아 parse 가 읽은 값과 그 시도의 call_id 를 돌려준다. 설명문 파이프라인이 쓴다 (D-99).
+
+        parse 는 응답 본문을 받아 검사까지 하고, 위반이면 LLMOutputError 를 던진다. 그 메시지가 retry_guidance 의
+        {error} 자리에 들어가 직전 출력 뒤에 붙는다. 글(draft)이 없는 호출이라 예산을 검사하지 않는다.
+        재시도·잘림·영수증 규칙은 call 과 같다.
+        """
+        return await self._attempts(
+            kind=kind,
+            round_id=round_id,
+            slot=None,
+            lens=None,
+            binding=binding,
+            messages=messages,
+            json_schema=None,
+            web_search=web_search,
+            parse=lambda response: parse(response.text),
+            draft=None,
+            target_version=None,
+            topic_attempt=None,
+            item_id=item_id,
+            max_attempts=max_attempts,
+            pipeline_version=pipeline_version,
+            retry_guidance=retry_guidance,
+        )
+
     async def _attempts[R](
         self,
         *,
@@ -261,6 +300,7 @@ class AgentCallService:
         item_id: str | None,
         max_attempts: int | None,
         pipeline_version: str | None,
+        retry_guidance: str = _RETRY_GUIDANCE,
     ) -> tuple[R, str]:
         client = self._llm.get(binding.provider)
         base_timeout = float(
@@ -351,7 +391,7 @@ class AgentCallService:
                 attempt_messages = [
                     *messages,
                     ChatMessage(role="assistant", content=response.text),
-                    ChatMessage(role="user", content=_RETRY_GUIDANCE.format(error=last_error)),
+                    ChatMessage(role="user", content=retry_guidance.format(error=last_error)),
                 ]
             # 본문이 빈 응답은 빈 assistant 메시지를 붙일 수 없어(벤더가 400 으로 거부한다) 같은 메시지로 다시 부른다
 

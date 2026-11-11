@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.agents.expository import STAGE_KEYS
 from app.agents.personas import PERSONAS
 from app.agents.prompts.registry import load_prompt_files
 from app.core.exceptions import NotFoundError
@@ -21,6 +22,7 @@ from app.models.model_binding import CallModel
 from app.models.persona import PersonaProfile
 from app.models.pipeline import (
     BODY_FIELDS,
+    EXPOSITORY_FAMILY,
     Parameters,
     PipelineVersion,
     PipelineVersionBody,
@@ -30,7 +32,12 @@ from app.models.pipeline import (
     version_id_of,
 )
 from app.models.publishing_round import PublishingRound
-from app.models.routing import LEVEL_CRITERIA_DOCUMENT_ID, SLOTS_DOCUMENT_ID
+from app.models.routing import (
+    EXPOSITORY_ROUTE_PREFIX,
+    LEVEL_CRITERIA_DOCUMENT_ID,
+    SLOTS_DOCUMENT_ID,
+    expository_route,
+)
 from app.repositories.pipeline_version import PipelineVersionRepository
 from app.services.pipeline_validation import Finding, errors_of, validate_version
 
@@ -38,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 PIPELINE_FILE = "pipeline.json"
 PROMPTS_DIR = "prompts"
+EXPOSITORY_ROUTES_FILE = "routes.json"  # 설명문 파이프라인 입력 디렉터리(pipeline/expository)의 단계별 모델
 DEFAULT_PROMPTS_DIR = "v4"  # 저장소 app/agents/prompts/ 아래. 기준 버전의 프롬프트 입력
 
 
@@ -187,6 +195,24 @@ class PipelineVersionService:
         body = read_directory(directory)
         return await self.create(body, source="import", note=note, label=label, created_by=created_by)
 
+    async def import_expository(
+        self, directory: str | Path, *, note: str = "", created_by: str | None = None
+    ) -> PipelineVersion:
+        """설명문 파이프라인 입력 디렉터리(prompts/{단계}.json, routes.json)를 최신 버전에 넣은 자식 버전 (D-99).
+
+        expository 가족과 `EXPOSITORY:*` 라우트만 통째로 바꾸고 나머지는 최신 버전 것을 잇는다. 처음 넣을 때와 여러 단계를
+        한 번에 바꿀 때 쓴다. 한 단계만 고칠 때는 edit_prompt·edit_route 다. 파일이 없으면 FileNotFoundError.
+        """
+        latest = await self.require_latest()
+        prompts, routes = read_expository_directory(directory)
+        body = latest.body()
+        body.prompts = {**{key: dict(value) for key, value in body.prompts.items()}, EXPOSITORY_FAMILY: prompts}
+        kept = {key: value for key, value in body.routes.items() if not key.startswith(EXPOSITORY_ROUTE_PREFIX)}
+        body.routes = {**kept, **routes}
+        return await self.create(
+            body, source="import", note=note or f"import-expository {Path(directory).name}", created_by=created_by
+        )
+
     async def edit_prompt(
         self, family: str, name: str, text: str, *, note: str = "", created_by: str | None = None
     ) -> PipelineVersion:
@@ -310,6 +336,22 @@ def read_directory(directory: str | Path) -> PipelineVersionBody:
     payload.pop("meta", None)
     payload["prompts"] = load_prompt_files(base / PROMPTS_DIR) if (base / PROMPTS_DIR).is_dir() else {}
     return PipelineVersionBody.model_validate(payload)
+
+
+def read_expository_directory(directory: str | Path) -> tuple[dict[str, str], dict[str, list[CallModel]]]:
+    """설명문 파이프라인 입력 디렉터리 → (단계 key → 프롬프트 본문, 라우트 id → 후보).
+
+    prompts/{단계 key}.json 과 routes.json(단계 key → 후보 배열)을 읽는다. 파일이 없으면 FileNotFoundError.
+    본문·단계 이름 검사는 버전 검증(R-13)이 한다.
+    """
+    base = Path(directory)
+    prompts = {key: (base / PROMPTS_DIR / f"{key}.json").read_text(encoding="utf-8") for key in STAGE_KEYS}
+    raw = json.loads((base / EXPOSITORY_ROUTES_FILE).read_text(encoding="utf-8"))
+    routes = {
+        expository_route(key): [CallModel.model_validate(candidate) for candidate in candidates]
+        for key, candidates in raw.items()
+    }
+    return prompts, routes
 
 
 def describe(findings: list[Finding]) -> list[str]:

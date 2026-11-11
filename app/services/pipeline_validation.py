@@ -1,6 +1,7 @@
 """파이프라인 버전 문서의 검증 (설계 09 문서 4절). 순수 함수. 시드(bootstrap·import·edit-*) 때 돌고 오류가 하나라도 있으면 쓰지 않는다.
 
 1a 는 단계 목록이 없으므로 R-04(라우트)·R-05(템플릿)·R-08(템플릿 내용)·R-09(조절 값)·R-10(슬롯·페르소나)·R-11(해시)만 본다.
+R-13 은 설명문 파이프라인의 프롬프트·라우트다(D-99).
 지금의 validate_snapshot(끝까지 고를 수 있는지)·validate_prompts(가족마다 템플릿이 있는지)가 각각 R-04·R-05 다.
 """
 
@@ -8,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from app.agents.expository import STAGE_KEYS, parse_prompt
 from app.agents.prompts.registry import (
     COMMON_FAMILY,
     PROMPT_FAMILIES,
@@ -18,8 +20,8 @@ from app.agents.prompts.registry import (
     templates_for_route,
 )
 from app.models.enums import AgentSlot
-from app.models.pipeline import NOTE_LINE_FIELDS, PipelineVersionBody, content_hash_of
-from app.models.routing import build_snapshot, validate_snapshot
+from app.models.pipeline import EXPOSITORY_FAMILY, NOTE_LINE_FIELDS, PipelineVersionBody, content_hash_of
+from app.models.routing import EXPOSITORY_ROUTE_PREFIX, build_snapshot, expository_route, validate_snapshot
 
 Level = Literal["error", "warning"]
 
@@ -57,6 +59,7 @@ def validate_version(body: PipelineVersionBody, *, expected_hash: str | None = N
     findings += _r05_templates(body)
     findings += _r08_template_contents(body)
     findings += _r09_parameters(body)
+    findings += _r13_expository(body)
     if expected_hash is not None and expected_hash != content_hash_of(body):
         findings.append(Finding("R-11", "error", f"content_hash {expected_hash} does not match the body"))
     return findings
@@ -116,6 +119,8 @@ def _r05_templates(body: PipelineVersionBody) -> list[Finding]:
                         )
                     )
     for family, templates in body.prompts.items():
+        if family == EXPOSITORY_FAMILY:
+            continue  # 이름이 단계 key 고 라우트와의 짝은 R-13 이 본다
         if family not in (*PROMPT_FAMILIES, COMMON_FAMILY):
             findings.append(Finding("R-08", "error", f"unknown prompt family {family}"))
         for name in templates:
@@ -134,6 +139,8 @@ def _r08_template_contents(body: PipelineVersionBody) -> list[Finding]:
     for name, phrases in body.parameters.prompt_lint.items():
         lint[name] = lint.get(name, []) + [phrase for phrase in phrases if phrase not in lint.get(name, [])]
     for family, templates in body.prompts.items():
+        if family == EXPOSITORY_FAMILY:
+            continue  # JSON 지시문이라 string.Template 규칙($자리표시자, "JSON" 낱말)이 맞지 않는다. 본문은 R-13 이 본다
         for name, text in templates.items():
             label = f"prompts.{family}.{name}"
             if name not in _SEARCH_TEMPLATES and "JSON" not in text:
@@ -151,6 +158,41 @@ def _r08_template_contents(body: PipelineVersionBody) -> list[Finding]:
                 for phrase in lint.get(name, []):
                     if phrase not in text:
                         findings.append(Finding("R-08", "warning", f"{label}: expected phrase {phrase!r} is missing"))
+    return findings
+
+
+def _r13_expository(body: PipelineVersionBody) -> list[Finding]:
+    """설명문 파이프라인의 프롬프트·라우트 (D-99). 둘 다 없으면 통과다(그 파이프라인을 쓰지 않는 버전).
+
+    하나라도 있으면 단계마다 프롬프트(inputs·expected_output_schema 가 있는 JSON 객체)와 라우트 후보가 있어야 한다.
+    일부만 있는 버전이 최신이 되면 실행이 글 중간 단계에서 멈춘다.
+    """
+    prompts = body.prompts.get(EXPOSITORY_FAMILY, {})
+    routes = {
+        route_id.removeprefix(EXPOSITORY_ROUTE_PREFIX): candidates
+        for route_id, candidates in body.routes.items()
+        if route_id.startswith(EXPOSITORY_ROUTE_PREFIX)
+    }
+    if not prompts and not routes:
+        return []
+    findings: list[Finding] = []
+    for name, text in prompts.items():
+        label = f"prompts.{EXPOSITORY_FAMILY}.{name}"
+        if name not in STAGE_KEYS:
+            findings.append(Finding("R-13", "error", f"{label}: unknown stage"))
+            continue
+        try:
+            parse_prompt(text)
+        except ValueError as exc:
+            findings.append(Finding("R-13", "error", f"{label}: {exc}"))
+    for name in routes:
+        if name not in STAGE_KEYS:
+            findings.append(Finding("R-13", "error", f"route {expository_route(name)}: unknown stage"))
+    for key in STAGE_KEYS:
+        if key not in prompts:
+            findings.append(Finding("R-13", "error", f"prompts.{EXPOSITORY_FAMILY}.{key} is missing"))
+        if not routes.get(key):
+            findings.append(Finding("R-13", "error", f"route {expository_route(key)} has no candidate"))
     return findings
 
 

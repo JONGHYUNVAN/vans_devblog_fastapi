@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.core.exceptions import NotFoundError
-from app.models.pipeline import content_hash_of
+from app.models.pipeline import EXPOSITORY_FAMILY, content_hash_of
 from app.repositories.pipeline_version import PipelineVersionRepository
 from app.services.pipeline_versions import (
     NoPipelineVersionError,
@@ -17,7 +17,13 @@ from app.services.pipeline_versions import (
     prompts_from_reference,
     read_directory,
 )
-from tests.factories import make_pipeline_body, make_pipeline_version, make_round, route_documents
+from tests.factories import (
+    EXPOSITORY_DIR,
+    make_pipeline_body,
+    make_pipeline_version,
+    make_round,
+    route_documents,
+)
 from tests.fakes import FakeAsyncDatabase, PipelineHarness
 
 pytestmark = pytest.mark.anyio
@@ -178,3 +184,32 @@ async def test_harness_round_keeps_its_version_after_a_new_one_lands():  # ㉑·
     assert publishing_round.pipeline_version_id == "v1"
     assert (await harness.versions.for_round(publishing_round)).version_id == "v1"
     assert (await harness.versions.for_round(make_round("old"))).version_id == newer.version_id == "v2"
+
+
+async def test_import_expository_adds_prompts_and_routes_and_survives_export_import(tmp_path):
+    service = _service()
+    first = await service.create(make_pipeline_body(), source="import")
+
+    seeded = await service.import_expository(EXPOSITORY_DIR)
+
+    assert seeded.parent_version_id == first.version_id
+    assert len(seeded.prompts[EXPOSITORY_FAMILY]) == 9
+    assert seeded.routes["EXPOSITORY:5_write"][0].max_output_tokens == 32000
+    assert {key: value for key, value in seeded.routes.items() if not key.startswith("EXPOSITORY:")} == first.routes
+    with pytest.raises(ValueError, match="same content"):
+        await service.import_expository(EXPOSITORY_DIR)
+
+    # 내보낸 디렉터리를 다시 읽어도 설명문 프롬프트가 남는다(가족 이름으로 걸러져 사라지지 않는다)
+    export_version(seeded, tmp_path)
+    assert content_hash_of(read_directory(tmp_path)) == seeded.content_hash
+
+    changed = seeded.prompts[EXPOSITORY_FAMILY]["5_write"] + "\n"
+    edited = await service.edit_prompt(EXPOSITORY_FAMILY, "5_write", changed)
+    assert edited.parent_version_id == seeded.version_id
+
+
+async def test_import_expository_raises_when_a_prompt_file_is_missing(tmp_path):
+    service = _service()
+    await service.create(make_pipeline_body(), source="import")
+    with pytest.raises(FileNotFoundError):
+        await service.import_expository(tmp_path)

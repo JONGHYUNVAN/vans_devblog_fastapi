@@ -18,7 +18,7 @@ from app.dependencies import (
     verify_agents_key,
 )
 from app.models.enums import RoundStatus
-from app.models.pipeline import COMMON_FAMILY, PROMPT_FAMILIES, PipelineVersion
+from app.models.pipeline import COMMON_FAMILY, EXPOSITORY_FAMILY, PROMPT_FAMILIES, PipelineVersion
 from app.schemas.agent_pipeline import (
     CallPublic,
     DraftApproval,
@@ -144,7 +144,7 @@ async def edit_prompt(family: str, name: str, body: PromptEdit, versions: Versio
 
     최신 버전에 없는 템플릿 이름은 400 이다. 오타가 아무도 읽지 않는 템플릿을 만들고 바꾼 줄 알게 되는 것을 막는다.
     """
-    if family not in (*PROMPT_FAMILIES, COMMON_FAMILY):
+    if family not in (*PROMPT_FAMILIES, COMMON_FAMILY, EXPOSITORY_FAMILY):
         raise InvalidRequestError(f"unknown prompt family {family}")
     try:
         latest = await versions.require_latest()

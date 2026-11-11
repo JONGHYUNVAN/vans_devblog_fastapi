@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 
 from app.models.enums import AgentSlot
-from app.models.pipeline import content_hash_of
+from app.models.pipeline import EXPOSITORY_FAMILY, content_hash_of
 from app.services.pipeline_validation import Finding, errors_of, validate_version
 from app.services.pipeline_versions import build_baseline_version
-from tests.factories import make_pipeline_body
+from tests.factories import make_expository_body, make_pipeline_body
 
 ROUTES_EXAMPLE = Path(__file__).parents[2] / "agents_design" / "routes.example.json"
 
@@ -119,3 +119,20 @@ def test_r11_compares_the_declared_hash_with_the_body():
 
     assert errors_of(validate_version(body, expected_hash=content_hash_of(body))) == []
     assert _rules(errors_of(validate_version(body, expected_hash="sha256:0"))) == {"R-11"}
+
+
+def test_r13_passes_the_repository_expository_inputs_and_names_what_is_missing():
+    assert errors_of(validate_version(make_expository_body())) == []
+
+    body = make_expository_body()
+    del body.prompts[EXPOSITORY_FAMILY]["5_write"]
+    del body.routes["EXPOSITORY:8_translate"]
+    body.prompts[EXPOSITORY_FAMILY]["2_outline"] = '{"task": "no inputs"}'
+    body.prompts[EXPOSITORY_FAMILY]["10_extra"] = "{}"
+
+    messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-13"]
+
+    assert any("expository.5_write is missing" in message for message in messages)
+    assert any("EXPOSITORY:8_translate has no candidate" in message for message in messages)
+    assert any("expository.2_outline: " in message for message in messages)
+    assert any("expository.10_extra: unknown stage" in message for message in messages)

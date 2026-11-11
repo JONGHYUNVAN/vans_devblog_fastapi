@@ -25,6 +25,7 @@ from app.models.enums import (
 from app.models.model_binding import CallModel, ModelBinding
 from app.models.pipeline import (
     BODY_FIELDS,
+    EXPOSITORY_FAMILY,
     Parameters,
     PipelineVersion,
     PipelineVersionBody,
@@ -46,7 +47,7 @@ from app.models.publishing_round import PublishingRound
 from app.models.routing import RoutingSnapshot
 from app.models.topic import CategoryOption, TopicProposal, TopicRegistryEntry
 from app.services.evaluation import derive_verdict
-from app.services.pipeline_versions import split_route_documents
+from app.services.pipeline_versions import read_expository_directory, split_route_documents
 
 # 기본 바인딩의 주 렌즈 (설계 03 문서 4절 표)
 LENSES = {
@@ -618,6 +619,17 @@ def make_tarball(tree: str, commit_sha: str = "a" * 40) -> bytes:
 
 
 # 설명문 파이프라인(pipeline/expository) 단계 출력. 검사를 통과하는 최소 모양이다
+
+EXPOSITORY_DIR = Path(__file__).resolve().parents[1] / "pipeline" / "expository"
+
+
+def make_expository_body(**parameter_overrides: Any) -> PipelineVersionBody:
+    """픽스처 본문에 저장소 pipeline/expository 의 프롬프트·라우트를 넣은 것. 버전에 넣는 입력 파일도 같이 검사하게 된다."""
+    body = make_pipeline_body(**parameter_overrides)
+    prompts, routes = read_expository_directory(EXPOSITORY_DIR)
+    body.prompts = {**body.prompts, EXPOSITORY_FAMILY: prompts}
+    body.routes = {**body.routes, **routes}
+    return body
 
 
 def make_expository_topic() -> dict[str, Any]:

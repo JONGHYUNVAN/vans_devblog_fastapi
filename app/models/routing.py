@@ -46,6 +46,14 @@ def revise_route(persona_id: str) -> str:
     return f"REVISE_DRAFT:{persona_id}"
 
 
+EXPOSITORY_ROUTE_PREFIX = "EXPOSITORY:"
+
+
+def expository_route(stage_key: str) -> str:
+    """설명문 파이프라인 단계의 라우트 id `EXPOSITORY:{단계 key}`. 라운드 선택기는 이 라우트를 읽지 않는다."""
+    return f"{EXPOSITORY_ROUTE_PREFIX}{stage_key}"
+
+
 def review_route(lens: ReviewLens) -> str:
     """리뷰 라우트 id `REVIEW:{lens}`. 렌즈마다 모델 하나다(D-55)."""
     return f"REVIEW:{lens}"
