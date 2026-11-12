@@ -818,6 +818,35 @@ def pipeline_edit_param(
     _run_pipeline(_edit)
 
 
+@pipeline.command("edit-route")
+def pipeline_edit_route(
+    route_id: Annotated[str, typer.Argument(help="라우트 id (예: WRITE_DRAFT:architect)")],
+    models: Annotated[
+        list[str],
+        typer.Argument(help="후보 모델, 고르는 순서대로. provider/model_id 꼴(예: anthropic/claude-fable-5-1)"),
+    ],
+    max_output_tokens: Annotated[int, typer.Option(min=1, help="모든 후보에 같은 출력 한도")],
+    effort: Annotated[str | None, typer.Option(help="모든 후보에 같은 effort. 없으면 벤더 기본값")] = None,
+    note: Annotated[str, typer.Option()] = "",
+) -> None:
+    """라우트 하나의 후보 목록만 바꾼 자식 버전을 만든다. 후보마다 다른 한도가 필요하면 edit-routes 다."""
+    candidates: list[dict[str, Any]] = []
+    for spec in models:
+        provider, separator, model_id = spec.partition("/")
+        if not separator or not provider or not model_id:
+            typer.echo(f"{spec}: provider/model_id 꼴이어야 한다", err=True)
+            raise typer.Exit(1)
+        candidates.append(
+            {"provider": provider, "model_id": model_id, "effort": effort, "max_output_tokens": max_output_tokens}
+        )
+
+    async def _edit(service: PipelineVersionService, database, settings):
+        _echo(meta_of(await service.edit_route(route_id, candidates, note=note)))
+        return False
+
+    _run_pipeline(_edit)
+
+
 @pipeline.command("edit-routes")
 def pipeline_edit_routes(
     file: Annotated[Path, typer.Option(help="라우트 JSON 배열(agents_design/routes.example.json 형식)")],

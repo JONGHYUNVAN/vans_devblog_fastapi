@@ -315,3 +315,25 @@ def test_pipeline_parameter_edit_makes_a_child_version_and_rejects_bad_paths(cli
     assert client.post(url, headers=KEY, json={"assignments": {"max_iterations": "many"}}).status_code == 400
     assert client.post(url, headers=KEY, json={"assignments": {"max_iterations": 0}}).status_code == 400  # R-09
     assert client.post(url, headers=KEY, json={"assignments": {}}).status_code == 400  # 형식 오류도 이 앱은 400
+
+
+def test_pipeline_route_edit_makes_a_child_version_and_rejects_unknown_routes(client, database):  # D-102
+    url = "/api/v1/agents/pipeline/routes/FACT_TRANSFORM/"
+    candidates = [{"provider": "fake-b", "model_id": "fake-b-2", "max_output_tokens": 2000}]
+    asyncio.run(PipelineVersionRepository(database).next_seq())  # 픽스처가 v1 을 순번 발급 없이 넣었다
+    assert client.post(url, json={"candidates": candidates}).status_code == 403
+
+    response = client.post(url, headers=KEY, json={"candidates": candidates, "note": "모델 교체"})
+
+    assert response.status_code == 201
+    created = response.json()
+    assert (created["parent_version_id"], created["source"], created["note"]) == ("v1", "edit-route", "모델 교체")
+    stored = asyncio.run(PipelineVersionRepository(database).get(created["version_id"]))
+    assert stored is not None and stored.routes["FACT_TRANSFORM"][0].model_id == "fake-b-2"
+    # 같은 내용, 없는 라우트, 빈 후보
+    assert client.post(url, headers=KEY, json={"candidates": candidates}).status_code == 400
+    assert (
+        client.post("/api/v1/agents/pipeline/routes/NOPE/", headers=KEY, json={"candidates": candidates}).status_code
+        == 400
+    )
+    assert client.post(url, headers=KEY, json={"candidates": []}).status_code == 400  # 형식 오류도 이 앱은 400

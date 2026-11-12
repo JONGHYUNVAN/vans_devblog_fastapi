@@ -213,3 +213,46 @@ async def test_import_expository_raises_when_a_prompt_file_is_missing(tmp_path):
     await service.create(make_pipeline_body(), source="import")
     with pytest.raises(FileNotFoundError):
         await service.import_expository(tmp_path)
+
+
+async def test_edit_route_replaces_one_route_and_keeps_the_rest():
+    service = _service()
+    first = await service.create(make_pipeline_body(), source="import")
+    candidates = [{"provider": "fake-b", "model_id": "fake-b-2", "effort": None, "max_output_tokens": 2000}]
+
+    edited = await service.edit_route("FACT_TRANSFORM", candidates)
+
+    assert (edited.version_id, edited.parent_version_id, edited.source) == ("v2", "v1", "edit-route")
+    assert edited.note == "edit-route FACT_TRANSFORM"
+    assert [(each.provider, each.model_id) for each in edited.routes["FACT_TRANSFORM"]] == [("fake-b", "fake-b-2")]
+    rest = {key: value for key, value in edited.routes.items() if key != "FACT_TRANSFORM"}
+    assert rest == {key: value for key, value in first.routes.items() if key != "FACT_TRANSFORM"}
+    assert edited.prompts == first.prompts and edited.parameters == first.parameters
+
+
+async def test_edit_route_also_edits_an_expository_stage_route():
+    service = _service()
+    await service.create(make_pipeline_body(), source="import")
+    await service.import_expository(EXPOSITORY_DIR)
+    candidates = [{"provider": "anthropic", "model_id": "claude-test", "effort": "high", "max_output_tokens": 32000}]
+
+    edited = await service.edit_route("EXPOSITORY:5_write", candidates)
+
+    assert edited.routes["EXPOSITORY:5_write"][0].model_id == "claude-test"
+
+
+async def test_edit_route_rejects_unknown_routes_empty_and_unsupported_candidates():
+    service = _service()
+    await service.create(make_pipeline_body(), source="import")
+    model = {"provider": "fake-a", "model_id": "fake-a-1", "max_output_tokens": 1000}
+
+    with pytest.raises(ValueError, match="unknown route NOPE"):
+        await service.edit_route("NOPE", [model])
+    with pytest.raises(ValueError, match="at least one candidate"):
+        await service.edit_route("FACT_TRANSFORM", [])
+    with pytest.raises(ValueError, match="does not take temperature"):  # 지원표에 없는 조합
+        await service.edit_route(
+            "FACT_TRANSFORM",
+            [{"provider": "anthropic", "model_id": "claude-test", "temperature": 0.5, "max_output_tokens": 1000}],
+        )
+    assert (await service.require_latest()).version_id == "v1"  # 거절된 시도는 버전을 만들지 않는다

@@ -259,6 +259,7 @@ class DraftPipelineService:
 | `GET` | `/api/v1/agents/metrics/` | 07 문서 4절 지표(`PipelineMetrics`). `round_id` 가 없으면 모든 라운드 |
 | `POST` | `/api/v1/agents/pipeline/prompts/{family}/{name}/` | 템플릿 하나를 바꾼 새 파이프라인 버전(09 문서 D-89). 본문 `{text, note}`. 없는 가족·템플릿, 검증 오류, 최신과 같은 내용이면 400 |
 | `POST` | `/api/v1/agents/pipeline/parameters/` | 조절 값만 바꾼 새 버전(D-89). 본문 `{assignments: {점 경로: 값}, note}`. 없는 경로·타입 오류면 400 |
+| `POST` | `/api/v1/agents/pipeline/routes/{route_id}/` | 라우트 하나의 후보 목록만 바꾼 새 버전(09 문서 D-102). 본문 `{candidates: [{provider, model_id, effort?, temperature?, max_output_tokens}], note?}`. 최신 버전에 없는 라우트·지원하지 않는 조합·최신과 같은 내용이면 400. 201 `PipelineVersionCreated` |
 
 경로는 trailing slash 포함(CONVENTIONS 2절). 상태 전이 위반은 409 `InvalidTransitionError`.
 

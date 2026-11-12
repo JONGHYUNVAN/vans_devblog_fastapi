@@ -36,6 +36,7 @@ from app.models.routing import (
     EXPOSITORY_ROUTE_PREFIX,
     LEVEL_CRITERIA_DOCUMENT_ID,
     SLOTS_DOCUMENT_ID,
+    candidate_errors,
     expository_route,
 )
 from app.repositories.pipeline_version import PipelineVersionRepository
@@ -247,6 +248,29 @@ class PipelineVersionService:
         body.parameters = Parameters.model_validate(parameters)
         return await self.create(
             body, source="edit-param", note=note or "edit-param " + ", ".join(assignments), created_by=created_by
+        )
+
+    async def edit_route(
+        self, route_id: str, candidates: Iterable[Mapping[str, Any]], *, note: str = "", created_by: str | None = None
+    ) -> PipelineVersion:
+        """라우트 하나의 후보 목록만 바꾼 자식 버전(edit-param 의 라우트 판). 나머지 라우트는 최신 버전 것을 잇는다.
+
+        최신 버전에 없는 라우트 id 는 오타이므로 거절한다(아무도 읽지 않는 라우트를 만들고 바꾼 줄 알게 되는 것을 막는다. 새 라우트는 edit-routes).
+        지원표에 없는 조합도 여기서 거절해야 다음 라운드 생성이 멈추지 않는다.
+        """
+        latest = await self.require_latest()
+        if route_id not in latest.routes:
+            raise ValueError(f"unknown route {route_id} in {latest.version_id}")
+        models = [CallModel.model_validate(each) for each in candidates]
+        if not models:
+            raise ValueError(f"route {route_id} needs at least one candidate")
+        errors = [error for model in models for error in candidate_errors(route_id, model)]
+        if errors:
+            raise ValueError("; ".join(errors))
+        body = latest.body()
+        body.routes = {**body.routes, route_id: models}
+        return await self.create(
+            body, source="edit-route", note=note or f"edit-route {route_id}", created_by=created_by
         )
 
     async def edit_routes(

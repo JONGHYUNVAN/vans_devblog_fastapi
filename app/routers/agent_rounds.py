@@ -34,6 +34,7 @@ from app.schemas.agent_pipeline import (
     RoundCreate,
     RoundDetail,
     RoundPublic,
+    RouteEdit,
 )
 from app.services.draft_decision import DraftDecisionService
 from app.services.metrics import PipelineMetrics
@@ -162,6 +163,21 @@ async def edit_parameters(body: ParameterEdit, versions: VersionServiceDep) -> P
     try:
         version = await versions.edit_parameters(body.assignments, note=body.note)
     except ValueError as exc:  # pydantic ValidationError 도 ValueError 다
+        raise InvalidRequestError(str(exc)) from exc
+    return _created(version)
+
+
+@router.post("/pipeline/routes/{route_id}/", summary="라우트 하나의 후보 바꾸기", status_code=201)
+async def edit_route(route_id: str, body: RouteEdit, versions: VersionServiceDep) -> PipelineVersionCreated:
+    """최신 버전을 부모로 라우트 하나의 후보 목록만 바꾼 새 버전. 다음 라운드부터 쓴다.
+
+    최신 버전에 없는 라우트 id, 지원표에 없는 조합, 검증 오류, 최신과 같은 내용이면 400.
+    """
+    try:
+        version = await versions.edit_route(
+            route_id, [candidate.model_dump() for candidate in body.candidates], note=body.note
+        )
+    except ValueError as exc:  # 없는 라우트, 지원하지 않는 조합, 검증 오류, 최신과 같은 내용
         raise InvalidRequestError(str(exc)) from exc
     return _created(version)
 

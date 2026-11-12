@@ -27,7 +27,7 @@ from app.models.enums import (
     RoundStatus,
 )
 from app.models.glossary import GlossaryRecord
-from app.models.model_binding import ModelBinding
+from app.models.model_binding import CallModel, ModelBinding
 from app.models.post_draft import (
     Arbitration,
     DraftVersion,
@@ -281,6 +281,15 @@ class ParameterEdit(BaseModel):
     """POST pipeline/parameters/ 본문. 점 경로 → 값(CLI edit-param 과 같다). 예: {"polish.length_slack_chars": 40}."""
 
     assignments: dict[str, Any] = Field(min_length=1)
+    note: str = ""
+
+
+class RouteEdit(BaseModel):
+    """POST pipeline/routes/{route_id}/ 본문. 라우트 하나의 후보 목록을 통째로 바꾼 자식 버전을 만든다(CLI edit-route 와 같다)."""
+
+    candidates: list[CallModel] = Field(
+        min_length=1, description="순서대로 고른다. 일부만 보내면 나머지 후보가 지워진다"
+    )
     note: str = ""
 
 
