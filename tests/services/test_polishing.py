@@ -157,10 +157,9 @@ async def test_patches_make_a_new_version_that_is_not_reviewed_again():
     assert (draft.polish.proposer_model_ids, draft.polish.model_ids) == (["fake-b-1"], ["fake-a-1"])
     assert harness.llm.kinds.count("REVIEW_FULL") == 2
     # 전체 읽기와 수준 평가는 다듬은 본문을 본다
-    final_read_call = next(
-        call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "FINAL_READ"
-    )
-    assert tone in final_read_call.messages[1].content
+    listed = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "FINAL_READ")
+    final_read_call = await harness.calls.get(listed.call_id)  # 목록은 본문 없는 영수증이라 메시지는 get 으로 읽는다
+    assert final_read_call is not None and tone in final_read_call.messages[1].content
     assert draft.final_read is not None and draft.final_read.target_version == 2
 
 
@@ -183,7 +182,9 @@ async def test_writer_reviews_the_proposals_and_only_its_own_patches_are_applied
         POLISH_REVISE=[polish_output((FIRST, own))],  # 첫 제안은 제 말로 고쳐 쓰고 둘째 제안은 버렸다
     )
 
-    call = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_REVISE")
+    listed = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_REVISE")
+    call = await harness.calls.get(listed.call_id)  # 목록은 본문 없는 영수증이라 메시지는 get 으로 읽는다
+    assert call is not None
     assert call.model_binding.model_id == "fake-a-1" and proposal in call.messages[1].content
     body = draft.current_version.content_markdown
     assert own in body and proposal not in body and "값을 확인한다." in body
@@ -250,7 +251,9 @@ async def test_tells_reach_the_polisher_from_min_count_and_are_counted_before_an
     await harness.seed_round()
     draft = await harness.drive(A)
 
-    call = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_TONE")
+    listed = next(call for call in await harness.calls.list_by_draft(draft.draft_id) if call.kind == "POLISH_TONE")
+    call = await harness.calls.get(listed.call_id)  # 목록은 본문 없는 영수증이라 메시지는 get 으로 읽는다
+    assert call is not None
     sent = call.messages[1].content
     assert '"rule": "D-14"' in sent and '"match": "봉합"' in sent
     assert '"rule": "C-8"' not in sent  # 부정 대구는 한 번뿐이라 min_count(2) 미만이다

@@ -397,8 +397,16 @@ class FakeAsyncCollection:
     async def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
         return next((copy.deepcopy(doc) for doc in self.docs if _matches(doc, query)), None)
 
-    def find(self, query: dict[str, Any]) -> FakeAsyncCursor:
-        return FakeAsyncCursor([copy.deepcopy(doc) for doc in self.docs if _matches(doc, query)])
+    def find(self, query: dict[str, Any], projection: dict[str, int] | None = None) -> FakeAsyncCursor:
+        """projection 은 빼는 꼴({필드: 0})만 흉내 낸다. 최상위 필드를 지운 문서를 돌려준다."""
+        excluded = {key for key, keep in (projection or {}).items() if not keep}
+        return FakeAsyncCursor(
+            [
+                {key: value for key, value in copy.deepcopy(doc).items() if key not in excluded}
+                for doc in self.docs
+                if _matches(doc, query)
+            ]
+        )
 
     async def replace_one(
         self, query: dict[str, Any], replacement: dict[str, Any], upsert: bool = False

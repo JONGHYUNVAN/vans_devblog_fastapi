@@ -50,3 +50,21 @@ async def test_list_by_round_includes_topic_proposals_in_start_order():
 
     assert [c.call_id for c in calls] == ["c1", "c2"]
     assert [c.call_id for c in await repository.list_by_draft("round-1:A")] == ["c2"]
+
+
+async def test_lists_return_receipts_without_bodies_and_get_returns_them():
+    # 라운드 영수증을 본문째 읽으면 소켓 제한을 넘겼다. 목록은 메시지·원문을 빼고 읽고, 본문은 get 으로 읽는다
+    repository = AgentCallRepository(FakeAsyncDatabase())
+    call = make_call(call_id="c1", prompt_tokens=100)
+    assert call.messages and call.output_raw is not None
+    await repository.add(call)
+
+    [by_round] = await repository.list_by_round("round-1")
+    [by_draft] = await repository.list_by_draft("round-1:A")
+
+    for listed in (by_round, by_draft):
+        assert (listed.messages, listed.output_raw) == ([], None)
+        assert listed.model_dump(exclude={"messages", "output_raw"}) == call.model_dump(
+            exclude={"messages", "output_raw"}
+        )
+    assert await repository.get("c1") == call

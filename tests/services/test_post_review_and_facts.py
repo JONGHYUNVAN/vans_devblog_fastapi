@@ -211,8 +211,10 @@ async def test_final_read_retries_exhausted_fails_and_resume_does_not_repeat_fin
 
 async def test_assessor_does_not_receive_the_target_level():
     harness, draft = await _run()
-    [call] = [each for each in await harness.calls.list_by_draft(draft.draft_id) if each.kind == "ASSESS_LEVEL"]
+    [listed] = [each for each in await harness.calls.list_by_draft(draft.draft_id) if each.kind == "ASSESS_LEVEL"]
+    call = await harness.calls.get(listed.call_id)  # 목록은 본문 없는 영수증이라 메시지는 get 으로 읽는다
 
+    assert call is not None
     assert "target_level" not in call.messages[1].content
     assert "level_criteria" in call.messages[1].content
 
