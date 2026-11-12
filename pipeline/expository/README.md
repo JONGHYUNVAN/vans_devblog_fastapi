@@ -133,7 +133,7 @@ python -m cli.expository publish expository-20261111-120000
 - 용어 정의는 사전체 명사구: 09 문서 D-88, `haiku/glossary.md`
 - 번역에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1
 - 메타 설명 규칙: v4 `common/summarize.md`(D-95)를 `9_summarize.json` 으로 옮겼다.
-- 단계 모델: 기존 라우트와 같은 모델 이름(claude-opus-5-5, gemini-4-argon, claude-haiku-5-5). 작성·번역은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다).
+- 단계 모델(`routes.json`): 작성·번역은 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성·번역은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다. 첫 실제 실행에서 번역은 32000 에서도 한 번 잘려 한도를 올린 재시도로 끝났다).
 
 ## 아직 없는 것
 

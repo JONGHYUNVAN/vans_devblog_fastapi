@@ -13,7 +13,7 @@
     { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 16000 }
   ],
   "5_write": [
-    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 32000 }
+    { "provider": "anthropic", "model_id": "claude-fable-5-2", "effort": "high", "max_output_tokens": 32000 }
   ],
   "6_article_fact_check": [
     { "provider": "google", "model_id": "gemini-4-argon", "effort": "high", "max_output_tokens": 16000 },
@@ -23,7 +23,7 @@
     { "provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000 }
   ],
   "8_translate": [
-    { "provider": "anthropic", "model_id": "claude-opus-5-5", "effort": "high", "max_output_tokens": 32000 }
+    { "provider": "anthropic", "model_id": "claude-fable-5-2", "effort": "high", "max_output_tokens": 32000 }
   ],
   "9_summarize": [
     { "provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 2000 }

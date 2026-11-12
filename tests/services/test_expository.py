@@ -246,7 +246,7 @@ async def test_publish_posts_the_article_with_the_note_and_records_it_once():
     assert stored.publication.note.splitlines()[2:] == [
         "## AI Information",
         "",
-        "- 작성: claude-opus-5-5",
+        "- 작성: claude-fable-5-2",
         "- 리뷰: claude-opus-5-5(사실·구조)",
     ]
     assert "AI Information" in str(payload.content) and "sec:intro" not in str(payload.content)
