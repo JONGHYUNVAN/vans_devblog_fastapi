@@ -174,6 +174,24 @@ def test_build_provenance_groups_receipts_into_stages_with_outcomes():
     assert "call-other-draft" not in {call.call_id for stage in record.stages for call in stage.calls}
 
 
+def test_build_provenance_keeps_receipt_order_when_calls_start_at_the_same_instant():
+    # 가짜 LLM 은 바로 답해 발행 전 단계 호출들의 시작 시각이 같아질 수 있다. 그때 call_id(무작위)로 순서를 가르면
+    # 단계 순서가 실행마다 달라졌다(발행 따라 쓰기 테스트가 세 번에 한 번꼴로 실패)
+    draft, item = _published_draft()
+    calls = _calls(draft, item)
+    polish, read, level, glossary = calls[-5:-1]
+    read.started_at = level.started_at = glossary.started_at = polish.started_at
+
+    record = build_provenance(draft, make_round(), calls, built_by="cli", now=T)
+
+    assert [stage.stage for stage in record.stages][-4:] == [
+        ProvenanceStageKind.POLISH,
+        ProvenanceStageKind.FINAL_READ,
+        ProvenanceStageKind.ASSESS_LEVEL,
+        ProvenanceStageKind.GLOSSARY,
+    ]
+
+
 def test_build_provenance_without_receipts_falls_back_to_slot_bindings():
     draft, _item = _published_draft()
 

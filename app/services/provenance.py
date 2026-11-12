@@ -83,7 +83,9 @@ def _own_calls(draft: PostDraft, calls: Iterable[AgentCall]) -> list[AgentCall]:
         if call.draft_id == draft.draft_id
         or (call.kind == CallKind.PROPOSE_TOPIC and call.draft_id is None and call.slot == draft.author_slot)
     ]
-    return sorted(own, key=lambda call: (call.started_at, call.call_id))  # call_id 는 같은 시각의 안정 정렬용
+    # 시작 시각이 같은 영수증은 받은 순서(리포지토리의 저장 순)를 지킨다. sorted 는 안정 정렬이다.
+    # call_id 는 무작위 uuid 라 두 번째 키로 쓰면 같은 시각의 호출 순서가 실제 호출 순서와 무관하게 뒤섞인다
+    return sorted(own, key=lambda call: call.started_at)
 
 
 def _succeeded(call: AgentCall) -> bool:
