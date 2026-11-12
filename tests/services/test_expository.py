@@ -7,13 +7,21 @@ import pytest
 from app.agents.expository import STAGE_KEYS
 from app.clients.llm.base import LLMClient
 from app.clients.llm.registry import LLMClientRegistry
+from app.clients.publisher.base import PostCategory
 from app.core.config import Settings
-from app.core.exceptions import LLMOutputError, LLMRetriesExhaustedError, NotFoundError
+from app.core.exceptions import (
+    InvalidRequestError,
+    LLMOutputError,
+    LLMRetriesExhaustedError,
+    NotFoundError,
+    PublishFailedError,
+    PublishUncertainError,
+)
 from app.models.pipeline import PipelineVersionBody
 from app.repositories.expository_run import ExpositoryRunRepository
 from app.repositories.pipeline_version import PipelineVersionRepository
 from app.services.agent_calls import AgentCallService
-from app.services.expository import ExpositoryPipeline, RunSeed
+from app.services.expository import TOPIC_KEYS, ExpositoryPipeline, RunSeed
 from app.services.pipeline_versions import PipelineVersionService
 from tests.factories import (
     make_expository_body,
@@ -26,7 +34,7 @@ from tests.factories import (
     make_pipeline_body,
     make_pipeline_version,
 )
-from tests.fakes import FakeAgentCallRepository, FakeAsyncDatabase, FakeLLMClient
+from tests.fakes import FakeAgentCallRepository, FakeAsyncDatabase, FakeLLMClient, FakePostBE
 
 pytestmark = pytest.mark.anyio
 
@@ -50,7 +58,7 @@ class Harness:
         self._body = body or make_expository_body(draft_min_chars=10)
         self._seeded = False
 
-    async def pipeline(self, client: LLMClient) -> ExpositoryPipeline:
+    async def pipeline(self, client: LLMClient, publisher: FakePostBE | None = None) -> ExpositoryPipeline:
         versions = PipelineVersionRepository(self.database)
         if not self._seeded:
             await versions.add(make_pipeline_version(body=self._body))
@@ -62,8 +70,8 @@ class Harness:
             versions=PipelineVersionService(versions),
             providers=["anthropic"],
             repository=self.runs,
-            publisher=None,
-            main_categories=[],
+            publisher=publisher,
+            main_categories=["backend"],
         )
 
 
@@ -200,3 +208,104 @@ async def test_get_result_raises_for_an_unknown_run():
     harness = Harness()
     with pytest.raises(NotFoundError):
         await (await harness.pipeline(FakeLLMClient([]))).get_result("expository-none")
+
+
+CATEGORIES = [
+    PostCategory(id="main-1", value="backend", label="Backend"),
+    PostCategory(id="sub-1", parent_id="main-1", value="spring", label="Spring"),
+]
+
+
+async def _finished(harness: Harness, topic: dict | None = None) -> None:
+    """9단계까지 끝난 실행을 만든다. topic 을 주면 1단계를 건너뛴 실행이다(카테고리·키워드 없음)."""
+    script = _full_script() if topic is None else _full_script()[1:]
+    await (await harness.pipeline(FakeLLMClient(script))).run(RUN_ID, RunSeed(topic=topic))
+
+
+async def test_publish_posts_the_article_with_the_note_and_records_it_once():
+    harness = Harness()
+    await _finished(harness)
+    post_be = FakePostBE(categories=CATEGORIES)
+    pipeline = await harness.pipeline(FakeLLMClient([]), post_be)
+
+    result = await pipeline.publish(RUN_ID)
+
+    assert result.external_post_id == "post-1"
+    [payload] = post_be.payloads
+    assert (payload.title, payload.main_category_id, payload.sub_category_id, payload.language) == (
+        KOREAN_TITLE,
+        "main-1",
+        "sub-1",
+        "ko",
+    )
+    assert payload.tags == ["spring", "transaction", "proxy"]
+    assert post_be.providers == ["anthropic"]  # 작성(5단계) 모델의 벤더 계정
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.publication is not None
+    # 사실 확인은 키가 있는 anthropic 후보로 돌았다. 그 모델이 리뷰 줄에 렌즈 라벨과 함께 남는다
+    assert stored.publication.note.splitlines()[2:] == [
+        "## AI Information",
+        "",
+        "- 작성: claude-opus-5-5",
+        "- 리뷰: claude-opus-5-5(사실·구조)",
+    ]
+    assert "AI Information" in str(payload.content) and "sec:intro" not in str(payload.content)
+    with pytest.raises(InvalidRequestError, match="이미 게시글 post-1"):
+        await pipeline.publish(RUN_ID)
+    assert len(post_be.payloads) == 1
+
+
+async def test_publish_lists_category_choices_when_the_run_has_none_and_takes_them_as_arguments():
+    harness = Harness()
+    await _finished(harness, topic={key: make_expository_topic()[key] for key in TOPIC_KEYS})
+    post_be = FakePostBE(categories=CATEGORIES)
+    pipeline = await harness.pipeline(FakeLLMClient([]), post_be)
+
+    with pytest.raises(
+        InvalidRequestError, match="Backend / Spring: --main-category-id main-1 --sub-category-id sub-1"
+    ):
+        await pipeline.publish(RUN_ID)
+    assert post_be.payloads == []
+
+    await pipeline.publish(RUN_ID, main_category_id="main-1", sub_category_id="sub-1", keywords=["spring"])
+
+    assert post_be.payloads[0].tags == ["spring"]
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.article is not None
+    assert (stored.article.main_category_id, stored.article.keywords) == ("main-1", ["spring"])
+
+
+async def test_publish_can_be_retried_after_a_confirmed_failure_but_not_after_an_unknown_result():
+    harness = Harness()
+    await _finished(harness)
+    post_be = FakePostBE([PublishFailedError("400"), PublishUncertainError("timeout")], categories=CATEGORIES)
+    pipeline = await harness.pipeline(FakeLLMClient([]), post_be)
+
+    with pytest.raises(PublishFailedError):
+        await pipeline.publish(RUN_ID)
+    with pytest.raises(PublishUncertainError):  # 확정 실패 뒤에는 다시 올릴 수 있다
+        await pipeline.publish(RUN_ID)
+    with pytest.raises(InvalidRequestError, match="--force"):  # 결과를 모르면 막는다
+        await pipeline.publish(RUN_ID)
+    assert len(post_be.payloads) == 2
+
+    result = await pipeline.publish(RUN_ID, force=True)
+    assert result.external_post_id == "post-3"
+
+
+async def test_publish_refuses_an_unfinished_or_unknown_run_and_a_missing_post_be():
+    harness = Harness()
+    topic = make_expository_topic()
+    outline = json.dumps(make_expository_outline(topic["core_argument"]))
+    await (await harness.pipeline(FakeLLMClient([outline]))).run(RUN_ID, RunSeed(topic=topic), stop_after=2)
+    pipeline = await harness.pipeline(FakeLLMClient([]), FakePostBE(categories=CATEGORIES))
+
+    with pytest.raises(InvalidRequestError, match="9단계"):
+        await pipeline.publish(RUN_ID)
+    with pytest.raises(NotFoundError):
+        await pipeline.publish("expository-none")
+
+    other = Harness()
+    await _finished(other)
+    with pytest.raises(ValueError, match="POST_BE_URL"):
+        await (await other.pipeline(FakeLLMClient([]))).publish(RUN_ID)

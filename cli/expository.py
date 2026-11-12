@@ -1,4 +1,4 @@
-"""설명문 파이프라인 CLI. `seed` 로 프롬프트·라우트를 파이프라인 버전에 넣고, `run` 으로 글 하나를 만들고, `show` 로 결과를 본다.
+"""설명문 파이프라인 CLI. `seed` 로 프롬프트·라우트를 파이프라인 버전에 넣고, `run` 으로 글 하나를 만들고, `show` 로 보고, `publish` 로 블로그에 올린다.
 
 프롬프트·단계별 모델은 Mongo 파이프라인 버전에 있다(09 문서 D-99). 한 단계만 고칠 때는 기존 명령
 `python -m cli agents pipeline edit-prompt expository <단계> --file …` 을 쓴다. 실행 결과는 Mongo `expository_runs` 다(D-100).
@@ -126,6 +126,37 @@ def show(
         return await build_expository_pipeline(database, settings).get_result(run_id)
 
     _write_markdown(_run(_show), out)
+
+
+@app.command()
+def publish(
+    run_id: Annotated[str, typer.Argument(help="실행 id")],
+    main_category_id: Annotated[
+        str | None, typer.Option("--main-category-id", help="Post BE 메인 카테고리 id. 없으면 1단계 결과")
+    ] = None,
+    sub_category_id: Annotated[
+        str | None, typer.Option("--sub-category-id", help="Post BE 서브 카테고리 id. 없으면 1단계 결과")
+    ] = None,
+    keyword: Annotated[
+        list[str] | None, typer.Option("--keyword", help="태그. 여러 번 줄 수 있다. 없으면 1단계 결과")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="지난 발행의 결과를 모를 때, 블로그에 글이 없는 것을 확인하고 다시 올린다")
+    ] = False,
+) -> None:
+    """끝난 글을 블로그에 올린다. 한 실행은 한 번만 올린다. 카테고리가 없거나 틀리면 고를 수 있는 쌍을 알려 준다."""
+
+    async def _publish(database, settings) -> ExpositoryResult:
+        return await build_expository_pipeline(database, settings).publish(
+            run_id,
+            main_category_id=main_category_id,
+            sub_category_id=sub_category_id,
+            keywords=keyword,
+            force=force,
+        )
+
+    result = _run(_publish)
+    typer.echo(f"{result.run_id}: 게시글 {result.external_post_id} 로 올렸다")
 
 
 if __name__ == "__main__":

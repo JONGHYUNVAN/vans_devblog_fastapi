@@ -12,3 +12,4 @@ class ExpositoryResult(BaseModel):
     title: str | None = None
     summary: str | None = None
     markdown: str | None = None  # "# 제목", "> 요약", 본문 순서의 한 덩어리
+    external_post_id: str | None = None  # 블로그에 올렸으면 그 게시글 id

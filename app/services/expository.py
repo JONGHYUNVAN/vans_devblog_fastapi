@@ -2,7 +2,7 @@
 
 프롬프트·단계별 모델·조절 값은 실행을 시작할 때의 최신 파이프라인 버전(Mongo `agent_pipeline_versions`)에서 읽고, 호출은
 AgentCallService 를 거쳐 영수증(`agent_calls`, kind EXPOSITORY, round_id 는 실행 id, item_id 는 단계 key)에 버전 id 와 함께
-남는다(09 문서 D-99). 단계 결과와 완성된 글은 `expository_runs` 문서다(D-100).
+남는다(09 문서 D-99). 단계 결과와 완성된 글은 `expository_runs` 문서다(D-100). 발행은 run 과 따로 publish 가 한다(D-101).
 기존 라운드 러너(services/runner.py)와 따로 돌고 상태 기계·발행이 없다.
 라운드와 달리 버전을 고정하지 않는다(D-73 과 다르다): 같은 실행 id 로 다시 부르면 그때의 최신 버전을 쓴다. 프롬프트를
 고친 단계부터 다시 돌리는 것이 이어 하기의 목적이고, 어느 버전으로 부른 호출인지는 영수증마다 남는다.
@@ -14,6 +14,7 @@ import logging
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from string import Template
 from typing import Any
 
 from app.agents.expository import (
@@ -26,13 +27,15 @@ from app.agents.expository import (
     stage_models,
     stage_prompts,
 )
+from app.clients.publisher.base import PostCreatePayload
 from app.clients.publisher.post_be import PostBEPublisher
-from app.core.exceptions import LLMOutputError, NotFoundError
+from app.core.exceptions import InvalidRequestError, LLMOutputError, NotFoundError, PublishFailedError
 from app.models.agent_call import ChatMessage
 from app.models.enums import CallKind
-from app.models.expository import ExpositoryArticle, ExpositoryRun
+from app.models.expository import ExpositoryArticle, ExpositoryPublication, ExpositoryRun
 from app.models.model_binding import CallModel
-from app.models.pipeline import Parameters
+from app.models.pipeline import Parameters, PublishNoteParameters
+from app.models.tiptap import markdown_to_tiptap
 from app.repositories.expository_run import ExpositoryRunRepository
 from app.schemas.expository import ExpositoryResult
 from app.services.agent_calls import AgentCallService
@@ -61,6 +64,11 @@ DEFAULT_MAX_WORDS = 2200
 LAST_STAGE = len(STAGES)
 RUN_ID_PREFIX = "expository-"  # 실행 id 이자 영수증의 round_id. 라운드 id 와 섞이지 않게 앞에 붙인다
 TOPIC_KEYS = ("topic", "core_argument", "focus_mechanisms", "out_of_scope")
+WRITE_STAGE = "5_write"
+FACT_CHECK_STAGES = ("4_outline_fact_check", "6_article_fact_check")
+_FACT_CHECK_LENS = "FACT_STRUCTURE"  # 글 끝 표기의 렌즈 라벨(사실·구조). 기존 라운드의 사실 확인 렌즈와 같은 이름이다
+_LANGUAGE = "ko"
+_TOPIC_MAX_CHARS = 200  # Post BE CreatePostDto.topic 상한
 
 Check = Callable[[dict[str, Any]], list[str]]
 
@@ -153,6 +161,94 @@ class ExpositoryPipeline:
         run = await self._repository.get(run_id)
         if run is None:
             raise NotFoundError(f"expository run {run_id} does not exist")
+        return to_result(run)
+
+    async def publish(
+        self,
+        run_id: str,
+        *,
+        main_category_id: str | None = None,
+        sub_category_id: str | None = None,
+        keywords: list[str] | None = None,
+        force: bool = False,
+    ) -> ExpositoryResult:
+        """끝난 글을 작성 모델 벤더의 계정으로 블로그(Post BE)에 올린다 (D-101). 한 실행은 한 번만 올린다.
+
+        카테고리·키워드는 1단계 결과를 쓰고, 인자가 있으면 그 값이 이긴다(1단계를 사람이 준 실행은 카테고리가 없다).
+        실패 계약: 없는 실행은 NotFoundError. 글이 끝나지 않았거나, 이미 올렸거나, 카테고리 쌍이 Post BE 에 없거나,
+        지난 발행의 결과를 모르는데 force 가 아니면 InvalidRequestError. Post BE 설정·발행 계정이 없거나 본문을 변환할 수
+        없으면 ValueError. 호출이 확정 실패하면 PublishFailedError(다시 올릴 수 있다), 결과를 모르면 PublishUncertainError
+        (시도 시각이 남아 다음 호출이 막힌다. 블로그를 확인한 뒤 force 로 다시 올린다).
+        """
+        run = await self._repository.get(run_id)
+        if run is None:
+            raise NotFoundError(f"expository run {run_id} does not exist")
+        article = run.article
+        if article is None:
+            raise InvalidRequestError(f"{run_id}: 9단계까지 끝나지 않아 올릴 글이 없다")
+        if run.publication is not None:
+            raise InvalidRequestError(f"{run_id}: 이미 게시글 {run.publication.external_post_id} 로 올렸다")
+        if run.publish_attempted_at is not None and not force:
+            raise InvalidRequestError(
+                f"{run_id}: {run.publish_attempted_at.isoformat()} 의 발행 결과를 모른다. "
+                "블로그에 글이 없는지 확인한 뒤 --force 로 다시 올린다"
+            )
+        if self._publisher is None:
+            raise ValueError("Post BE publishing is not configured (POST_BE_URL)")
+        version = await self._versions.require_latest()
+        # D-101 전에 끝난 단계는 모델 기록이 없다. 없는 단계는 지금 버전의 라우트로 대신한다
+        models = {**stage_models(version.routes, self._providers), **run.stage_models}
+        writer = models[WRITE_STAGE]
+        if not self._publisher.has_account(writer.provider):
+            raise ValueError(
+                f"publishing account for provider {writer.provider!r} is not configured (USER_SERVICE_URL too)"
+            )
+        main_id = main_category_id or article.main_category_id
+        sub_id = sub_category_id or article.sub_category_id
+        options = category_options(await self._publisher.list_categories(), self._main_categories)
+        if (main_id, sub_id) not in {(option.main_category_id, option.sub_category_id) for option in options}:
+            choices = "\n".join(
+                f"  {option.main_label} / {option.sub_label}: "
+                f"--main-category-id {option.main_category_id} --sub-category-id {option.sub_category_id}"
+                for option in options
+            )
+            raise InvalidRequestError(
+                f"{run_id}: 카테고리 쌍 ({main_id}, {sub_id}) 이 Post BE 에 없다. 고를 수 있는 쌍:\n{choices}"
+            )
+        note = build_publish_note(
+            writer.model_id,
+            [models[key].model_id for key in FACT_CHECK_STAGES if key in models],
+            version.parameters.publish.note,
+        )
+        article.main_category_id, article.sub_category_id = main_id, sub_id
+        if keywords:
+            article.keywords = keywords
+        payload = PostCreatePayload(
+            title=article.title,
+            content=markdown_to_tiptap(f"{article.content_markdown.rstrip()}\n\n{note}"),
+            description=article.summary,
+            tags=article.keywords,
+            topic=article.topic[:_TOPIC_MAX_CHARS],
+            main_category_id=main_id,
+            sub_category_id=sub_id,
+            language=_LANGUAGE,
+        )
+        # 호출 전에 시도를 적는다. 응답 전에 끊기면 이 값만 남아 다음 호출이 중복 게시를 만들지 않는다
+        run.publish_attempted_at = datetime.now(UTC)
+        await self._repository.upsert(run)
+        try:
+            result = await self._publisher.publish(payload, writer.provider)
+        except PublishFailedError:
+            run.publish_attempted_at = None  # 글이 만들어지지 않은 것이 확실하다. 다시 올릴 수 있게 지운다
+            await self._repository.upsert(run)
+            raise
+        run.publication = ExpositoryPublication(
+            external_post_id=result.external_post_id,
+            published_at=datetime.now(UTC),
+            provider=writer.provider,
+            note=note,
+        )
+        await self._repository.upsert(run)
         return to_result(run)
 
     async def _topic(self, stage: Stage) -> None:
@@ -275,8 +371,10 @@ class ExpositoryPipeline:
         self._run.stage_outputs[stage.key] = output
         if prompt is None:
             self._run.stage_prompts.pop(stage.key, None)
+            self._run.stage_models.pop(stage.key, None)  # 사람이 준 결과다
         else:
             self._run.stage_prompts[stage.key] = prompt
+            self._run.stage_models[stage.key] = self._models[stage.key]
         await self._save()
 
     async def _save(self) -> None:
@@ -322,6 +420,20 @@ class ExpositoryPipeline:
         return [option.model_dump() for option in options]
 
 
+def build_publish_note(writer: str, fact_checkers: list[str], note: PublishNoteParameters) -> str:
+    """글 끝 "AI Information" 표기 마크다운. 문구는 버전 문서의 조절 값(publish.note)이고 기존 라운드와 같은 모양이다 (D-87).
+
+    작성 줄과, 사실 확인 모델이 있으면 리뷰 줄(모델(사실·구조))을 적는다. 요약·용어·번역 단계는 적지 않는다:
+    표기 문구에 그 역할의 줄이 없다.
+    """
+    lines = ["---", "", note.heading, "", Template(note.writer).safe_substitute(models=writer)]
+    if fact_checkers:
+        label = note.lens_labels.get(_FACT_CHECK_LENS, _FACT_CHECK_LENS)
+        models = ", ".join(f"{model}({label})" for model in dict.fromkeys(fact_checkers))
+        lines.append(Template(note.reviewers).safe_substitute(models=models))
+    return "\n".join(lines) + "\n"
+
+
 def to_result(run: ExpositoryRun) -> ExpositoryResult:
     """실행 문서 → CLI 가 찍는 형태. 글이 끝났으면 제목·요약·본문을 한 덩어리 마크다운으로 만든다."""
     article = run.article
@@ -332,4 +444,5 @@ def to_result(run: ExpositoryRun) -> ExpositoryResult:
         title=article.title if article else None,
         summary=article.summary if article else None,
         markdown=f"# {article.title}\n\n> {article.summary}\n\n{article.content_markdown}" if article else None,
+        external_post_id=run.publication.external_post_id if run.publication else None,
     )

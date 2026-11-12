@@ -63,6 +63,18 @@ python -m cli.expository show expository-20261111-120000
 
 끝나지 않은 실행이면 끝난 단계 목록을 찍는다. 결과가 Mongo 에 있으므로 컨테이너가 다시 떠도 남고, 다른 PC 에서도 같은 id 로 이어 하거나 볼 수 있다.
 
+### 블로그에 올리기
+
+```bash
+python -m cli.expository publish expository-20261111-120000
+```
+
+끝난 글을 작성(5단계) 모델 벤더의 발행 계정으로 올린다(09 문서 D-101). 본문 뒤에 `## AI Information`(작성 모델, 사실 확인 모델)이 붙는다. 한 실행은 한 번만 올린다.
+
+- `--topic-file` 로 1단계를 건너뛴 실행은 카테고리가 없다. 그대로 부르면 고를 수 있는 카테고리 쌍과 그 id 를 찍어 주므로, 그 값을 `--main-category-id`·`--sub-category-id` 로 넘긴다. 태그는 `--keyword` 를 여러 번 준다.
+- 응답을 받기 전에 끊긴 발행은 결과를 모른다. 다음 호출이 막히므로 블로그에 글이 없는 것을 확인하고 `--force` 로 다시 올린다.
+- 용어 사전·제작 기록에는 아직 쓰지 않는다.
+
 ### 실행 결과가 남는 곳
 
 실행 하나가 Mongo `expository_runs` 문서 하나다(`_id` 가 실행 id, 09 문서 D-100).
@@ -74,6 +86,8 @@ python -m cli.expository show expository-20261111-120000
 | `checked_markdown`, `rejected_patches` | 6단계 패치를 적용한 영어 본문, 버린 패치 |
 | `assembled_markdown` | 표·용어 정리를 넣은 영어 본문(번역 입력) |
 | `article` | 한국어 제목·요약·본문, 키워드·카테고리, 글을 끝낸 실행의 `pipeline_version` |
+| `stage_models.{단계}` | 그 결과를 낸 모델 |
+| `publication`, `publish_attempted_at` | 올린 게시글 id·시각·계정·글 끝 표기, 발행 호출을 시작한 시각 |
 
 호출별 모델·토큰·검사 오류·원문은 영수증(`agent_calls`, `round_id` 가 실행 id, `item_id` 가 단계)에 있다.
 
@@ -124,5 +138,6 @@ python -m cli.expository show expository-20261111-120000
 ## 아직 없는 것
 
 - 실제 모델로 돌린 결과. 단위 테스트는 가짜 LLM 이다(`tests/services/test_expository*.py`, `tests/agents/test_expository.py`). 2단계 뼈대만 대화 세션에서 한 번 돌렸다(2026-11-11, 영어 출력으로 바꾸기 전 버전).
-- 발행. 끝난 글(`article`)을 Post BE 로 올리는 길은 없다.
+- 자동 발행. `run` 이 끝나도 올리지 않는다. `publish` 를 따로 부른다.
+- 발행한 글의 용어 사전·제작 기록 연결.
 - 실행이 고칠 수 없는 사실 오류(blocking)에서 뼈대를 자동으로 다시 만드는 것. 지금은 멈추고 사람이 다시 돌린다.
