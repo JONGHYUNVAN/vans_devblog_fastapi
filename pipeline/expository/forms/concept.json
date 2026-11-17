@@ -1,7 +1,7 @@
 {
   "label": "Concept and structure",
   "use_when": "The subject is a component, data structure, protocol, or runtime mechanism, and the reader wants to know what it is, what it is made of, and how it operates. There is no failure to diagnose.",
-  "topic": "The subject and the angle of explanation, phrased the way a developer would search for it (e.g., 'How a B+tree index is laid out and searched in InnoDB'). Not a symptom and not a how-to.",
+  "topic": "The subject itself, named as one noun phrase: the component, data structure, protocol, or mechanism the article explains, with the system it belongs to when that is needed to identify it. Not a question, not a symptom, and not a how-to.",
   "thesis": "One declarative sentence claiming why the subject is built the way it is, or what necessarily follows from that design: a claim a competent engineer would want justified. A definition of the subject is not a thesis.",
   "focus_points": "Three items, or four when the subject has internal variants or a neighbor it is commonly confused with, in this order: (1) the parts the subject is made of, (2) how those parts interact when it operates, (3) why it is designed this way, (4, optional) the variants or the neighboring concept to tell apart. Each item names the specific aspect of this subject, not the generic label.",
   "overview_header": ["Aspect", "Takeaway"],

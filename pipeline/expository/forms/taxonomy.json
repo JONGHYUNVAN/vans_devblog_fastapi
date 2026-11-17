@@ -1,7 +1,7 @@
 {
   "label": "Classification and types",
   "use_when": "The subject is a family with several kinds, such as isolation levels, index types, garbage collectors, or caching directives, and the reader wants to know which kinds exist and what sets each one apart.",
-  "topic": "The family and the basis of classification, phrased the way a developer would search for it (e.g., 'The four transaction isolation levels and what each one permits'). Not a recommendation of one kind.",
+  "topic": "The family itself, named as one noun phrase: the set of kinds the article classifies. Not a question and not a recommendation of one kind.",
   "thesis": "One declarative sentence claiming that a single criterion explains how the kinds differ: a claim a competent engineer would want justified. 'There are N kinds' is not a thesis.",
   "focus_points": "Three or more items: first the classification criterion, then one item per kind (two or more kinds). Each kind item names the kind and its defining trait under that criterion.",
   "overview_header": ["Type", "Takeaway"],

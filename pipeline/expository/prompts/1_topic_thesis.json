@@ -15,6 +15,7 @@
     "output_language: Write every string value in English. A later step translates the finished article.",
     "form_choice: form is the id of exactly one item of inputs.forms. Choose it by use_when. Do not bend a topic to fit a form: a subject the reader wants to understand is not a failure to diagnose, and a failure a developer runs into is not a concept overview.",
     "form_shapes: Write topic, core_argument, and focus_points in the shapes the chosen form gives under topic, thesis, and focus_points. focus_points has at least focus_points_min items and at most focus_points_max items of the chosen form (null means no upper limit).",
+    "topic_shape: topic names one thing in a single phrase. Do not add a subtitle or a second part after a colon, after a dash, or in parentheses.",
     "single_subject: The article explains one subject. Never frame the topic as a comparison of two options ('A vs B', 'A or B', 'differences between A and B', 'when to choose A over B').",
     "arguable_thesis: core_argument is one declarative sentence that a competent engineer could dispute or would want justified. A plain fact or a dictionary definition (e.g., 'the server returns 403', 'an index is a data structure') is not a thesis.",
     "distinct_points: No two items of focus_points cover the same part of the subject or rest on the same underlying principle.",

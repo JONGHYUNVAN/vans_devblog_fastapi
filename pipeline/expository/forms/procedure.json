@@ -1,7 +1,7 @@
 {
   "label": "Procedure and flow",
   "use_when": "The subject is a process that runs in stages over time, such as a request lifecycle, a startup sequence, a commit protocol, or a compilation pipeline, and the reader wants to follow what happens at each stage.",
-  "topic": "The process and the span the article follows, phrased the way a developer would search for it (e.g., 'What happens between calling save() and the row reaching disk'). Not a symptom and not a how-to.",
+  "topic": "The process itself, named as one noun phrase that says what runs and in which system. Not a question, not a symptom, and not a how-to.",
   "thesis": "One declarative sentence claiming what the order or the division of the stages guarantees or makes possible: a claim a competent engineer would want justified. A list of the stages is not a thesis.",
   "focus_points": "Three or more items, one per stage, in the order the stages run. Each item names the stage and what it is responsible for.",
   "overview_header": ["Stage", "Takeaway"],
