@@ -109,7 +109,19 @@ python -m cli.expository publish expository-20261111-120000
 
 - `--topic-file` 로 1단계를 건너뛴 실행은 카테고리가 없다. 그대로 부르면 고를 수 있는 카테고리 쌍과 그 id 를 찍어 주므로, 그 값을 `--main-category-id`·`--sub-category-id` 로 넘긴다. 태그는 `--keyword` 를 여러 번 준다.
 - 응답을 받기 전에 끊긴 발행은 결과를 모른다. 다음 호출이 막히므로 블로그에 글이 없는 것을 확인하고 `--force` 로 다시 올린다.
-- 용어 사전·제작 기록에는 아직 쓰지 않는다.
+- 글을 올린 뒤 그 글의 용어를 용어 사전에 잇는다(아래 "용어 사전"). 제작 기록에는 아직 쓰지 않는다.
+
+### 용어 사전
+
+9단계가 끝나면 러너가 완성된 글에서 용어를 뽑아 용어 사전에 등록 확인을 한다(09 문서 D-106). 기존 라운드와 같은 추출 호출이다: 버전 문서의 `GLOSSARY` 라우트, `haiku/glossary` 프롬프트, 조절 값 `glossary`. 번호 단계가 아니라서 `--stop-after`·`--redo-from` 의 단계 번호는 그대로다. 결과는 실행 문서의 `glossary`, 영수증은 `kind=GLOSSARY`·`round_id={실행 id}` 다. 추출이 실패하거나 라우트가 없으면 사유만 남기고 글은 그대로 끝난다.
+
+`publish` 가 글을 올린 뒤 `post_glossary` 를 쓰고 그 글이 제안한 표제어·뜻을 자동 승인한다(08 문서 D-65 개정과 같다). 이 따라 쓰기가 실패해도 발행은 성공이고 아래 명령으로 다시 한다.
+
+```bash
+python -m cli.expository glossary expository-20261111-120000
+```
+
+끝난 실행의 용어를 다시 뽑는다. 이미 올린 글이면 `post_glossary` 를 덮어쓴다(사람이 `agents glossary resolve`·`drop` 으로 고친 것은 사라진다). 이 단계가 생기기 전에 올린 글은 이 명령으로 채운다.
 
 ### 실행 결과가 남는 곳
 
@@ -120,9 +132,10 @@ python -m cli.expository publish expository-20261111-120000
 | `stage_outputs.{단계}` | 검사를 통과한 결과 |
 | `stage_prompts.{단계}` | 그 결과를 만든 프롬프트(입력을 채운 것) |
 | `checked_markdown`, `rejected_patches` | 6단계 패치를 적용한 본문, 버린 패치 |
-| `assembled_markdown` | 표·용어 정리를 넣은 본문(8단계 입력) |
+| `assembled_markdown` | 요약 표를 넣은 본문(8단계 입력) |
 | `article` | 한국어 제목·요약·본문, 키워드·카테고리, 글을 끝낸 실행의 `pipeline_version` |
 | `stage_models.{단계}` | 그 결과를 낸 모델 |
+| `glossary` | 용어 추출 기록(항목·보류·버린 것, 건너뛰었으면 그 사유) |
 | `publication`, `publish_attempted_at` | 올린 게시글 id·시각·계정·글 끝 표기, 발행 호출을 시작한 시각 |
 
 호출별 모델·토큰·검사 오류·원문은 영수증(`agent_calls`, `round_id` 가 실행 id, `item_id` 가 단계)에 있다.
@@ -183,7 +196,7 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location(`regions[2].key_sentence` 꼴)만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `--redo-from 2` 로 뼈대부터 다시 돌린다.
 - 5 뒤: 섹션 앵커가 뼈대와 양식에서 나온 순서 그대로다(`diagnosis` 면 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion`). 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
 - 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 실행 문서의 `rejected_patches` 에 남는다.
-- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 정의가 있는 용어로 `<!-- sec:glossary -->` 용어 정리 절을 붙인다. 표 문구(`Summary`·`Item`·`Explanation`·`Overview`·`Glossary`·`Term`·`Definition`)는 코드가 영어로 넣고 8단계가 한국어로 옮긴다.
+- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 용어에 `definition` 이 있으면 `<!-- sec:glossary -->` 용어 정리 절을 붙인다. 지금 7단계 지시문은 정의를 쓰지 않아 이 절이 붙지 않는다(용어는 용어 사전으로 간다, D-106). 표 문구(`Summary`·`Item`·`Explanation`·`Overview`)는 코드가 영어로 넣고 8단계가 한국어로 옮긴다.
 - 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 7단계 조립본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 길이(`draft_min_chars`~`draft_reject_chars`, 버전의 조절 값)·변환·합쇼체·명령형·코드 주석 검사.
 - 9 뒤: 요약 150자 이하, "이 글"로 시작하지 않는다.
 
@@ -207,5 +220,6 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 지시문 낱말 검사(`LEAK_PATTERN`)와 비교 주제 검사(`COMPARISON_PATTERN`)는 영어 낱말만 안다. 한국어 본문에 지시문 낱말이 새도 잡지 못한다.
 - 문서 출력과 `documents_first` 배치(D-103)의 실제 실행 확인. 같은 뼈대로 전후를 견주는 방법: 새 프롬프트를 넣기 전에 실행을 끝까지 돌려 `show --out a.md`, `seed` 와 `edit-param` 뒤 같은 실행을 `run --run-id … --redo-from 5` 로 다시 돌려 `show --out b.md`. 두 글과 영수증의 5·8단계 출력 토큰·재시도, 실행 문서의 `rejected_patches` 수를 본다.
 - 자동 발행. `run` 이 끝나도 올리지 않는다. `publish` 를 따로 부른다.
-- 발행한 글의 용어 사전·제작 기록 연결. 용어 사전 등록은 2026-11-15 에 다른 PC 에서 만든 것이 있다(운영 v28 의 7단계 지시문 "정의를 쓰지 않는다", 실행 `expository-localtest-20261115-125200` 의 `glossary` 와 그 글의 `post_glossary`). 그 코드는 이 저장소에 없다.
+- 발행한 글의 제작 기록 연결.
+- 수준 입력(`level`, `level_profiles`). 2026-11-15 에 다른 PC 에서 만든 것이 운영 v26·v27 지시문에만 있고 코드는 이 저장소에 없다.
 - 실행이 고칠 수 없는 사실 오류(blocking)에서 뼈대를 자동으로 다시 만드는 것. 지금은 멈추고 사람이 다시 돌린다.

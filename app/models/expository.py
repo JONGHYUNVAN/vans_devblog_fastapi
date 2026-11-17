@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.glossary import GlossaryRecord
 from app.models.model_binding import CallModel
 
 
@@ -57,15 +58,18 @@ class ExpositoryRun(BaseModel):
     rejected_patches: list[dict[str, Any]] = Field(default_factory=list)  # 6단계에서 버린 패치와 이유
     assembled_markdown: str | None = None  # 7단계 표·용어 정리를 넣은 본문(8단계 입력)
     article: ExpositoryArticle | None = None  # 9단계까지 끝났을 때만
+    # 끝난 글의 용어 추출 기록. 번호 단계가 아니라 9단계 뒤에 한 번 돈다. 실패·건너뜀도 skipped 와 함께 남는다
+    glossary: GlossaryRecord | None = None
     # 발행 호출을 시작한 시각. publication 없이 이 값만 있으면 결과를 모른다(응답 전 끊김): 다시 올리면 중복 게시가 될 수 있다
     publish_attempted_at: datetime | None = None
     publication: ExpositoryPublication | None = None
 
     def drop_from(self, stage_keys: list[str]) -> None:
-        """주어진 단계들의 결과를 지운다. 그 단계부터 다시 부르게 할 때 쓴다. 완성된 글도 같이 지운다."""
+        """주어진 단계들의 결과를 지운다. 그 단계부터 다시 부르게 할 때 쓴다. 완성된 글과 그 용어 추출 기록도 같이 지운다."""
         for key in stage_keys:
             self.stage_outputs.pop(key, None)
             self.stage_prompts.pop(key, None)
             self.stage_models.pop(key, None)
         if stage_keys:
             self.article = None
+            self.glossary = None  # 새 글의 surface·앵커와 맞지 않는다

@@ -381,14 +381,40 @@ def build_glossary_input(
         ),
         topic.main_category_id,
     )
-    return GlossaryInput(
+    return build_article_glossary_input(
         title=version.title,
         audience=topic.audience,
         prerequisites=topic.prerequisites,
         main_category=main_label,
         keywords=list(topic.keywords),
         content_markdown=version.content_markdown,
-        section_ids=find_anchors(version.content_markdown),
+        known_headwords=known_headwords,
+        min_terms=min_terms,
+        max_terms=max_terms,
+    )
+
+
+def build_article_glossary_input(
+    *,
+    title: str,
+    audience: str,
+    prerequisites: str,
+    main_category: str,
+    keywords: list[str],
+    content_markdown: str,
+    known_headwords: list[KnownHeadword],
+    min_terms: int,
+    max_terms: int,
+) -> GlossaryInput:
+    """글 문서(PostDraft)가 없는 글의 용어 추출 입력. 설명문 파이프라인이 끝낸 글이 이 경로다(라운드 글도 여기로 모인다)."""
+    return GlossaryInput(
+        title=title,
+        audience=audience,
+        prerequisites=prerequisites,
+        main_category=main_category,
+        keywords=keywords,
+        content_markdown=content_markdown,
+        section_ids=find_anchors(content_markdown),
         known_headwords=known_headwords,
         allowed_domains=[DomainOption(slug=slug, label=label) for slug, label in DOMAINS.items()],
         min_terms=min_terms,

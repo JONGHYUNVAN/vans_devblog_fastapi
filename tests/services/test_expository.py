@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.agents.expository import STAGE_KEYS
+from app.agents.expository import STAGE_KEYS, stage_prompts
 from app.clients.llm.base import LLMClient
 from app.clients.llm.registry import LLMClientRegistry
 from app.clients.publisher.base import PostCategory
@@ -13,18 +13,26 @@ from app.core.exceptions import (
     InvalidRequestError,
     LLMOutputError,
     LLMRetriesExhaustedError,
+    LLMTransportError,
     NotFoundError,
     PublishFailedError,
     PublishUncertainError,
 )
+from app.models.enums import GlossaryStatus
+from app.models.model_binding import CallModel
 from app.models.pipeline import PipelineVersionBody
+from app.models.routing import ROUTE_GLOSSARY
 from app.repositories.expository_run import ExpositoryRunRepository
+from app.repositories.glossary import GlossaryRepository
 from app.repositories.pipeline_version import PipelineVersionRepository
 from app.services.agent_calls import AgentCallService
 from app.services.expository import TOPIC_KEYS, ExpositoryPipeline, RunSeed
+from app.services.glossary import GlossaryService
 from app.services.pipeline_versions import PipelineVersionService
 from tests.factories import (
     CONCEPT_SECTION_IDS,
+    glossary_candidate,
+    glossary_output,
     make_expository_body,
     make_expository_concept_outline,
     make_expository_concept_topic,
@@ -36,6 +44,7 @@ from tests.factories import (
     make_expository_topic,
     make_pipeline_body,
     make_pipeline_version,
+    new_sense,
 )
 from tests.fakes import FakeAgentCallRepository, FakeAsyncDatabase, FakeLLMClient, FakePostBE
 
@@ -58,23 +67,38 @@ class Harness:
         self.database = FakeAsyncDatabase()
         self.receipts = FakeAgentCallRepository()
         self.runs = ExpositoryRunRepository(self.database)
+        self.glossary_repository = GlossaryRepository(self.database)
         self._body = body or make_expository_body(draft_min_chars=10)
         self._seeded = False
 
-    async def pipeline(self, client: LLMClient, publisher: FakePostBE | None = None) -> ExpositoryPipeline:
+    async def pipeline(
+        self,
+        client: LLMClient,
+        publisher: FakePostBE | None = None,
+        *,
+        with_glossary: bool = True,
+        glossary: GlossaryService | None = None,
+    ) -> ExpositoryPipeline:
+        """with_glossary 면 용어 서비스를 붙인다. glossary 를 주면 그 서비스를 쓴다(따라 쓰기 실패 대역)."""
         versions = PipelineVersionRepository(self.database)
         if not self._seeded:
             await versions.add(make_pipeline_version(body=self._body))
             self._seeded = True
         # 키가 anthropic 하나뿐이라 사실 확인 라우트의 google 첫 후보도 anthropic 으로 내려간다
         registry = LLMClientRegistry({"anthropic": client}, concurrency_per_provider=1)
+        calls = AgentCallService(self.receipts, registry, Settings(_env_file=None), sleep=_no_sleep)
+        if glossary is None and with_glossary:
+            glossary = GlossaryService(
+                repository=self.glossary_repository, settings=Settings(_env_file=None), agent_call_service=calls
+            )
         return ExpositoryPipeline(
-            calls=AgentCallService(self.receipts, registry, Settings(_env_file=None), sleep=_no_sleep),
+            calls=calls,
             versions=PipelineVersionService(versions),
             providers=["anthropic"],
             repository=self.runs,
             publisher=publisher,
             main_categories=["backend"],
+            glossary=glossary,
         )
 
 
@@ -440,3 +464,168 @@ async def test_publish_refuses_an_unfinished_or_unknown_run_and_a_missing_post_b
     await _finished(other)
     with pytest.raises(ValueError, match="POST_BE_URL"):
         await (await other.pipeline(FakeLLMClient([]))).publish(RUN_ID)
+
+
+# ---------- 끝난 글의 용어 사전 등록 ----------
+
+GLOSSARY_MODEL = CallModel(provider="anthropic", model_id="claude-haiku-4-5", max_output_tokens=1000)
+PROXY = glossary_candidate(
+    term_ko="프록시",
+    term_en="proxy",
+    surface="프록시가",
+    section_id="intro",
+    new_sense=new_sense(definition="다른 객체 대신 호출을 받아 앞뒤 처리를 붙이는 객체"),
+)
+TRANSACTION = glossary_candidate(
+    term_ko="트랜잭션",
+    term_en="transaction",
+    surface="트랜잭션을",
+    section_id="concept",
+    new_sense=new_sense(domains=("db",), definition="한 단위로 함께 반영되거나 함께 취소되는 작업 묶음"),
+)
+
+
+def _glossary_body() -> PipelineVersionBody:
+    """GLOSSARY 라우트에 키가 있는 벤더(anthropic) 후보를 둔 버전. 기본 픽스처의 용어 라우트는 키 없는 가짜 벤더다."""
+    body = make_expository_body(draft_min_chars=10)
+    body.routes[ROUTE_GLOSSARY] = [GLOSSARY_MODEL]
+    return body
+
+
+async def test_run_registers_the_finished_article_terms_with_the_run_as_source():
+    harness = Harness(body=_glossary_body())
+    client = FakeLLMClient([*_full_script(), glossary_output(PROXY)])
+
+    result = await (await harness.pipeline(client, FakePostBE(categories=CATEGORIES))).run(RUN_ID, RunSeed())
+
+    # 번호 단계는 그대로 9개이고 용어 추출은 그 뒤 한 번이다
+    assert result.finished_stages == list(STAGE_KEYS)
+    receipt = harness.receipts.calls[-1]
+    assert (receipt.kind, receipt.round_id, receipt.draft_id, receipt.item_id) == ("GLOSSARY", RUN_ID, None, None)
+    assert (receipt.target_version, receipt.pipeline_version, receipt.model_binding) == (1, "v1", GLOSSARY_MODEL)
+    sent = json.loads(client.calls[-1].messages[1].content.removeprefix("입력(JSON):\n"))
+    reader = stage_prompts(harness._body.prompts)["5_write"]["system_config"]["reader"]
+    assert (sent["title"], sent["audience"], sent["prerequisites"], sent["main_category"]) == (
+        KOREAN_TITLE,
+        reader,
+        "",
+        "Backend",  # 실행에는 카테고리 id 만 있다. 라벨은 Post BE 카테고리 목록에서 찾는다
+    )
+    assert sent["keywords"] == ["spring", "transaction", "proxy"]
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.article is not None and stored.glossary is not None
+    assert sent["content_markdown"] == stored.article.content_markdown
+    record = stored.glossary
+    assert (record.skipped, record.call_id, record.target_version) == (None, receipt.call_id, 1)
+    assert [(item.surface, item.section_id, item.resolution) for item in record.items] == [("프록시가", "intro", "NEW")]
+    headword = await harness.glossary_repository.get_headword("proxy")
+    assert headword is not None and headword.status == GlossaryStatus.PROPOSED
+    assert headword.proposed_by is not None and headword.proposed_by.draft_id == RUN_ID
+
+
+async def test_run_finishes_and_records_why_when_the_glossary_is_skipped():
+    failing = Harness(body=_glossary_body())
+    client = FakeLLMClient([*_full_script(), *[LLMTransportError("boom")] * 5])
+
+    result = await (await failing.pipeline(client)).run(RUN_ID, RunSeed())
+
+    assert result.title == KOREAN_TITLE
+    stored = await failing.runs.get(RUN_ID)
+    assert stored is not None and stored.glossary is not None
+    assert stored.glossary.skipped is not None and stored.glossary.skipped.startswith("LLMRetriesExhaustedError")
+    # 카테고리 목록이 없으면(Post BE 미설정) 라벨 없이 뽑는다. id 를 보내지 않는다
+    assert '"main_category": ""' in client.calls[9].messages[1].content
+
+    no_route = Harness()  # 기본 픽스처의 용어 라우트 후보에는 키가 없다
+    await (await no_route.pipeline(FakeLLMClient(_full_script()))).run(RUN_ID, RunSeed())
+    stored = await no_route.runs.get(RUN_ID)
+    assert stored is not None and stored.glossary is not None and stored.glossary.skipped == "no GLOSSARY route"
+
+
+async def test_run_redo_clears_the_glossary_with_the_article():
+    harness = Harness(body=_glossary_body())
+    await (await harness.pipeline(FakeLLMClient([*_full_script(), glossary_output(PROXY)]))).run(RUN_ID, RunSeed())
+
+    await (await harness.pipeline(FakeLLMClient(_full_script()[7:8]))).run(RUN_ID, RunSeed(), redo_from=8, stop_after=8)
+
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and (stored.article, stored.glossary) == (None, None)
+
+
+async def test_publish_links_the_glossary_to_the_post_and_approves_the_proposals():
+    harness = Harness(body=_glossary_body())
+    await (await harness.pipeline(FakeLLMClient([*_full_script(), glossary_output(PROXY)]))).run(RUN_ID, RunSeed())
+
+    await (await harness.pipeline(FakeLLMClient([]), FakePostBE(categories=CATEGORIES))).publish(RUN_ID)
+
+    post_glossary = await harness.glossary_repository.get_post_glossary("post-1")
+    assert post_glossary is not None
+    assert (post_glossary.draft_id, post_glossary.round_id, post_glossary.content_version) == (RUN_ID, RUN_ID, 1)
+    assert (post_glossary.pipeline_version, post_glossary.prompt_template_version) == ("v1", None)
+    assert post_glossary.call_id == harness.receipts.calls[-1].call_id
+    assert [item.surface for item in post_glossary.items] == ["프록시가"]
+    [sense_key] = [item.sense_key for item in post_glossary.items]
+    sense = await harness.glossary_repository.get_sense(sense_key)
+    assert sense is not None and (sense.status, sense.approved_by, sense.post_ids) == (
+        GlossaryStatus.APPROVED,
+        "auto",
+        ["post-1"],
+    )
+
+
+class FailingGlossaryService(GlossaryService):
+    """발행 뒤 용어 연결이 실패하는 대역."""
+
+    async def link_post(self, *args, **kwargs) -> None:
+        raise RuntimeError("glossary store down")
+
+
+async def test_publish_succeeds_when_linking_the_glossary_fails():
+    harness = Harness()
+    await _finished(harness)
+    failing = FailingGlossaryService(repository=harness.glossary_repository, settings=Settings(_env_file=None))
+
+    result = await (
+        await harness.pipeline(FakeLLMClient([]), FakePostBE(categories=CATEGORIES), glossary=failing)
+    ).publish(RUN_ID)
+
+    assert result.external_post_id == "post-1"
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.publication is not None
+
+
+async def test_extract_glossary_reextracts_and_overwrites_the_post_glossary_of_a_published_run():
+    harness = Harness(body=_glossary_body())
+    await (await harness.pipeline(FakeLLMClient([*_full_script(), glossary_output(PROXY)]))).run(RUN_ID, RunSeed())
+    await (await harness.pipeline(FakeLLMClient([]), FakePostBE(categories=CATEGORIES))).publish(RUN_ID)
+
+    summary = await (await harness.pipeline(FakeLLMClient([glossary_output(TRANSACTION)]))).extract_glossary(RUN_ID)
+
+    assert summary == {
+        "run_id": RUN_ID,
+        "post_id": "post-1",
+        "items": 1,
+        "pending": 0,
+        "discarded": 0,
+        "skipped": None,
+    }
+    post_glossary = await harness.glossary_repository.get_post_glossary("post-1")
+    assert post_glossary is not None and [item.surface for item in post_glossary.items] == ["트랜잭션을"]
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.glossary is not None
+    assert [item.surface for item in stored.glossary.items] == ["트랜잭션을"]
+
+
+async def test_extract_glossary_refuses_unknown_and_unfinished_runs_and_a_runner_without_the_service():
+    harness = Harness(body=_glossary_body())
+    topic = make_expository_topic()
+    outline = json.dumps(make_expository_outline(topic["core_argument"]))
+    await (await harness.pipeline(FakeLLMClient([outline]))).run(RUN_ID, RunSeed(topic=topic), stop_after=2)
+    pipeline = await harness.pipeline(FakeLLMClient([]))
+
+    with pytest.raises(NotFoundError):
+        await pipeline.extract_glossary("expository-none")
+    with pytest.raises(InvalidRequestError, match="9단계"):
+        await pipeline.extract_glossary(RUN_ID)
+    with pytest.raises(ValueError, match="glossary service"):
+        await (await harness.pipeline(FakeLLMClient([]), with_glossary=False)).extract_glossary(RUN_ID)

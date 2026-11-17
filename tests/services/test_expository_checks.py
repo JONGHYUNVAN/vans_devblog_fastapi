@@ -9,6 +9,7 @@ from app.services.expository_checks import (
     check_outline,
     check_outline_fact_check,
     check_review,
+    check_summary_glossary,
     check_topic,
     check_translation,
     count_sentences,
@@ -23,6 +24,8 @@ from tests.factories import (
     make_expository_outline,
     make_expository_region,
     make_expository_section,
+    make_expository_summaries,
+    make_expository_terms,
     make_expository_topic,
 )
 
@@ -203,3 +206,13 @@ def test_check_translation_flags_changed_anchor_and_plain_register():
     errors = check_translation({"title": TITLE, "content_markdown": plain}, english, Parameters(draft_min_chars=10))
     assert any("anchors changed" in error for error in errors)
     assert any("합쇼체" in error for error in errors)
+
+
+def test_check_summary_glossary_accepts_terms_without_a_definition_but_not_a_non_string_one():
+    summaries = make_expository_summaries()
+    ids = [summary["section_id"] for summary in summaries]
+    terms = [{key: value for key, value in term.items() if key != "definition"} for term in make_expository_terms()]
+    assert check_summary_glossary({"section_summaries": summaries, "terms": terms}, ids) == []
+    terms[0]["definition"] = None
+    errors = check_summary_glossary({"section_summaries": summaries, "terms": terms}, ids)
+    assert errors == ["terms[0] needs keep_english (boolean); definition, when given, must be a string"]

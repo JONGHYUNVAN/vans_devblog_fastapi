@@ -641,6 +641,9 @@ class FakeAgentCallRepository:
     async def add(self, call: AgentCall) -> None:
         self.calls.append(call)
 
+    async def get(self, call_id: str) -> AgentCall | None:
+        return next((call for call in self.calls if call.call_id == call_id), None)
+
     async def list_by_draft(self, draft_id: str) -> list[AgentCall]:
         return [call for call in self.calls if call.draft_id == draft_id]
 

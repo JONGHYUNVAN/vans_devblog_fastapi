@@ -351,15 +351,18 @@ def build_publisher(settings: Settings) -> PostBEPublisher | None:
 def build_expository_pipeline(database: AsyncDatabase, settings: Settings) -> ExpositoryPipeline:
     """설명문 파이프라인 러너. 프롬프트·단계별 모델은 최신 파이프라인 버전에서 읽고 호출은 영수증에 남긴다 (09 문서 D-99).
 
-    단계 결과와 완성된 글은 expository_runs 에 쓴다(D-100). Post BE 는 1단계 카테고리 목록에만 쓴다.
+    단계 결과와 완성된 글은 expository_runs 에 쓴다(D-100). Post BE 는 카테고리 목록과 발행에 쓴다.
+    용어 서비스는 끝난 글의 용어 추출과 발행 연결에 쓰고, 단계 호출과 같은 호출 서비스(같은 DB·벤더 레지스트리)를 나눠 쓴다.
     """
+    calls = build_agent_call_service(database, settings)
     return ExpositoryPipeline(
-        calls=build_agent_call_service(database, settings),
+        calls=calls,
         versions=build_pipeline_version_service(database),
         providers=available_providers(settings),
         repository=ExpositoryRunRepository(database),
         publisher=build_publisher(settings),
         main_categories=settings.agent_main_category_values,
+        glossary=GlossaryService(repository=GlossaryRepository(database), settings=settings, agent_call_service=calls),
     )
 
 

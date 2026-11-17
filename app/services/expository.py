@@ -51,8 +51,10 @@ from app.core.exceptions import InvalidRequestError, LLMOutputError, NotFoundErr
 from app.models.agent_call import ChatMessage
 from app.models.enums import CallKind
 from app.models.expository import ExpositoryArticle, ExpositoryPublication, ExpositoryRun
+from app.models.glossary import GlossaryRecord
 from app.models.model_binding import CallModel
-from app.models.pipeline import Parameters, PublishNoteParameters
+from app.models.pipeline import Parameters, PipelineVersion, PublishNoteParameters
+from app.models.routing import ROUTE_GLOSSARY
 from app.models.tiptap import markdown_to_tiptap
 from app.repositories.expository_run import ExpositoryRunRepository
 from app.schemas.expository import ExpositoryResult
@@ -70,6 +72,7 @@ from app.services.expository_checks import (
     check_topic,
     check_translation,
 )
+from app.services.glossary import GlossaryService
 from app.services.pipeline_versions import PipelineVersionService
 from app.services.round import category_options
 
@@ -128,6 +131,7 @@ class ExpositoryPipeline:
         repository: ExpositoryRunRepository,
         publisher: PostBEPublisher | None,
         main_categories: Collection[str],
+        glossary: GlossaryService | None = None,
     ) -> None:
         self._calls = calls
         self._versions = versions
@@ -135,6 +139,7 @@ class ExpositoryPipeline:
         self._repository = repository
         self._publisher = publisher
         self._main_categories = main_categories
+        self._glossary = glossary  # 끝난 글의 용어 추출·발행 연결. 없으면 둘 다 하지 않는다
         # run 이 최신 버전과 실행 문서에서 채운다. 단계 메서드는 run 안에서만 불린다
         self._version_id = ""
         self._prompts: dict[str, dict[str, Any]] = {}
@@ -182,6 +187,16 @@ class ExpositoryPipeline:
             if stage.number > stop_after:
                 break
             await step(stage)
+        # 용어 추출은 번호 단계가 아니라 끝난 글에 한 번 붙는 일이다. 실패해도 skipped 로 남고 실행은 끝난다(라운드와 같은 정책, D-64)
+        article = self._run.article
+        if (
+            stop_after >= LAST_STAGE
+            and article is not None
+            and self._run.glossary is None
+            and self._glossary is not None
+        ):
+            self._run.glossary = await self._extract_glossary(self._glossary, self._run.run_id, article, version)
+            await self._save()
         return to_result(self._run)
 
     async def get_result(self, run_id: str) -> ExpositoryResult:
@@ -277,7 +292,80 @@ class ExpositoryPipeline:
             note=note,
         )
         await self._repository.upsert(run)
+        if run.glossary is not None and self._glossary is not None:
+            # 글은 이미 올라갔다. 용어 연결 실패로 발행을 실패로 보이면 안 되고 extract_glossary 가 다시 잇는다
+            try:
+                await self._glossary.link_post(result.external_post_id, run.run_id, run.glossary, overwrite=False)
+            except Exception:  # 발행 뒤 따라 쓰기 경계(derived_records 와 같은 정책)
+                logger.exception("%s: post %s glossary link failed", run.run_id, result.external_post_id)
         return to_result(run)
+
+    async def extract_glossary(self, run_id: str) -> dict[str, Any]:
+        """끝난 실행의 용어를 최신 버전으로 다시 뽑아 run.glossary 를 덮어쓴다. 발행된 실행이면 post_glossary 도 덮어쓴다.
+
+        사람의 resolve·drop 은 사라진다(라운드 글의 보충과 같다). 돌려주는 값은 CLI 가 찍는 요약이다.
+        실패 계약: 없는 실행은 NotFoundError, 끝난 글이 없으면 InvalidRequestError, 용어 서비스 없이 만든 러너면 ValueError.
+        추출 자체의 실패는 예외가 아니라 요약의 skipped 다.
+        """
+        if self._glossary is None:
+            raise ValueError("glossary extraction needs the glossary service")
+        run = await self._repository.get(run_id)
+        if run is None:
+            raise NotFoundError(f"expository run {run_id} does not exist")
+        if run.article is None:
+            raise InvalidRequestError(f"{run_id}: 9단계까지 끝나지 않아 용어를 뽑을 글이 없다")
+        version = await self._versions.require_latest()
+        record = await self._extract_glossary(self._glossary, run_id, run.article, version)
+        run.glossary = record
+        run.updated_at = datetime.now(UTC)
+        await self._repository.upsert(run)
+        post_id = run.publication.external_post_id if run.publication is not None else None
+        if post_id is not None:
+            await self._glossary.link_post(post_id, run_id, record, overwrite=True)
+        return {
+            "run_id": run_id,
+            "post_id": post_id,
+            "items": len(record.items),
+            "pending": len(record.pending),
+            "discarded": len(record.discarded),
+            "skipped": record.skipped,
+        }
+
+    async def _extract_glossary(
+        self, glossary: GlossaryService, run_id: str, article: ExpositoryArticle, version: PipelineVersion
+    ) -> GlossaryRecord:
+        """끝난 글 하나의 용어 추출. 예외를 내지 않는다(GlossaryService.extract_article 계약)."""
+        # 독자 묘사는 작성 단계 지시문의 것이다. 설명문 실행에는 라운드 주제의 audience 같은 필드가 없다
+        config = stage_prompts(version.prompts)[WRITE_STAGE].get("system_config")
+        reader = config.get("reader") if isinstance(config, dict) else None
+        extractor = next(
+            (model for model in version.routes.get(ROUTE_GLOSSARY, []) if model.provider in self._providers), None
+        )
+        return await glossary.extract_article(
+            source_id=run_id,
+            title=article.title,
+            content_markdown=article.content_markdown,
+            audience=reader if isinstance(reader, str) else "",
+            prerequisites="",  # 설명문 실행은 전제 지식을 따로 두지 않는다
+            main_category=await self._main_label(article.main_category_id),
+            keywords=article.keywords,
+            pipeline_version=version,
+            extractor=extractor,
+        )
+
+    async def _main_label(self, main_category_id: str | None) -> str:
+        """메인 카테고리의 라벨. 모르면 빈 문자열이다: 실행에는 Post BE id 만 있고 id 는 추출 모델에게 뜻이 없다.
+
+        카테고리 조회 실패가 추출을 막지 않게 여기서 삼킨다(발행 화면이 아니라 입력 하나의 보조 정보다).
+        """
+        if self._publisher is None or main_category_id is None:
+            return ""
+        try:
+            options = category_options(await self._publisher.list_categories(), self._main_categories)
+        except Exception as exc:  # 카테고리 목록은 추출 입력의 보조 정보다. 실패해도 라벨 없이 뽑는다
+            logger.warning("category lookup for glossary failed: %s", exc)
+            return ""
+        return next((option.main_label for option in options if option.main_category_id == main_category_id), "")
 
     async def _topic(self, stage: Stage) -> None:
         form = self._seed.form

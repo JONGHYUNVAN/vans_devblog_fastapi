@@ -18,12 +18,10 @@ from app.repositories.agent_round import PublishingRoundRepository
 from app.repositories.glossary import GlossaryRepository
 from app.repositories.post_draft import PostDraftRepository
 from app.repositories.post_provenance import PostProvenanceRepository
-from app.services.glossary import GlossaryService, build_post_glossary
+from app.services.glossary import AUTO_APPROVER, GlossaryService, build_post_glossary
 from app.services.provenance import build_provenance
 
 logger = logging.getLogger(__name__)
-
-AUTO_APPROVER = "auto"  # 발행 따라 쓰기가 용어를 승인할 때 approved_by 에 남는 이름(D-65 개정). 사람 승인과 구분된다
 
 
 def _now() -> datetime:
@@ -69,7 +67,9 @@ class DerivedRecordsWriter:
             # 영수증의 프롬프트·파이프라인 버전을 post_glossary 에 복사해 둔다. 영수증이 정리돼도 어느 프롬프트가 뽑았는지 남는다
             glossary_call = next((call for call in calls if call.call_id == draft.glossary.call_id), None)
             post_glossary = build_post_glossary(
-                draft,
+                post_id,
+                draft.draft_id,
+                draft.round_id,
                 draft.glossary,
                 glossary_call.prompt_template_version if glossary_call else None,
                 glossary_call.pipeline_version if glossary_call else None,

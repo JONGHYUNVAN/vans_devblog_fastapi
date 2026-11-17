@@ -1,4 +1,4 @@
-"""설명문 파이프라인 CLI. `seed` 로 프롬프트·라우트를 파이프라인 버전에 넣고, `run` 으로 글 하나를 만들고, `show` 로 보고, `publish` 로 블로그에 올린다.
+"""설명문 파이프라인 CLI. `seed` 로 프롬프트·라우트를 파이프라인 버전에 넣고, `run` 으로 글 하나를 만들고, `show` 로 보고, `publish` 로 블로그에 올리고, `glossary` 로 용어를 다시 뽑는다.
 
 프롬프트·단계별 모델은 Mongo 파이프라인 버전에 있다(09 문서 D-99). 한 단계만 고칠 때는 기존 명령
 `python -m cli agents pipeline edit-prompt expository <단계> --file …` 을 쓴다. 실행 결과는 Mongo `expository_runs` 다(D-100).
@@ -164,6 +164,16 @@ def publish(
 
     result = _run(_publish)
     typer.echo(f"{result.run_id}: 게시글 {result.external_post_id} 로 올렸다")
+
+
+@app.command()
+def glossary(run_id: Annotated[str, typer.Argument(help="실행 id")]) -> None:
+    """끝난 글의 용어를 최신 버전으로 다시 뽑는다. 발행된 실행이면 게시글의 용어 목록도 덮어쓴다(사람의 resolve·drop 은 사라진다)."""
+
+    async def _glossary(database, settings) -> dict[str, Any]:
+        return await build_expository_pipeline(database, settings).extract_glossary(run_id)
+
+    typer.echo(json.dumps(_run(_glossary), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

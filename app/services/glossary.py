@@ -14,8 +14,8 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.agents.builders import build_glossary_input, render_messages
-from app.agents.contracts import GlossaryCandidate, GlossaryOutput, KnownHeadword, KnownSense
+from app.agents.builders import build_article_glossary_input, build_glossary_input, render_messages
+from app.agents.contracts import GlossaryCandidate, GlossaryInput, GlossaryOutput, KnownHeadword, KnownSense
 from app.core.config import Settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.models.enums import CallKind, GlossaryStatus, PostStatus
@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
 _KNOWN_STATUSES = (GlossaryStatus.APPROVED, GlossaryStatus.PROPOSED)
 _DEDUPE_THRESHOLD = 0.55  # dedupe 가 사람에게 보일 표제어 쌍의 유사도 하한
+AUTO_APPROVER = "auto"  # 발행 따라 쓰기가 용어를 승인할 때 approved_by 에 남는 이름(D-65 개정). 사람 승인과 구분된다
 
 
 def _now() -> datetime:
@@ -137,7 +138,14 @@ class GlossaryService:
         # 발행된 글이면 post_glossary 와 뜻의 글 목록까지 바로 덮어쓴다(따라 쓰기는 이미 지나갔다). 사람의 resolve·drop 은 사라진다
         if draft.status == PostStatus.PUBLISHED and draft.publication is not None:
             template_version, pipeline_version_id = await self._template_version(record)
-            post_glossary = build_post_glossary(draft, record, template_version, pipeline_version_id)
+            post_glossary = build_post_glossary(
+                draft.publication.external_post_id,
+                draft.draft_id,
+                draft.round_id,
+                record,
+                template_version,
+                pipeline_version_id,
+            )
             if post_glossary is not None:
                 await self._repo.save_post_glossary(post_glossary)
                 await self._repo.add_post_to_senses(
@@ -178,9 +186,111 @@ class GlossaryService:
         extractor 를 주면 라운드 스냅샷 대신 그 모델로 부른다(보충 경로). 없으면 라운드의 GLOSSARY 라우트다.
         """
         parameters = pipeline_version.parameters.glossary
-        record = GlossaryRecord(target_version=version.version_number, extracted_at=self._now())
-        # GLOSSARY 는 선택 라우트다(D-64). 배포된 라우트 문서에 아직 없거나 이 기능 전에 만든 라운드면 호출 없이 지나간다
-        model = extractor or DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor
+        return await self._extract(
+            source_id=draft.draft_id,
+            round_id=draft.round_id,
+            content_markdown=version.content_markdown,
+            prerequisites=draft.topic.prerequisites,
+            target_version=version.version_number,
+            pipeline_version=pipeline_version,
+            # GLOSSARY 는 선택 라우트다(D-64). 배포된 라우트 문서에 아직 없거나 이 기능 전에 만든 라운드면 호출 없이 지나간다
+            model=extractor or DraftRoutes(publishing_round, draft, pipeline_version.personas).glossary_extractor,
+            build_input=lambda known: build_glossary_input(
+                draft,
+                publishing_round,
+                version,
+                known,
+                min_terms=parameters.min_terms,
+                max_terms=parameters.max_terms,
+            ),
+            draft=draft,
+        )
+
+    async def extract_article(
+        self,
+        *,
+        source_id: str,
+        title: str,
+        content_markdown: str,
+        audience: str,
+        prerequisites: str,
+        main_category: str,
+        keywords: list[str],
+        pipeline_version: PipelineVersion,
+        extractor: CallModel | None,
+        target_version: int = 1,
+    ) -> GlossaryRecord:
+        """글 문서(PostDraft)가 없는 글의 추출. 설명문 파이프라인이 끝낸 글에 쓴다. 계약은 라운드 글의 추출과 같다.
+
+        어떤 경우에도 GlossaryRecord 를 돌려주고 예외를 내지 않는다(라우트가 없으면 "no GLOSSARY route", 호출 서비스가 없으면
+        "no LLM client", 호출 실패는 그 사유가 skipped). 영수증의 round_id 와 제안의 출처(ProposalSource.draft_id)는
+        source_id 라 approve_all(source_id) 가 이 글의 제안을 찾는다. 글 문서가 없어 글당 예산은 검사하지 않는다.
+        """
+        parameters = pipeline_version.parameters.glossary
+        return await self._extract(
+            source_id=source_id,
+            round_id=source_id,
+            content_markdown=content_markdown,
+            prerequisites=prerequisites,
+            target_version=target_version,
+            pipeline_version=pipeline_version,
+            model=extractor,
+            build_input=lambda known: build_article_glossary_input(
+                title=title,
+                audience=audience,
+                prerequisites=prerequisites,
+                main_category=main_category,
+                keywords=list(keywords),
+                content_markdown=content_markdown,
+                known_headwords=known,
+                min_terms=parameters.min_terms,
+                max_terms=parameters.max_terms,
+            ),
+            draft=None,
+        )
+
+    async def link_post(self, post_id: str, source_id: str, record: GlossaryRecord, *, overwrite: bool) -> None:
+        """발행된 글에 추출 기록을 잇는다: post_glossary, 뜻의 글 목록, 이 글이 제안한 것의 자동 승인(D-65 개정).
+
+        source_id 는 추출의 출처 id 이고 post_glossary 의 draft_id·round_id 가 된다. overwrite 면 있던 post_glossary 를
+        덮어쓰고(보충, 사람의 resolve·drop 은 사라진다), 아니면 없을 때만 쓴다(발행 따라 쓰기). 항목도 보류도 없으면 쓰지 않는다.
+        저장소 오류는 그대로 올라간다.
+        """
+        template_version, pipeline_version_id = await self._template_version(record)
+        post_glossary = build_post_glossary(
+            post_id, source_id, source_id, record, template_version, pipeline_version_id
+        )
+        if post_glossary is None:
+            return
+        if overwrite:
+            await self._repo.save_post_glossary(post_glossary)
+        else:
+            await self._repo.add_post_glossary_if_missing(post_glossary)
+        await self._repo.add_post_to_senses([item.sense_key for item in record.items], post_id)
+        # 발행된 글의 제안은 사람 승인 없이 승인한다(D-65 개정). 불변식에 걸린 뜻은 PROPOSED 로 남는다
+        result = await self.approve_all(source_id, approved_by=AUTO_APPROVER)
+        if result["skipped"]:
+            logger.warning("%s glossary auto-approve left proposals: %s", source_id, result["skipped"])
+
+    async def _extract(
+        self,
+        *,
+        source_id: str,
+        round_id: str,
+        content_markdown: str,
+        prerequisites: str,
+        target_version: int,
+        pipeline_version: PipelineVersion,
+        model: CallModel | None,
+        build_input: Callable[[list[KnownHeadword]], GlossaryInput],
+        draft: PostDraft | None,
+    ) -> GlossaryRecord:
+        """라운드 글과 글 문서 없는 글이 같이 쓰는 추출 호출과 등록 확인. 예외를 내지 않는다(건너뛴 사유는 skipped).
+
+        draft 는 글당 예산 검사와 영수증의 draft_id 에만 쓴다. 제안의 출처는 source_id 다.
+        """
+        parameters = pipeline_version.parameters.glossary
+        record = GlossaryRecord(target_version=target_version, extracted_at=self._now())
         if model is None:
             record.skipped = "no GLOSSARY route"
             return record
@@ -190,39 +300,28 @@ class GlossaryService:
         # 기존 표제어·뜻 목록을 입력에 넣어 AI 가 same_as·sense_key 로 맞추게 한다. 상한을 넘으면 많이 쓰인 것부터 남긴다
         known, by_key = await self._known_headwords(parameters.full_list_max)
         record.known_headwords_sent = len(known)  # 목록이 잘렸는지 지표로 본다 (Q-20)
-        messages = render_messages(
-            build_glossary_input(
-                draft,
-                publishing_round,
-                version,
-                known,
-                min_terms=parameters.min_terms,
-                max_terms=parameters.max_terms,
-            ),
-            pipeline_version.prompts,
-            model,
-        )
+        messages = render_messages(build_input(known), pipeline_version.prompts, model)
         # 영수증(agent_calls)은 AgentCallService 가 남긴다. 실패해도 영수증은 남아 제작 기록에 실패 시도로 보인다
         try:
             result = await self._calls.call(
                 kind=CallKind.GLOSSARY,
-                round_id=draft.round_id,
+                round_id=round_id,
                 binding=model,
                 messages=messages,
                 schema=GlossaryOutput,
                 draft=draft,
-                target_version=version.version_number,
+                target_version=target_version,
                 max_attempts=pipeline_version.parameters.max_llm_retries,
                 pipeline_version=pipeline_version.version_id,
             )
         except Exception as exc:  # 용어 추출 실패는 글을 멈추지 않는다(재시도 소진·예산 초과·벤더 거부 전부, D-64)
-            logger.warning("draft %s skipped %s: %s", draft.draft_id, CallKind.GLOSSARY, exc)
+            logger.warning("%s skipped %s: %s", source_id, CallKind.GLOSSARY, exc)
             record.skipped = f"{type(exc).__name__}: {exc}"
             return record
         record.call_id = result.call_id
-        source = ProposalSource(draft_id=draft.draft_id, call_id=result.call_id)
+        source = ProposalSource(draft_id=source_id, call_id=result.call_id)
         # 후보 검사·등록 확인·뜻 선택은 DB 가 필요해 파서가 아니라 여기서 한다(D-65). 파서는 모양만 본다
-        await self._resolve(result.output, draft, version, record, source, by_key, parameters)
+        await self._resolve(result.output, content_markdown, prerequisites, record, source, by_key, parameters)
         return record
 
     async def _known_headwords(self, full_list_max: int) -> tuple[list[KnownHeadword], dict[str, GlossaryHeadword]]:
@@ -265,8 +364,8 @@ class GlossaryService:
     async def _resolve(
         self,
         output: GlossaryOutput,
-        draft: PostDraft,
-        version: DraftVersion,
+        content_markdown: str,
+        prerequisites: str,
         record: GlossaryRecord,
         source: ProposalSource,
         known_by_key: dict[str, GlossaryHeadword],
@@ -274,10 +373,10 @@ class GlossaryService:
     ) -> None:
         """후보마다 등록 확인(①~④)과 뜻 선택을 한다. 버리는 사유는 record.discarded 에 남긴다."""
         # 코드 펜스·인라인 코드를 가린 본문에서만 surface 를 찾는다. 코드 안 식별자를 용어로 잡지 않기 위해서다(2.1절 불변식)
-        prose = _mask_code(version.content_markdown)
+        prose = _mask_code(content_markdown)
         # 앵커는 프런트가 섹션으로 잇는 값이라 없는 앵커를 가리키는 후보는 버린다. 전제 지식에 든 용어는 독자가 안다고 본 것이라 설명하지 않는다
-        section_ids = set(find_anchors(version.content_markdown))
-        prerequisites = draft.topic.prerequisites.casefold()
+        section_ids = set(find_anchors(content_markdown))
+        prerequisites = prerequisites.casefold()
         # ③ 비슷한 표제어 후보의 모집단. 새 표제어를 만들 때마다 더해 같은 글 안의 후보끼리도 서로 보인다
         all_keys = [each.headword_key for each in await self._repo.list_headwords()]
         seen_surfaces: set[str] = set()
@@ -930,18 +1029,23 @@ def _published_version(draft: PostDraft) -> DraftVersion | None:
 
 
 def build_post_glossary(
-    draft: PostDraft,
+    post_id: str,
+    draft_id: str,
+    round_id: str,
     record: GlossaryRecord,
     prompt_template_version: str | None,
     pipeline_version: str | None = None,
 ) -> PostGlossary | None:
-    """발행 뒤 글 기록을 게시글 id 로 옮긴 문서. 항목도 보류도 없으면 만들지 않는다."""
-    if draft.publication is None or not (record.items or record.pending):
+    """발행 뒤 추출 기록을 게시글 id 로 옮긴 문서. 항목도 보류도 없으면 만들지 않는다.
+
+    라운드 글은 (글 id, 라운드 id), 설명문 실행은 (실행 id, 실행 id) 를 준다.
+    """
+    if not (record.items or record.pending):
         return None
     return PostGlossary(
-        post_id=draft.publication.external_post_id,
-        draft_id=draft.draft_id,
-        round_id=draft.round_id,
+        post_id=post_id,
+        draft_id=draft_id,
+        round_id=round_id,
         content_version=record.target_version,
         call_id=record.call_id,
         prompt_template_version=prompt_template_version,

@@ -247,8 +247,9 @@ def check_summary_glossary(output: dict[str, Any], section_ids: list[str]) -> li
     for index, term in enumerate(terms):
         if not isinstance(term, dict) or _require_strings(term, ("term_en", "term_ko")):
             errors.append(f"terms[{index}] needs non-empty term_en and term_ko")
-        elif not isinstance(term.get("keep_english"), bool) or not isinstance(term.get("definition"), str):
-            errors.append(f"terms[{index}] needs keep_english (boolean) and definition (string)")
+        # definition 은 선택이다: 용어 정의는 끝난 글의 용어 사전 추출이 맡고, 조립은 정의가 있는 용어만 정리 절에 넣는다
+        elif not isinstance(term.get("keep_english"), bool) or not isinstance(term.get("definition", ""), str):
+            errors.append(f"terms[{index}] needs keep_english (boolean); definition, when given, must be a string")
         elif not term["keep_english"] and not _HANGUL.search(term["term_ko"]):
             errors.append(
                 f"terms[{index}].term_ko '{term['term_ko']}' has no Korean; set keep_english or give the Korean term"
