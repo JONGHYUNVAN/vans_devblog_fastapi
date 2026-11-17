@@ -1,0 +1,85 @@
+{
+  "label": "Concept and structure",
+  "use_when": "The subject is a component, data structure, protocol, or runtime mechanism, and the reader wants to know what it is, what it is made of, and how it operates. There is no failure to diagnose.",
+  "topic": "The subject and the angle of explanation, phrased the way a developer would search for it (e.g., 'How a B+tree index is laid out and searched in InnoDB'). Not a symptom and not a how-to.",
+  "thesis": "One declarative sentence claiming why the subject is built the way it is, or what necessarily follows from that design: a claim a competent engineer would want justified. A definition of the subject is not a thesis.",
+  "focus_points": "Three items, or four when the subject has internal variants or a neighbor it is commonly confused with, in this order: (1) the parts the subject is made of, (2) how those parts interact when it operates, (3) why it is designed this way, (4, optional) the variants or the neighboring concept to tell apart. Each item names the specific aspect of this subject, not the generic label.",
+  "overview_header": ["Aspect", "Takeaway"],
+  "outline_rules": [
+    "no_invented_problem: Do not invent a failure, incident, or problem scenario to motivate the subject. The article explains the subject itself.",
+    "thesis_placement: The rationale region carries core_message. The structure and mechanism regions supply what the rationale needs; they do not argue it.",
+    "one_running_example: Choose one concrete instance of the subject (a small table, a single request, a short code path) and return to it in every region's example."
+  ],
+  "write_rules": [
+    "no_invented_problem: Do not open with or build toward a failure story. Motivate the article by what the reader will be able to explain after reading it.",
+    "one_running_example: Introduce one concrete instance in the first body section and reuse it in every later section instead of starting a new example each time."
+  ],
+  "regions": [
+    {
+      "role": "definition",
+      "section": "intro",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "sentences": { "elaboration": [2, 4] },
+      "outline": "key_sentence defines the subject in one sentence: what kind of thing it is and what it is for. elaboration gives the outline of the whole: which parts and behaviors the article covers, in the order of the body regions, and the point of view it takes (core_message).",
+      "write": "Open with two or three sentences that define the subject and state the article's point of view (core_message). Then lay out what the article covers, in order, and end with the question the rest of the article answers."
+    },
+    {
+      "role": "structure",
+      "section": "structure",
+      "min": 1,
+      "max": 1,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 5] },
+      "outline": "What the subject is made of. key_sentence states the structure as one claim that names the parts. elaboration gives each part's name and its role. example shows the parts in the running instance.",
+      "write": "Name each part, say what it holds or does, and show how the parts are arranged with a text diagram or a short code or data excerpt of the running instance. Do not explain operation here; that is the next section."
+    },
+    {
+      "role": "mechanism",
+      "section": "mechanism",
+      "min": 1,
+      "max": 1,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 5] },
+      "outline": "How the parts interact when the subject operates. key_sentence states the rule or sequence the operation follows. elaboration gives the steps or rules in order. example traces one operation through the running instance, step by step.",
+      "write": "Walk through one operation of the running instance step by step, naming which part acts at each step. Use ordered steps or a trace where the order matters."
+    },
+    {
+      "role": "rationale",
+      "section": "rationale",
+      "min": 1,
+      "max": 1,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 5] },
+      "outline": "Why the subject is built this way and what follows from it. key_sentence states the cause-and-effect claim that carries core_message. elaboration gives the constraint or cost the design answers and the property that necessarily results. example shows that property appearing in the running instance.",
+      "write": "Argue the claim: state the constraint the design answers, show how the structure and operation described above meet it, and show the resulting property in the running instance. This is where the article defends its point of view."
+    },
+    {
+      "role": "contrast",
+      "section": "contrast",
+      "min": 0,
+      "max": 1,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 4] },
+      "outline": "Where the subject's boundary lies: either its internal variants, or one neighboring concept readers confuse with it. key_sentence states the single criterion that tells them apart. elaboration applies that criterion to each side. example shows one case where the criterion decides which one it is. Do not rank the sides or recommend one.",
+      "write": "State the one criterion that separates the two and apply it to a concrete case. Describe each side by what it is. Do not list pros and cons, and do not recommend either."
+    },
+    {
+      "role": "synthesis",
+      "section": "conclusion",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "sentences": { "elaboration": [1, 3] },
+      "outline": "The whole picture. key_sentence restates core_message in light of the structure, the operation, and the rationale. elaboration links the three into one account of what the subject is.",
+      "write": "Bring the parts, the way they operate, and the reason for the design back into one picture, and restate core_message in that light. Close with a short list of questions the reader should now be able to answer. Add no new claim. The heading names what the reader now understands, not 'Conclusion' alone."
+    }
+  ]
+}

@@ -4,7 +4,6 @@ from app.services.expository_assembly import apply_patches, assemble_article, fi
 from tests.factories import (
     make_expository_english_article,
     make_expository_korean_article,
-    make_expository_outline,
     make_expository_summaries,
     make_expository_terms,
 )
@@ -34,10 +33,17 @@ def test_apply_patches_reverts_a_patch_that_breaks_the_article():
 def test_assemble_article_adds_summary_tables_overview_and_numbered_glossary():
     article = make_expository_english_article()
     assembled = assemble_article(
-        article, make_expository_summaries(), make_expository_outline("A thesis."), make_expository_terms()
+        article,
+        make_expository_summaries(),
+        make_expository_terms(),
+        overview_header=("Mechanism", "Takeaway"),
+        overview_rows=[("Mechanism 1", "Advice runs only on proxy entry 1")],
+        last_section="conclusion",
     )
     assert assembled.index("**📊 Summary: Part intro**") < assembled.index("<!-- sec:concept -->")
-    assert "| Mechanism 1 | Advice runs only on proxy entry 1 |" in assembled
+    # 전체 정리 표는 마지막 섹션(용어 정리 절 앞)에 양식의 머리로 붙는다
+    overview = assembled.split("<!-- sec:conclusion -->")[1].split("<!-- sec:glossary -->")[0]
+    assert "| Mechanism | Takeaway |\n|---|---|\n| Mechanism 1 | Advice runs only on proxy entry 1 |" in overview
     glossary = assembled.split("<!-- sec:glossary -->")[1]
     assert glossary.startswith("\n## 9. Glossary")
     assert "| proxy | an object that stands in for another |" in glossary

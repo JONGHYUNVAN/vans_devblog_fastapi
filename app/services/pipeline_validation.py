@@ -9,7 +9,17 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from app.agents.expository import DEFAULT_LAYOUT_KEY, DOCUMENT_STAGE_KEYS, LAYOUTS, STAGE_KEYS, parse_prompt
+from app.agents.expository import (
+    DEFAULT_LAYOUT_KEY,
+    DOCUMENT_STAGE_KEYS,
+    FORM_KEY,
+    FORM_STAGE_KEYS,
+    FORMS_INPUT,
+    LAYOUTS,
+    STAGE_KEYS,
+    parse_prompt,
+)
+from app.agents.expository_forms import parse_form
 from app.agents.prompts.registry import (
     COMMON_FAMILY,
     PROMPT_FAMILIES,
@@ -20,7 +30,13 @@ from app.agents.prompts.registry import (
     templates_for_route,
 )
 from app.models.enums import AgentSlot
-from app.models.pipeline import EXPOSITORY_FAMILY, NOTE_LINE_FIELDS, PipelineVersionBody, content_hash_of
+from app.models.pipeline import (
+    EXPOSITORY_FAMILY,
+    EXPOSITORY_FORM_FAMILY,
+    NOTE_LINE_FIELDS,
+    PipelineVersionBody,
+    content_hash_of,
+)
 from app.models.routing import EXPOSITORY_ROUTE_PREFIX, build_snapshot, expository_route, validate_snapshot
 
 Level = Literal["error", "warning"]
@@ -34,6 +50,8 @@ DEFAULT_PROMPT_LINT: dict[str, list[str]] = {
 }
 # 작성·수정·제안을 맡는 가족. common·haiku 의 스텁·변환 템플릿에는 적용하지 않는다
 _LINT_FAMILIES = ("claude", "gemini", "grok")
+# 설명문 파이프라인의 가족. 이름이 템플릿 이름이 아니고 본문이 JSON 이라 R-05·R-08 이 아니라 R-13 이 본다
+_EXPOSITORY_FAMILIES = (EXPOSITORY_FAMILY, EXPOSITORY_FORM_FAMILY)
 # 검색 호출의 템플릿은 글로 답을 받는다(json_schema 없음). 구조화 출력 호출만 "JSON" 을 요구한다
 _SEARCH_TEMPLATES = ("fact_check", "arbitrate_search")
 _PLACEHOLDER = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
@@ -119,8 +137,8 @@ def _r05_templates(body: PipelineVersionBody) -> list[Finding]:
                         )
                     )
     for family, templates in body.prompts.items():
-        if family == EXPOSITORY_FAMILY:
-            continue  # 이름이 단계 key 고 라우트와의 짝은 R-13 이 본다
+        if family in _EXPOSITORY_FAMILIES:
+            continue  # 이름이 단계 key·양식 id 고 라우트와의 짝은 R-13 이 본다
         if family not in (*PROMPT_FAMILIES, COMMON_FAMILY):
             findings.append(Finding("R-08", "error", f"unknown prompt family {family}"))
         for name in templates:
@@ -139,7 +157,7 @@ def _r08_template_contents(body: PipelineVersionBody) -> list[Finding]:
     for name, phrases in body.parameters.prompt_lint.items():
         lint[name] = lint.get(name, []) + [phrase for phrase in phrases if phrase not in lint.get(name, [])]
     for family, templates in body.prompts.items():
-        if family == EXPOSITORY_FAMILY:
+        if family in _EXPOSITORY_FAMILIES:
             continue  # JSON 지시문이라 string.Template 규칙($자리표시자, "JSON" 낱말)이 맞지 않는다. 본문은 R-13 이 본다
         for name, text in templates.items():
             label = f"prompts.{family}.{name}"
@@ -167,16 +185,33 @@ def _r13_expository(body: PipelineVersionBody) -> list[Finding]:
     하나라도 있으면 단계마다 프롬프트(inputs 와, expected_output_schema·output_document 중 하나가 있는 JSON 객체)와
     라우트 후보가 있어야 한다. 일부만 있는 버전이 최신이 되면 실행이 글 중간 단계에서 멈춘다.
     output_document 는 러너가 결과를 title·content_markdown 으로 읽는 단계에만 둘 수 있다(D-103).
+    글 양식(prompts.expository_form, D-104)은 본문이 맞아야 한다. 양식이 있는 버전은 프롬프트도 양식을 받는 꼴이어야 한다:
+    1단계 inputs 에 forms, 2·3·5단계에 최상위 form 키. 양식이 하나도 없으면 경고만 한다: 그 버전으로는 러너가 호출 전에
+    멈추고, 배포와 seed 사이에 다른 버전 넣기(edit-*)가 막히지 않아야 한다.
     """
     prompts = body.prompts.get(EXPOSITORY_FAMILY, {})
+    forms = body.prompts.get(EXPOSITORY_FORM_FAMILY, {})
     routes = {
         route_id.removeprefix(EXPOSITORY_ROUTE_PREFIX): candidates
         for route_id, candidates in body.routes.items()
         if route_id.startswith(EXPOSITORY_ROUTE_PREFIX)
     }
-    if not prompts and not routes:
-        return []
     findings: list[Finding] = []
+    for form_id, text in forms.items():
+        try:
+            parse_form(text)
+        except ValueError as exc:
+            findings.append(Finding("R-13", "error", f"prompts.{EXPOSITORY_FORM_FAMILY}.{form_id}: {exc}"))
+    if not prompts and not routes:
+        return findings
+    if not forms:
+        findings.append(
+            Finding(
+                "R-13",
+                "warning",
+                f"prompts.{EXPOSITORY_FORM_FAMILY} is empty; the expository runner will not start until forms are seeded",
+            )
+        )
     for name, text in prompts.items():
         label = f"prompts.{EXPOSITORY_FAMILY}.{name}"
         if name not in STAGE_KEYS:
@@ -191,6 +226,14 @@ def _r13_expository(body: PipelineVersionBody) -> list[Finding]:
             findings.append(
                 Finding("R-13", "error", f"{label}: output_document is allowed only in {list(DOCUMENT_STAGE_KEYS)}")
             )
+        if not forms:
+            continue
+        if (FORM_KEY in prompt) != (name in FORM_STAGE_KEYS):
+            findings.append(
+                Finding("R-13", "error", f"{label}: a top-level {FORM_KEY} key belongs in {list(FORM_STAGE_KEYS)} only")
+            )
+        if name == STAGE_KEYS[0] and FORMS_INPUT not in prompt["inputs"]:
+            findings.append(Finding("R-13", "error", f"{label}: inputs must have {FORMS_INPUT}"))
     for name in routes:
         if name not in STAGE_KEYS:
             findings.append(Finding("R-13", "error", f"route {expository_route(name)}: unknown stage"))

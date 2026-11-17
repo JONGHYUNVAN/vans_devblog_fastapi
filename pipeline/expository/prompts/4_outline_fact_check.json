@@ -11,7 +11,7 @@
   "claim_extraction": [
     "Extract only claims that external sources can confirm or refute: method behavior, signatures, return values, exceptions (API); configuration keys, default values, activation conditions (CONFIG_OPTION); version-specific introductions, deprecations, behavior changes (VERSION); query syntax, locking, isolation semantics (DB_SYNTAX); protocol rules, log messages, official figures (PROTOCOL_OR_FIGURE).",
     "Do not extract design rationale, recommendations, or the outline's own hypothetical scenario.",
-    "Check practical_application and exception_case as carefully as deep_dive_sections. Operational details there (log output, default settings, alternative APIs, callback timing) are where outlines most often go wrong."
+    "Check every region as carefully as the body regions. Operational details outside the body (log output, default settings, alternative APIs, callback timing) are where outlines most often go wrong."
   ],
   "verdicts": {
     "SUPPORTED": "Confirmed by an official or primary source. Record the exact URL.",
@@ -20,10 +20,10 @@
   },
   "constraints": [
     "output_language: Write every string value in English, except core_message, which stays exactly as given.",
-    "minimal_correction: Rewrite only the sentence that contains a REFUTED claim, changing only what the source contradicts. Keep the sentence's role: a principle stays two sentences, a mechanism_explanation stays one causal sentence, a key_takeaway stays a noun phrase of at most 10 words.",
+    "minimal_correction: Rewrite only the sentence that contains a REFUTED claim, changing only what the source contradicts. Keep the shape of the slot: a key_sentence stays one sentence, elaboration and example keep their number of sentences, and a takeaway stays a noun phrase of at most 10 words.",
     "no_widening: Never add new claims, caveats, edge cases, or sections. Never change SUPPORTED or UNVERIFIABLE claims.",
     "preserve_verbatim: Copy every field that contains no REFUTED claim exactly as given.",
-    "blocking: If correcting a REFUTED claim would change what a deep_dive section's mechanism is, or would make core_message false, do not rewrite it. Leave the text as given and set blocking to true on that claim."
+    "blocking: If correcting a REFUTED claim would change what a region's key_sentence claims, or would make core_message false, do not rewrite it. Leave the text as given and set blocking to true on that claim."
   ],
   "expected_output_schema": {
     "type": "object",
@@ -40,7 +40,7 @@
           "properties": {
             "location": {
               "type": "string",
-              "description": "Path of the field that holds the claim, with 0-based list indexes, e.g., deep_dive_sections[1].principle (the second section) or practical_application.exception_case"
+              "description": "Path of the field that holds the claim, with 0-based list indexes, e.g., regions[1].key_sentence (the second region) or regions[4].elaboration"
             },
             "claim_type": {
               "type": "string",
@@ -51,7 +51,7 @@
             "source_url": { "type": "string", "description": "Exact URL; empty for UNVERIFIABLE" },
             "evidence": { "type": "string", "description": "What the source says, in one or two sentences" },
             "corrected_text": { "type": "string", "description": "The rewritten sentence for REFUTED claims that were corrected; empty otherwise" },
-            "blocking": { "type": "boolean", "description": "true only when the claim could not be corrected without changing a section's mechanism or core_message" }
+            "blocking": { "type": "boolean", "description": "true only when the claim could not be corrected without changing what a region's key_sentence claims or core_message" }
           },
           "required": ["location", "claim_type", "claim", "verdict", "source_url", "evidence", "corrected_text", "blocking"]
         }

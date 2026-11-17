@@ -234,18 +234,25 @@ async def test_import_expository_adds_prompts_and_routes_and_survives_export_imp
 
     assert seeded.parent_version_id == first.version_id
     assert len(seeded.prompts[EXPOSITORY_FAMILY]) == 9
+    assert sorted(seeded.prompts["expository_form"]) == ["concept", "diagnosis", "procedure", "taxonomy"]
     assert seeded.routes["EXPOSITORY:5_write"][0].max_output_tokens == 32000
     assert {key: value for key, value in seeded.routes.items() if not key.startswith("EXPOSITORY:")} == first.routes
     with pytest.raises(ValueError, match="same content"):
         await service.import_expository(EXPOSITORY_DIR)
 
-    # 내보낸 디렉터리를 다시 읽어도 설명문 프롬프트가 남는다(가족 이름으로 걸러져 사라지지 않는다)
+    # 내보낸 디렉터리를 다시 읽어도 설명문 프롬프트와 글 양식이 남는다(가족 이름으로 걸러져 사라지지 않는다)
     export_version(seeded, tmp_path)
     assert content_hash_of(read_directory(tmp_path)) == seeded.content_hash
 
     changed = seeded.prompts[EXPOSITORY_FAMILY]["5_write"] + "\n"
     edited = await service.edit_prompt(EXPOSITORY_FAMILY, "5_write", changed)
     assert edited.parent_version_id == seeded.version_id
+
+    # 양식 하나도 프롬프트처럼 고친다(내부 API 가 쓰는 길). 본문이 틀린 양식은 검증(R-13)이 막는다
+    form = seeded.prompts["expository_form"]["concept"] + "\n"
+    assert (await service.edit_existing_prompt("expository_form", "concept", form)).parent_version_id == "v3"
+    with pytest.raises(ValueError, match="expository_form.concept"):
+        await service.edit_existing_prompt("expository_form", "concept", '{"label": "no regions"}')
 
 
 async def test_import_expository_raises_when_a_prompt_file_is_missing(tmp_path):

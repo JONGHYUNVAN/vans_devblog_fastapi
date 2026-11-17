@@ -149,6 +149,39 @@ def test_r13_allows_a_document_output_only_where_the_runner_reads_title_and_body
     assert messages == ["prompts.expository.9_summarize: output_document is allowed only in ['5_write', '8_translate']"]
 
 
+def test_r13_checks_article_forms_and_that_prompts_take_them():
+    body = make_expository_body()
+    prompts, forms = body.prompts[EXPOSITORY_FAMILY], body.prompts["expository_form"]
+    forms["concept"] = '{"label": "no regions"}'
+    outline = json.loads(prompts["2_outline"])
+    del outline["form"]
+    prompts["2_outline"] = json.dumps(outline)
+    topic = json.loads(prompts["1_topic_thesis"])
+    del topic["inputs"]["forms"]
+    prompts["1_topic_thesis"] = json.dumps(topic)
+
+    messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-13"]
+
+    assert any(message.startswith("prompts.expository_form.concept: ") for message in messages)
+    assert (
+        "prompts.expository.2_outline: a top-level form key belongs in ['2_outline', '3_outline_review', '5_write'] only"
+        in messages
+    )
+    assert "prompts.expository.1_topic_thesis: inputs must have forms" in messages
+
+
+def test_r13_only_warns_when_a_version_has_expository_prompts_but_no_forms():
+    """배포와 seed 사이의 운영 버전 모양이다. 오류면 그 사이에 다른 버전 넣기(edit-*)가 전부 막힌다."""
+    body = make_expository_body()
+    del body.prompts["expository_form"]
+
+    findings = [finding for finding in validate_version(body) if finding.rule == "R-13"]
+
+    assert [(finding.level, "expository_form is empty" in finding.message) for finding in findings] == [
+        ("warning", True)
+    ]
+
+
 def test_r09_checks_the_expository_layouts():
     body = make_pipeline_body(expository={"layouts": {"claude": "documents_first", "gpt": "xml"}})
 

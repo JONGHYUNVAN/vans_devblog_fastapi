@@ -1,0 +1,56 @@
+{
+  "label": "Procedure and flow",
+  "use_when": "The subject is a process that runs in stages over time, such as a request lifecycle, a startup sequence, a commit protocol, or a compilation pipeline, and the reader wants to follow what happens at each stage.",
+  "topic": "The process and the span the article follows, phrased the way a developer would search for it (e.g., 'What happens between calling save() and the row reaching disk'). Not a symptom and not a how-to.",
+  "thesis": "One declarative sentence claiming what the order or the division of the stages guarantees or makes possible: a claim a competent engineer would want justified. A list of the stages is not a thesis.",
+  "focus_points": "Three or more items, one per stage, in the order the stages run. Each item names the stage and what it is responsible for.",
+  "overview_header": ["Stage", "Takeaway"],
+  "outline_rules": [
+    "no_invented_problem: Do not invent a failure, incident, or problem scenario to motivate the subject. The article explains the process itself.",
+    "stage_boundaries: Each step region covers one stage. Consecutive step regions must connect: what one stage hands on is what the next one receives.",
+    "one_running_example: Choose one concrete input (a single request, one transaction, one source file) and follow it through every step region's example."
+  ],
+  "review_rules": [
+    "weak_relevance: Remove a step region if the process reads the same without it, i.e., what the previous stage hands on is exactly what the next stage receives."
+  ],
+  "write_rules": [
+    "no_invented_problem: Do not open with or build toward a failure story. Motivate the article by what the reader will be able to trace after reading it.",
+    "one_running_example: Follow the same concrete input through every stage instead of starting a new example in each section.",
+    "handoffs: Begin each step section from what the previous stage handed on, so the reader never loses the thread between stages."
+  ],
+  "regions": [
+    {
+      "role": "definition",
+      "section": "intro",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "sentences": { "elaboration": [2, 4] },
+      "outline": "key_sentence defines the process in one sentence: what goes in and what comes out. elaboration names the stages in order and the point of view the article takes (core_message).",
+      "write": "Open with two or three sentences that define the process and state the article's point of view (core_message). Then name the stages in order, introduce the running input, and end with the question the rest of the article answers."
+    },
+    {
+      "role": "step",
+      "section": "step",
+      "min": 3,
+      "max": null,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 5] },
+      "outline": "One stage of the process. heading names the stage. key_sentence states what this stage is responsible for. elaboration states what it receives, what it does, and what it hands on. example shows the running input at this stage.",
+      "write": "Say what the stage receives, what it does to it, and what it hands on, showing the running input with code, a log excerpt, or a text diagram. Explain why this work happens at this point in the order where the order matters."
+    },
+    {
+      "role": "synthesis",
+      "section": "conclusion",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "sentences": { "elaboration": [1, 3] },
+      "outline": "The whole flow. key_sentence restates core_message in light of the stages. elaboration says what the order of the stages guarantees from end to end.",
+      "write": "Trace the running input once more from the first stage to the last in a few sentences, and restate core_message in that light. Close with a short list of questions the reader should now be able to answer. Add no new claim. The heading names what the order of the stages guarantees, not 'Conclusion' alone."
+    }
+  ]
+}

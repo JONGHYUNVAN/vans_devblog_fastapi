@@ -74,6 +74,8 @@ class Stage:
     web_search: bool = False
     # 러너와 검사가 결과를 title·content_markdown 두 키로 읽는 단계다. 프롬프트가 output_document 를 쓸 수 있다
     document_output: bool = False
+    # 지시문의 form 자리에 그 글의 양식(agents/expository_forms)이 들어가는 단계다 (D-104)
+    form: bool = False
 
     @property
     def key(self) -> str:
@@ -83,10 +85,10 @@ class Stage:
 
 STAGES = (
     Stage(1, "topic_thesis"),
-    Stage(2, "outline"),
-    Stage(3, "outline_review"),
+    Stage(2, "outline", form=True),
+    Stage(3, "outline_review", form=True),
     Stage(4, "outline_fact_check", web_search=True),
-    Stage(5, "write", document_output=True),
+    Stage(5, "write", document_output=True, form=True),
     Stage(6, "article_fact_check", web_search=True),
     Stage(7, "summary_glossary"),
     Stage(8, "translate", document_output=True),
@@ -94,6 +96,9 @@ STAGES = (
 )
 STAGE_KEYS = tuple(stage.key for stage in STAGES)
 DOCUMENT_STAGE_KEYS = tuple(stage.key for stage in STAGES if stage.document_output)
+FORM_STAGE_KEYS = tuple(stage.key for stage in STAGES if stage.form)
+FORM_KEY = "form"  # 지시문의 최상위 키. 입력(자료)이 아니라 지시의 일부라 inputs 밖에 둔다
+FORMS_INPUT = "forms"  # 1단계 입력: 고를 수 있는 양식 목록
 
 
 def parse_prompt(text: str) -> dict[str, Any]:
@@ -122,6 +127,8 @@ def parse_prompt(text: str) -> dict[str, Any]:
     documents = prompt.get("documents", {})
     if not isinstance(documents, dict) or set(documents) & set(prompt["inputs"]):
         raise ValueError("documents 는 inputs 와 이름이 겹치지 않는 객체여야 한다")
+    if FORM_KEY in prompt and FORM_KEY in {*prompt["inputs"], *documents}:
+        raise ValueError(f"최상위 {FORM_KEY} 키가 있으면 inputs·documents 에 같은 이름을 둘 수 없다")
     return prompt
 
 
@@ -155,7 +162,8 @@ def render_prompt(prompt: dict[str, Any], values: dict[str, Any]) -> str:
     """값을 채운 프롬프트 문자열. 벤더·배치와 무관한 중심 양식이라 실행 문서에 남고, 다시 돌릴 때 같으면 그 단계를 부르지 않는다.
 
     values 는 단계 입력 전부(이름 → 값)다. 어느 값이 inputs 이고 어느 값이 documents 인지는 프롬프트가 정한다.
-    values 의 키가 프롬프트의 inputs·documents 키를 합친 것과 다르면 ValueError(러너 버그).
+    프롬프트에 최상위 form 키가 있으면 values["form"](그 글의 양식)이 그 자리에 들어간다.
+    values 의 키가 프롬프트의 inputs·documents(·form) 키를 합친 것과 다르면 ValueError(러너 버그이거나 양식 전 프롬프트다).
     """
     return json.dumps(_filled(prompt, values, values), ensure_ascii=False, indent=2)
 
@@ -188,11 +196,14 @@ def render_messages(prompt: dict[str, Any], values: dict[str, Any], layout: str)
 def _filled(prompt: dict[str, Any], values: dict[str, Any], document_values: dict[str, Any]) -> dict[str, Any]:
     """inputs·documents 객체를 통째로 바꾼 프롬프트. documents 에는 document_values 의 값이 들어간다."""
     documents = prompt.get("documents", {})
-    expected = set(prompt.get("inputs", {})) | set(documents)
+    outside = set(documents) | ({FORM_KEY} if FORM_KEY in prompt else set())
+    expected = set(prompt.get("inputs", {})) | outside
     if set(values) != expected:
-        raise ValueError(f"입력 키 {sorted(values)} 가 프롬프트의 inputs·documents {sorted(expected)} 와 다르다")
+        raise ValueError(f"입력 키 {sorted(values)} 가 프롬프트의 inputs·documents·form {sorted(expected)} 와 다르다")
     # 자리 표시 문자열을 치환하지 않고 객체를 바꾼다. 배열·객체 입력이 문자열로 바뀌면 모델이 구조를 잃는다
-    filled = {**prompt, "inputs": {name: value for name, value in values.items() if name not in documents}}
+    filled = {**prompt, "inputs": {name: value for name, value in values.items() if name not in outside}}
+    if FORM_KEY in prompt:
+        filled[FORM_KEY] = values[FORM_KEY]
     if documents:
         filled["documents"] = {name: document_values[name] for name in documents}
     return filled

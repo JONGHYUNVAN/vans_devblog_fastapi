@@ -83,7 +83,7 @@ def run(
         Path | None,
         typer.Option(
             "--topic-file",
-            help="1단계 결과 JSON(topic·core_argument·focus_mechanisms·out_of_scope). 주면 1단계를 부르지 않는다",
+            help="1단계 결과 JSON(form·topic·core_argument·focus_points·out_of_scope). 주면 1단계를 부르지 않는다",
         ),
     ] = None,
     stop_after: Annotated[
@@ -96,12 +96,19 @@ def run(
     max_words: Annotated[
         int, typer.Option("--max-words", help="5단계 영어 본문의 단어 상한(코드 제외)")
     ] = DEFAULT_MAX_WORDS,
+    form: Annotated[
+        str | None,
+        typer.Option(
+            "--form",
+            help="글 양식 id(concept·procedure·taxonomy·diagnosis). 없으면 1단계가 고른다. --topic-file 과 같이 주면 그 주제의 양식이 된다",
+        ),
+    ] = None,
     out: Annotated[Path | None, typer.Option("--out", help="끝난 글(마크다운)을 쓸 파일. 없으면 찍지 않는다")] = None,
 ) -> None:
     """1~9단계를 최신 파이프라인 버전으로 돌린다. 같은 --run-id 로 다시 부르면 입력이 바뀌지 않은 단계는 건너뛴다."""
     target = run_id or new_run_id()
     topic = json.loads(topic_file.read_text(encoding="utf-8")) if topic_file else None
-    seed_values = RunSeed(theme_keyword=theme, avoid_topics=avoid or [], topic=topic, max_words=max_words)
+    seed_values = RunSeed(theme_keyword=theme, avoid_topics=avoid or [], topic=topic, max_words=max_words, form=form)
     typer.echo(f"실행 id: {target}")
 
     async def _pipeline(database, settings) -> ExpositoryResult:

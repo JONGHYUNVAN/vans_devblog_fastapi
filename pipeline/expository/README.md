@@ -6,11 +6,46 @@
 
 ## 정한 것 (2026-11-11)
 
-- 설명문만 쓴다. A vs B 비교 구조는 쓰지 않는다.
+- 설명문만 쓴다. 주제는 대상 하나이고 A vs B 비교 구조는 쓰지 않는다.
 - 번역 전 단계는 모두 영어로 진행하고, 완성된 글을 한 번 번역한다.
-- 뼈대의 섹션은 3개 이상이고 상한은 없다. 리뷰가 연관도가 낮거나 중복된 섹션을 빼고, 3개 미만이 되면 리뷰어가 모자란 만큼 채운다.
-- 섹션은 문제의 원인을 설명한다. 논제의 해법은 실무 적용(`application`)에서 처음 나온다.
-- `principle` 은 중심문장과 결론 두 문장이다. 작성 단계가 그 사이를 채운다.
+- 글의 목적에 따라 뼈대의 양식이 다르다(2026-11-17, 아래 "글 양식"). 처음의 "문제 → 원인 → 해결" 뼈대는 `diagnosis` 양식으로 남았고, 아래 세 줄은 그 양식의 규칙이다.
+- 원인 region 은 3개 이상이고 상한은 없다. 리뷰가 연관도가 낮거나 중복된 것을 빼고, 3개 미만이 되면 리뷰어가 모자란 만큼 채운다.
+- 원인 region 은 문제의 원인을 설명한다. 논제의 해법은 실무 적용(`application`)에서 처음 나온다.
+- 원인 region 은 중심문장(`key_sentence`)과 결론 한 문장(`elaboration`)을 갖는다. 작성 단계가 그 사이를 채운다.
+
+## 글 양식 (09 문서 D-104)
+
+뼈대의 겉모양은 양식과 무관하게 하나다: `form`, `core_message`, `regions`. region 마다 `role`·`heading`·`key_sentence`·`elaboration`·`example`·`takeaway` 가 있고, 역할이 쓰지 않는 슬롯은 빈 문자열이다. 목적에 따라 달라지는 것은 어떤 역할이 어떤 순서로 몇 번 오고 무엇을 말하는가이고, 그것을 적은 것이 글 양식이다.
+
+| 양식 | 쓸 때 | region 역할(섹션 id) |
+|---|---|---|
+| `concept` | 대상이 무엇이고 어떻게 돌아가는지. 진단할 실패가 없다 | definition(`intro`) → structure → mechanism → rationale → contrast(0~1) → synthesis(`conclusion`) |
+| `procedure` | 단계의 흐름이 대상 | definition(`intro`) → step 3개 이상(`step-N`) → synthesis(`conclusion`) |
+| `taxonomy` | 여러 유형이 대상 | definition(`intro`) → criteria → type 2개 이상(`type-N`) → synthesis(`conclusion`) |
+| `diagnosis` | 증상이나 실패가 출발점 | problem(`intro`) → concept → cause 3개 이상(`mech-N`) → fix(`application`) → exceptions → synthesis(`conclusion`) |
+
+양식의 실제 값은 버전 문서의 `prompts.expository_form.{양식 id}` 이고 이 폴더의 `forms/*.json` 이 넣는 입력이다. 새 양식을 넣거나 문구를 고치는 데 배포가 필요 없다.
+
+```bash
+python -m cli agents pipeline edit-prompt expository_form concept --file pipeline/expository/forms/concept.json
+```
+
+양식 JSON 의 필드:
+
+| 필드 | 읽는 곳 | 뜻 |
+|---|---|---|
+| `use_when`·`topic`·`thesis`·`focus_points` | 1단계 | 양식을 고르는 기준과, 고른 양식에서 주제·논제·본론 초점이 가져야 할 꼴 |
+| `regions[].outline` | 2·3단계 | 그 역할의 region 이 뼈대에서 말해야 하는 것 |
+| `regions[].write` | 5단계 | 그 region 을 섹션으로 쓰는 법 |
+| `outline_rules`·`review_rules`·`write_rules` | 2·3단계, 3단계, 5단계 | 그 양식에만 붙는 규칙 |
+| `regions[].section`·`min`·`max` | 코드 | 섹션 앵커 id 와 그 역할의 region 수. `max` 가 1 이 아니면 id 는 `{section}-{n}`, `null` 은 상한 없음 |
+| `regions[].focus` | 코드 | 본론이다: 1단계 `focus_points` 와 1:1 이고 전체 정리 표의 행이다. 여러 번 올 수 있는 본론 역할만 3단계가 빼고 채운다 |
+| `regions[].example`·`sentences` | 코드 | 예시 슬롯을 쓰는지, 슬롯별 문장 수 `[최소, 최대]`. `key_sentence` 는 언제나 한 문장이다 |
+| `overview_header` | 코드 | 전체 정리 표의 머리 두 칸 |
+
+첫 region 은 `intro` 섹션이고 마지막 region 은 맺음이다. 둘 다 한 번만 오고 본론이 아니다(메타 설명이 `intro` 첫 문단에서 나오고 전체 정리 표가 마지막 섹션에 붙는다).
+
+양식은 1단계가 고른다. `--form concept` 로 정해 줄 수 있다. 단계 지시문의 `form` 자리(2·3·5단계)에는 그 글의 양식이 들어가고, 1단계에는 고를 수 있는 양식 목록이 `inputs.forms` 로 들어간다.
 
 ## 프롬프트·모델 넣기와 고치기
 
@@ -18,7 +53,7 @@
 python -m cli.expository seed
 ```
 
-이 폴더의 `prompts/*.json` 과 `routes.json` 을 최신 버전에 넣어 새 버전을 만든다. 처음 한 번, 그리고 여러 단계를 한꺼번에 바꿨을 때 돌린다. 검증(R-13)에 걸리거나 최신과 내용이 같으면 넣지 않는다.
+이 폴더의 `prompts/*.json`·`forms/*.json`·`routes.json` 을 최신 버전에 넣어 새 버전을 만든다. 처음 한 번, 그리고 여러 단계를 한꺼번에 바꿨을 때 돌린다. 검증(R-13)에 걸리거나 최신과 내용이 같으면 넣지 않는다.
 
 한 단계만 고칠 때는 기존 명령을 쓴다. 재배포 없이 다음 실행부터 쓰인다.
 
@@ -38,9 +73,10 @@ Mongo 에 접속할 수 없는 PC 에서는 내부 API `POST /api/v1/agents/pipe
 python -m cli.expository run --theme spring
 ```
 
-부를 때의 최신 버전을 쓴다. 최신 버전에 설명문 프롬프트가 없으면 시작하지 않는다(`seed` 먼저).
+부를 때의 최신 버전을 쓴다. 최신 버전에 설명문 프롬프트나 글 양식이 없으면 호출 전에 멈춘다(`seed` 먼저).
 
-- `--topic-file topic.json`: 1단계 결과(topic·core_argument·focus_mechanisms·out_of_scope)를 직접 준다. 1단계를 부르지 않는다.
+- `--form concept`: 글 양식을 정한다. 없으면 1단계가 고른다. 이미 주제를 고른 실행에 다른 양식을 주면 멈춘다(`--redo-from 1`).
+- `--topic-file topic.json`: 1단계 결과(form·topic·core_argument·focus_points·out_of_scope)를 직접 준다. 1단계를 부르지 않는다. `--form` 을 같이 주면 파일의 form 대신 그 양식이다.
 - `--stop-after 4`: 그 단계까지만 돌린다. `--run-id <실행 id>` 로 이어 한다.
 - `--redo-from 5`: 그 단계부터의 결과를 지우고 다시 부른다.
 - `--out post.md`: 끝난 글을 파일로 쓴다.
@@ -97,11 +133,11 @@ python -m cli.expository publish expository-20261111-120000
 
 | # | 프롬프트 | 입력 | 출력 | 웹 검색 |
 |---|---|---|---|---|
-| 1 | `1_topic_thesis.json` | theme_keyword, avoid_topics, categories | topic, core_argument, focus_mechanisms(3개 이상), out_of_scope, keywords, 카테고리 쌍 | 아니오 |
-| 2 | `2_outline.json` | 1의 topic, core_argument, focus_mechanisms, out_of_scope | 뼈대 | 아니오 |
-| 3 | `3_outline_review.json` | 2의 입력 + outline | outline, review_log | 아니오 |
+| 1 | `1_topic_thesis.json` | theme_keyword, avoid_topics, categories, forms(고를 수 있는 양식) | form, topic, core_argument, focus_points, out_of_scope, keywords, 카테고리 쌍 | 아니오 |
+| 2 | `2_outline.json` | 1의 topic, core_argument, focus_points, out_of_scope + 양식 | 뼈대(form, core_message, regions) | 아니오 |
+| 3 | `3_outline_review.json` | 2의 입력 + outline. 여러 번 올 수 있는 본론 역할이 없는 양식(`concept`)은 부르지 않는다 | outline, review_log | 아니오 |
 | 4 | `4_outline_fact_check.json` | topic, outline | outline(고친 것), claims | 예 |
-| 5 | `5_write.json` | outline, out_of_scope, max_words | 문서: 영어 제목 + 본문 | 아니오 |
+| 5 | `5_write.json` | outline, out_of_scope, max_words + 양식(섹션마다 앵커 id 와 쓰는 법) | 문서: 영어 제목 + 본문 | 아니오 |
 | 6 | `6_article_fact_check.json` | outline, 문서 content_markdown | claims, patches | 예 |
 | 7 | `7_summary_glossary.json` | section_ids, 문서 content_markdown | section_summaries, terms | 아니오 |
 | 8 | `8_translate.json` | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 한국어 제목 + 본문 | 아니오 |
@@ -139,13 +175,15 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 
 `app/services/expository_checks.py` 가 검사하고, 걸리면 직전 출력과 오류 목록을 대화에 붙여 같은 단계를 다시 부른다(전송 실패까지 합쳐 버전의 `max_llm_retries` 번, 기본 3). 그래도 걸리면 멈춘다.
 
-- 1 뒤: focus_mechanisms 3개 이상, keywords 3개, 카테고리 쌍이 categories 에 있다, topic 에 `vs`·`versus`·`difference between` 이 없다. `--topic-file` 로 준 값은 앞의 네 필드만 본다.
-- 2 뒤: `core_message == core_argument`, 섹션 수 == focus_mechanisms 수, principle 두 문장, mechanism_explanation 한 문장, key_takeaway 10단어 이하, 지시문 낱말(`toy project`, `undergraduate`, `dilemma`, 필드 이름)이 없다.
-- 3 뒤: 출력 섹션마다 입력 섹션과 글자까지 같거나 review_log 에 `added` 로 있다. 빠진 섹션은 `removed` 로 있다. deep_dive_sections 밖 필드는 입력과 같다. 3개 이상 남았는데 더하지 않았다.
-- 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location 만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `--redo-from 2` 로 뼈대부터 다시 돌린다.
-- 5 뒤: 섹션 앵커가 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion` 순서다. 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
+뼈대 검사는 양식의 역할 목록을 읽는 한 벌이다. 양식마다 다른 코드가 없다.
+
+- 1 뒤: form 이 고를 수 있는 양식 중 하나다, focus_points 수가 그 양식의 본론 region 수 범위 안이다, keywords 3개, 카테고리 쌍이 categories 에 있다, topic 에 `vs`·`versus`·`difference between` 이 없다. `--topic-file` 로 준 값은 form 과 뼈대에 들어가는 네 필드만 본다.
+- 2 뒤: `core_message == core_argument`, 역할의 순서와 개수가 양식과 같다, 본론 region 수 == focus_points 수, 슬롯 채움(예시·정리 구절은 역할이 쓰는 곳에만), `key_sentence` 한 문장, 양식이 적은 슬롯별 문장 수, `takeaway` 10단어 이하, 지시문 낱말(`toy project`, `undergraduate`, `dilemma`, 밑줄 든 필드 이름)이 없다.
+- 3 뒤: 여러 번 올 수 있는 본론 역할의 region 마다 입력과 글자까지 같거나 review_log 에 `added` 로 있다. 빠진 region 은 `removed` 로 있다. 그 밖의 region 과 core_message 는 입력과 같다. 그 역할의 최소 개수 이상 남았는데 더하지 않았다.
+- 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location(`regions[2].key_sentence` 꼴)만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `--redo-from 2` 로 뼈대부터 다시 돌린다.
+- 5 뒤: 섹션 앵커가 뼈대와 양식에서 나온 순서 그대로다(`diagnosis` 면 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion`). 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
 - 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 실행 문서의 `rejected_patches` 에 남는다.
-- 7 뒤(코드): `conclusion` 을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 결론 끝에 뼈대의 sub_topic | key_takeaway 로 `**📊 Overview**` 표, 정의가 있는 용어로 `<!-- sec:glossary -->` 용어 정리 절을 붙인다.
+- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 정의가 있는 용어로 `<!-- sec:glossary -->` 용어 정리 절을 붙인다.
 - 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 영어본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 길이(`draft_min_chars`~`draft_reject_chars`, 버전의 조절 값)·변환·합쇼체·명령형·코드 주석 검사.
 - 9 뒤: 요약 150자 이하, "이 글"로 시작하지 않는다.
 
@@ -165,6 +203,7 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 ## 아직 없는 것
 
 - 실제 모델로 돌린 결과. 단위 테스트는 가짜 LLM 이다(`tests/services/test_expository*.py`, `tests/agents/test_expository.py`). 2단계 뼈대만 대화 세션에서 한 번 돌렸다(2026-11-11, 영어 출력으로 바꾸기 전 버전).
+- 글 양식(D-104)의 실제 실행 확인. `diagnosis` 는 `examples/spring_self_invocation.topic.json` 으로 돌려 전에 나온 글과 견주어 나빠진 곳이 없는지, `concept` 은 개념 주제 하나를 `--form concept` 로 돌려 문제 상황을 지어내지 않는지 본다. 양식의 영어 문구는 실제 글을 보고 고쳐야 한다. D-104 전에 시작한 실행은 이어 할 수 없다(1단계 결과에 form 이 없다). 끝난 실행의 `show`·`publish` 는 된다.
 - 문서 출력과 `documents_first` 배치(D-103)의 실제 실행 확인. 같은 뼈대로 전후를 견주는 방법: 새 프롬프트를 넣기 전에 실행을 끝까지 돌려 `show --out a.md`, `seed` 와 `edit-param` 뒤 같은 실행을 `run --run-id … --redo-from 5` 로 다시 돌려 `show --out b.md`. 두 글과 영수증의 5·8단계 출력 토큰·재시도, 실행 문서의 `rejected_patches` 수를 본다.
 - 자동 발행. `run` 이 끝나도 올리지 않는다. `publish` 를 따로 부른다.
 - 발행한 글의 용어 사전·제작 기록 연결.

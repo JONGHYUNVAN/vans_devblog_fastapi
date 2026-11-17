@@ -24,7 +24,10 @@ from app.services.agent_calls import AgentCallService
 from app.services.expository import TOPIC_KEYS, ExpositoryPipeline, RunSeed
 from app.services.pipeline_versions import PipelineVersionService
 from tests.factories import (
+    CONCEPT_SECTION_IDS,
     make_expository_body,
+    make_expository_concept_outline,
+    make_expository_concept_topic,
     make_expository_english_article,
     make_expository_korean_article,
     make_expository_outline,
@@ -205,6 +208,85 @@ async def test_run_asks_for_the_whole_document_again_when_the_title_line_is_miss
     }
 
 
+async def test_run_writes_a_concept_article_without_a_review_call_or_a_problem_section():
+    harness = Harness()
+    topic = make_expository_concept_topic()
+    outline = make_expository_concept_outline(topic["core_argument"])
+    article = make_expository_english_article(ids=CONCEPT_SECTION_IDS)
+    script = [json.dumps(outline), json.dumps({"outline": outline, "claims": []}), f"# B+tree lookups\n\n{article}"]
+    client = FakeLLMClient(script)
+
+    result = await (await harness.pipeline(client)).run(RUN_ID, RunSeed(topic=topic), stop_after=5)
+
+    # 개념 양식은 여러 번 올 수 있는 본론 역할이 없어 뼈대 검토를 부르지 않고 뼈대를 그대로 넘긴다
+    assert [receipt.item_id for receipt in harness.receipts.calls] == ["2_outline", "4_outline_fact_check", "5_write"]
+    assert result.finished_stages == [
+        "1_topic_thesis",
+        "2_outline",
+        "3_outline_review",
+        "4_outline_fact_check",
+        "5_write",
+    ]
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.stage_outputs["3_outline_review"] == {"outline": outline, "review_log": []}
+    # 지시문의 form 자리에 그 글의 양식이 들어간다: 뼈대 단계는 역할 목록, 작성 단계는 섹션마다 앵커 id 와 쓰는 법
+    outline_prompt = json.loads(client.calls[0].messages[1].content)
+    assert [region["role"] for region in outline_prompt["form"]["regions"]] == [
+        "definition",
+        "structure",
+        "mechanism",
+        "rationale",
+        "contrast",
+        "synthesis",
+    ]
+    assert "form" not in outline_prompt["inputs"]
+    write_prompt = json.loads(client.calls[2].messages[1].content)
+    assert [section["section_id"] for section in write_prompt["form"]["sections"]] == CONCEPT_SECTION_IDS
+    assert all(section["guidance"] for section in write_prompt["form"]["sections"])
+
+
+async def test_run_offers_only_the_form_given_by_the_seed():
+    harness = Harness()
+    client = FakeLLMClient([json.dumps(make_expository_topic())])
+
+    await (await harness.pipeline(client)).run(RUN_ID, RunSeed(form="diagnosis"), stop_after=1)
+
+    offered = json.loads(client.calls[0].messages[1].content)["inputs"]["forms"]
+    assert [form["id"] for form in offered] == ["diagnosis"]
+    assert (offered[0]["focus_points_min"], offered[0]["focus_points_max"]) == (3, None)
+
+    # 양식 없이 부르면 최신 버전의 양식 전부가 선택지다
+    other = Harness()
+    everything = FakeLLMClient([json.dumps(make_expository_topic())])
+    await (await other.pipeline(everything)).run(RUN_ID, RunSeed(), stop_after=1)
+    offered = json.loads(everything.calls[0].messages[1].content)["inputs"]["forms"]
+    assert [form["id"] for form in offered] == ["concept", "diagnosis", "procedure", "taxonomy"]
+
+
+async def test_run_raises_before_any_call_for_an_unknown_form_or_a_version_without_forms():
+    client = FakeLLMClient([])
+
+    with pytest.raises(ValueError, match="모르는 글 양식 'essay'"):
+        await (await Harness().pipeline(client)).run(RUN_ID, RunSeed(form="essay"))
+
+    body = make_expository_body(draft_min_chars=10)
+    del body.prompts["expository_form"]  # D-104 전에 넣은 버전의 모양
+    with pytest.raises(ValueError, match="글 양식이 없다"):
+        await (await Harness(body=body).pipeline(client)).run(RUN_ID, RunSeed())
+
+    assert client.calls == []
+
+
+async def test_run_refuses_a_form_that_differs_from_the_stored_topic():
+    harness = Harness()
+    await (await harness.pipeline(FakeLLMClient([json.dumps(make_expository_topic())]))).run(
+        RUN_ID, RunSeed(), stop_after=1
+    )
+
+    with pytest.raises(ValueError, match="--redo-from 1"):
+        await (await harness.pipeline(FakeLLMClient([]))).run(RUN_ID, RunSeed(form="concept"), stop_after=1)
+
+
 async def test_run_keeps_the_old_result_out_of_the_cache_when_a_changed_stage_fails():
     harness = Harness()
     topic = make_expository_topic()
@@ -227,7 +309,7 @@ async def test_run_stops_when_outline_fact_check_finds_a_blocking_claim():
     topic = make_expository_topic()
     outline = make_expository_outline(topic["core_argument"])
     claim = {
-        "location": "deep_dive_sections[0].principle",
+        "location": "regions[2].key_sentence",
         "claim_type": "API",
         "claim": "claim",
         "verdict": "REFUTED",
@@ -306,7 +388,7 @@ async def test_publish_posts_the_article_with_the_note_and_records_it_once():
 
 async def test_publish_lists_category_choices_when_the_run_has_none_and_takes_them_as_arguments():
     harness = Harness()
-    await _finished(harness, topic={key: make_expository_topic()[key] for key in TOPIC_KEYS})
+    await _finished(harness, topic={key: make_expository_topic()[key] for key in ("form", *TOPIC_KEYS)})
     post_be = FakePostBE(categories=CATEGORIES)
     pipeline = await harness.pipeline(FakeLLMClient([]), post_be)
 

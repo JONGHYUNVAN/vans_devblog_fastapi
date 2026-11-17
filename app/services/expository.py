@@ -8,6 +8,8 @@ AgentCallService 를 거쳐 영수증(`agent_calls`, kind EXPOSITORY, round_id �
 고친 단계부터 다시 돌리는 것이 이어 하기의 목적이고, 어느 버전으로 부른 호출인지는 영수증마다 남는다.
 이어 하기: 단계 결과가 있고 입력을 채운 프롬프트가 그 결과를 만든 프롬프트와 같으면 그 단계를 다시 부르지 않는다. 앞 단계
 결과나 버전의 프롬프트가 바뀌면 그 단계부터 다시 부른다. 1단계는 입력에 Post BE 카테고리가 들어가므로 결과가 있으면 그대로 쓴다.
+뼈대의 양식은 글의 목적에 따라 다르다(D-104): 1단계가 버전 문서의 글 양식(`prompts.expository_form`) 중 하나를 고르고,
+뒤 단계는 그 양식의 역할 목록으로 뼈대를 만들고 검사하며 섹션 순서를 정한다. 양식마다 다른 코드는 없다.
 보내는 메시지의 배치는 조절 값 `expository.layouts` 가 호출 모델의 가족별로 고른다(D-103). 실행 문서에 남는 프롬프트는
 배치와 무관한 중심 양식이라, 배치나 모델만 바꾼 뒤 이어 하면 끝난 단계를 다시 부르지 않는다.
 """
@@ -32,6 +34,16 @@ from app.agents.expository import (
     stage_models,
     stage_prompts,
 )
+from app.agents.expository_forms import (
+    form_choices,
+    outline_view,
+    repeatable_roles,
+    review_view,
+    role_specs,
+    section_ids,
+    stage_forms,
+    write_view,
+)
 from app.agents.prompts.registry import prompt_family
 from app.clients.publisher.base import PostCreatePayload
 from app.clients.publisher.post_be import PostBEPublisher
@@ -47,7 +59,6 @@ from app.schemas.expository import ExpositoryResult
 from app.services.agent_calls import AgentCallService
 from app.services.expository_assembly import apply_patches, assemble_article, first_paragraph
 from app.services.expository_checks import (
-    article_section_ids,
     blocking_claims,
     check_article,
     check_article_fact_check,
@@ -69,7 +80,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_WORDS = 2200
 LAST_STAGE = len(STAGES)
 RUN_ID_PREFIX = "expository-"  # 실행 id 이자 영수증의 round_id. 라운드 id 와 섞이지 않게 앞에 붙인다
-TOPIC_KEYS = ("topic", "core_argument", "focus_mechanisms", "out_of_scope")
+TOPIC_KEYS = ("topic", "core_argument", "focus_points", "out_of_scope")  # 1단계 결과 중 뼈대 단계에 들어가는 것
 WRITE_STAGE = "5_write"
 FACT_CHECK_STAGES = ("4_outline_fact_check", "6_article_fact_check")
 _FACT_CHECK_LENS = "FACT_STRUCTURE"  # 글 끝 표기의 렌즈 라벨(사실·구조). 기존 라운드의 사실 확인 렌즈와 같은 이름이다
@@ -86,12 +97,16 @@ def new_run_id(now: datetime | None = None) -> str:
 
 @dataclass
 class RunSeed:
-    """실행 시작값. topic 을 주면 1단계를 부르지 않고 그 값을 1단계 결과로 쓴다."""
+    """실행 시작값. topic 을 주면 1단계를 부르지 않고 그 값을 1단계 결과로 쓴다.
+
+    form 은 글 양식 id 다(D-104). 주면 1단계가 그 양식으로만 주제를 고르고, topic 을 같이 주면 그 topic 의 양식이 된다.
+    """
 
     theme_keyword: str = ""
     avoid_topics: list[str] = field(default_factory=list)
     topic: dict[str, Any] | None = None
     max_words: int = DEFAULT_MAX_WORDS
+    form: str | None = None
 
 
 class ExpositoryPipeline:
@@ -100,7 +115,7 @@ class ExpositoryPipeline:
     run 이 최신 버전과 실행 문서를 읽어 그 호출 동안 쓴다. 같은 실행을 두 러너가 동시에 돌리지 않는다(문서를 통째로 덮어쓴다).
     실패 계약: 검사를 끝내 통과하지 못하거나 벤더 호출이 끝내 실패하면 LLMRetriesExhaustedError(출력이 한도를 더 올릴 수 없이
     잘리면 그 하위 LLMOutputTruncatedError), 뼈대 사실 확인이 고칠 수 없는 오류를 찾거나 주어진 1단계 결과가 틀리면
-    LLMOutputError, 버전이 없거나 최신 버전에 설명문 프롬프트·키가 있는 라우트 후보가 없으면 ValueError.
+    LLMOutputError, 버전이 없거나 최신 버전에 설명문 프롬프트·글 양식·키가 있는 라우트 후보가 없거나 모르는 양식 id 를 주면 ValueError.
     그때까지 끝난 단계의 결과는 실행 문서에, 모든 시도는 영수증에 남는다.
     """
 
@@ -126,6 +141,7 @@ class ExpositoryPipeline:
         self._models: dict[str, CallModel] = {}
         self._parameters = Parameters()
         self._layouts: dict[str, str] = {}
+        self._forms: dict[str, dict[str, Any]] = {}
         self._run = ExpositoryRun(run_id="")
         self._seed = RunSeed()
 
@@ -139,6 +155,10 @@ class ExpositoryPipeline:
         version = await self._versions.require_latest()
         self._version_id = version.version_id
         self._prompts = stage_prompts(version.prompts)
+        # 양식이 없는 버전(D-104 전에 넣은 프롬프트)은 여기서 멈춘다. 호출을 시작한 뒤에 입력 키가 맞지 않아 멈추면 토큰만 쓴다
+        self._forms = stage_forms(version.prompts)
+        if seed.form is not None and seed.form not in self._forms:
+            raise ValueError(f"모르는 글 양식 {seed.form!r}. 최신 버전의 양식: {sorted(self._forms)}")
         self._models = stage_models(version.routes, self._providers)
         # 번역본의 길이·문체·코드 주석 기준과 재시도 수는 기존 파이프라인과 같은 조절 값이다
         self._parameters = version.parameters
@@ -260,39 +280,62 @@ class ExpositoryPipeline:
         return to_result(run)
 
     async def _topic(self, stage: Stage) -> None:
-        topic = self._seed.topic if self._seed.topic is not None else self._run.stage_outputs.get(stage.key)
+        form = self._seed.form
+        topic = self._run.stage_outputs.get(stage.key)
+        if self._seed.topic is not None:
+            # 사람이 준 주제에 --form 을 같이 주면 그 양식으로 쓴다. 파일에 form 이 있어도 명령 인자가 이긴다
+            topic = self._seed.topic if form is None else {**self._seed.topic, "form": form}
+        elif topic is not None and form is not None and topic.get("form") != form:
+            raise ValueError(
+                f"{self._run.run_id} 의 1단계 결과는 양식 {topic.get('form')!r} 다. 양식 {form!r} 로 쓰려면 "
+                "새 실행을 시작하거나 --redo-from 1 로 주제부터 다시 고른다"
+            )
         if topic is not None:
-            errors = check_topic(topic, [], given=True)
+            errors = check_topic(topic, [], self._forms, given=True)
             if errors:
                 raise LLMOutputError(f"{stage.key}: 주어진 1단계 결과가 검사에 걸렸다: {errors} ({self._run.run_id})")
             await self._save_stage(stage, topic, prompt=None)
             return
         categories = await self._categories()
+        forms = self._forms if form is None else {form: self._forms[form]}
         inputs = {
             "theme_keyword": self._seed.theme_keyword,
             "avoid_topics": self._seed.avoid_topics,
             "categories": categories,
+            "forms": form_choices(forms),
         }
         prompt = render_prompt(self._prompts[stage.key], inputs)
-        topic = await self._call_until_valid(stage, inputs, lambda output: check_topic(output, categories))
+        topic = await self._call_until_valid(stage, inputs, lambda output: check_topic(output, categories, forms))
         await self._save_stage(stage, topic, prompt)
 
     async def _outline(self, stage: Stage) -> None:
-        topic = self._output("1_topic_thesis")
-        inputs = {key: topic[key] for key in TOPIC_KEYS}
-        await self._run_stage(stage, inputs, lambda output: check_outline(output, inputs))
+        topic, (form_id, form) = self._output("1_topic_thesis"), self._form()
+        topic_inputs = {key: topic[key] for key in TOPIC_KEYS}
+        inputs = {**topic_inputs, "form": outline_view(form_id, form)}
+        await self._run_stage(stage, inputs, lambda output: check_outline(output, topic_inputs, form_id, form))
 
     async def _review(self, stage: Stage) -> None:
-        topic = self._output("1_topic_thesis")
-        inputs = {**{key: topic[key] for key in TOPIC_KEYS}, "outline": self._output("2_outline")}
-        await self._run_stage(stage, inputs, lambda output: check_review(output, inputs))
+        topic, outline, (form_id, form) = self._output("1_topic_thesis"), self._output("2_outline"), self._form()
+        if not repeatable_roles(form):
+            # 여러 번 올 수 있는 본론 역할이 없는 양식은 뺄 region 도 채울 region 도 없다. 부르지 않고 뼈대를 그대로 넘긴다
+            await self._save_stage(stage, {"outline": outline, "review_log": []}, prompt=None)
+            return
+        inputs = {
+            **{key: topic[key] for key in TOPIC_KEYS},
+            "outline": outline,
+            "form": review_view(form_id, form),
+        }
+        await self._run_stage(stage, inputs, lambda output: check_review(output, inputs, form_id, form))
 
     async def _outline_fact_check(self, stage: Stage) -> None:
+        form_id, form = self._form()
         inputs = {
             "topic": self._output("1_topic_thesis")["topic"],
             "outline": self._output("3_outline_review")["outline"],
         }
-        output = await self._run_stage(stage, inputs, lambda output: check_outline_fact_check(output, inputs))
+        output = await self._run_stage(
+            stage, inputs, lambda output: check_outline_fact_check(output, inputs, form_id, form)
+        )
         blocking = blocking_claims(output)
         if blocking:
             # 섹션의 메커니즘이나 논제 자체가 틀렸다. 문장만 고치면 앞뒤가 맞지 않는 글이 되므로 뼈대부터 다시 만든다
@@ -302,33 +345,47 @@ class ExpositoryPipeline:
             )
 
     async def _write(self, stage: Stage) -> None:
-        verified = self._verified_outline()
+        verified, (form_id, form), sections = self._verified_outline(), self._form(), self._sections()
         inputs = {
             "outline": verified,
             "out_of_scope": self._output("1_topic_thesis")["out_of_scope"],
             "max_words": self._seed.max_words,
+            "form": write_view(form_id, form, verified["regions"]),
         }
-        await self._run_stage(stage, inputs, lambda output: check_article(output, verified))
+        await self._run_stage(stage, inputs, lambda output: check_article(output, sections))
 
     async def _article_fact_check(self, stage: Stage) -> None:
-        verified, article = self._verified_outline(), self._output("5_write")
+        verified, article, sections = self._verified_outline(), self._output("5_write"), self._sections()
         inputs = {"outline": verified, "content_markdown": article["content_markdown"]}
         output = await self._run_stage(stage, inputs, check_article_fact_check)
         checked, rejected = apply_patches(
             article["content_markdown"],
             output["patches"],
-            lambda markdown: check_article({"title": article["title"], "content_markdown": markdown}, verified),
+            lambda markdown: check_article({"title": article["title"], "content_markdown": markdown}, sections),
         )
         self._run.checked_markdown, self._run.rejected_patches = checked, rejected
         await self._save()
 
     async def _summary_glossary(self, stage: Stage) -> None:
         verified, checked = self._verified_outline(), self._run.checked_markdown or ""
-        # 결론에는 요약 표 대신 뼈대로 만든 전체 정리 표가 들어간다
-        section_ids = article_section_ids(len(verified["deep_dive_sections"]))[:-1]
-        inputs = {"content_markdown": checked, "section_ids": section_ids}
-        output = await self._run_stage(stage, inputs, lambda output: check_summary_glossary(output, section_ids))
-        self._run.assembled_markdown = assemble_article(checked, output["section_summaries"], verified, output["terms"])
+        form, sections = self._form()[1], self._sections()
+        # 마지막 섹션에는 요약 표 대신 뼈대로 만든 전체 정리 표가 들어간다
+        summarized = sections[:-1]
+        inputs = {"content_markdown": checked, "section_ids": summarized}
+        output = await self._run_stage(stage, inputs, lambda output: check_summary_glossary(output, summarized))
+        specs = role_specs(form)
+        self._run.assembled_markdown = assemble_article(
+            checked,
+            output["section_summaries"],
+            output["terms"],
+            overview_header=(form["overview_header"][0], form["overview_header"][1]),
+            overview_rows=[
+                (region["heading"], region["takeaway"])
+                for region in verified["regions"]
+                if specs[region["role"]]["focus"]
+            ],
+            last_section=sections[-1],
+        )
         await self._save()
 
     async def _translate(self, stage: Stage) -> None:
@@ -363,6 +420,15 @@ class ExpositoryPipeline:
 
     def _verified_outline(self) -> dict[str, Any]:
         return self._output("4_outline_fact_check")["outline"]
+
+    def _form(self) -> tuple[str, dict[str, Any]]:
+        """이 글의 양식 (id, 양식). 1단계 결과가 고른 것이고 _topic 이 최신 버전에 있는 양식인지 먼저 검사한다."""
+        form_id = self._output("1_topic_thesis")["form"]
+        return form_id, self._forms[form_id]
+
+    def _sections(self) -> list[str]:
+        """글의 섹션 앵커 id 순서. 사실 확인을 거친 뼈대의 region 과 양식에서 나온다."""
+        return section_ids(self._form()[1], self._verified_outline()["regions"])
 
     async def _run_stage(self, stage: Stage, inputs: dict[str, Any], check: Check) -> dict[str, Any]:
         """결과가 있고 프롬프트가 그 결과를 만든 프롬프트와 같으면 그 결과를 쓰고, 아니면 부른다."""

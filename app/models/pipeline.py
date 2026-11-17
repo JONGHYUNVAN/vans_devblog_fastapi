@@ -23,6 +23,8 @@ COMMON_FAMILY = "common"
 # 설명문 파이프라인(services/expository.py)의 단계 프롬프트. 모델 가족이 아니라 파이프라인 이름이고, 이름은 단계 key,
 # 본문은 JSON 지시문이다. 라우트는 routes 의 `EXPOSITORY:{단계 key}` 다. 둘 다 없는 버전도 유효하다(R-13)
 EXPOSITORY_FAMILY = "expository"
+# 설명문 파이프라인의 글 양식(agents/expository_forms). 이름은 양식 id, 본문은 그 양식의 region 역할을 적은 JSON 이다 (D-104)
+EXPOSITORY_FORM_FAMILY = "expository_form"
 PipelineVersionSource = Literal["bootstrap", "import", "edit-prompt", "edit-param", "edit-route", "edit-routes"]
 PromptSet = dict[str, dict[str, str]]  # 가족 → 템플릿 이름 → 본문. 평면 배치(v1~v3)는 common 에 둔다
 

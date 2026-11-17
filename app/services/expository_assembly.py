@@ -56,15 +56,23 @@ def apply_patches(
 
 
 def assemble_article(
-    markdown: str, summaries: list[dict[str, Any]], outline: dict[str, Any], terms: list[dict[str, Any]]
+    markdown: str,
+    summaries: list[dict[str, Any]],
+    terms: list[dict[str, Any]],
+    *,
+    overview_header: tuple[str, str],
+    overview_rows: list[tuple[str, str]],
+    last_section: str,
 ) -> str:
-    """섹션마다 요약 표, 결론 끝에 뼈대의 전체 정리 표, 글 끝에 용어 정리 절(정의가 있는 용어만)을 넣는다."""
+    """섹션마다 요약 표, 마지막 섹션 끝에 전체 정리 표, 글 끝에 용어 정리 절(정의가 있는 용어만)을 넣는다.
+
+    전체 정리 표의 행은 뼈대 본론 region 의 (heading, takeaway), 머리는 글 양식의 overview_header 다(D-104).
+    """
     for summary in summaries:
         rows = [(row["item"], row["explanation"]) for row in summary["rows"]]
         table = _table(("Item", "Explanation"), rows, title=f"Summary: {summary['title']}")
         markdown = _append_to_section(markdown, summary["section_id"], table)
-    overview = [(section["sub_topic"], section["key_takeaway"]) for section in outline["deep_dive_sections"]]
-    markdown = _append_to_section(markdown, "conclusion", _table(("Mechanism", "Takeaway"), overview, title="Overview"))
+    markdown = _append_to_section(markdown, last_section, _table(overview_header, overview_rows, title="Overview"))
     defined = [(term["term_en"], term["definition"]) for term in terms if term.get("definition", "").strip()]
     if defined:
         # 제목 번호는 작성 단계가 1부터 매긴다. 용어 정리는 그 다음 번호다

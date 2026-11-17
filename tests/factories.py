@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.agents.expository_forms import stage_forms
 from app.agents.personas import PERSONAS
 from app.models.agent_call import AgentCall, ChatMessage, TokenUsage
 from app.models.enums import (
@@ -26,6 +27,7 @@ from app.models.model_binding import CallModel, ModelBinding
 from app.models.pipeline import (
     BODY_FIELDS,
     EXPOSITORY_FAMILY,
+    EXPOSITORY_FORM_FAMILY,
     Parameters,
     PipelineVersion,
     PipelineVersionBody,
@@ -626,17 +628,23 @@ EXPOSITORY_DIR = Path(__file__).resolve().parents[1] / "pipeline" / "expository"
 def make_expository_body(**parameter_overrides: Any) -> PipelineVersionBody:
     """픽스처 본문에 저장소 pipeline/expository 의 프롬프트·라우트를 넣은 것. 버전에 넣는 입력 파일도 같이 검사하게 된다."""
     body = make_pipeline_body(**parameter_overrides)
-    prompts, routes = read_expository_directory(EXPOSITORY_DIR)
-    body.prompts = {**body.prompts, EXPOSITORY_FAMILY: prompts}
+    prompts, forms, routes = read_expository_directory(EXPOSITORY_DIR)
+    body.prompts = {**body.prompts, EXPOSITORY_FAMILY: prompts, EXPOSITORY_FORM_FAMILY: forms}
     body.routes = {**body.routes, **routes}
     return body
 
 
+def make_expository_forms() -> dict[str, dict[str, Any]]:
+    """저장소 pipeline/expository/forms 의 글 양식(id → 양식). 넣는 입력 파일도 같이 검사하게 된다."""
+    return stage_forms(make_expository_body().prompts)
+
+
 def make_expository_topic() -> dict[str, Any]:
     return {
+        "form": "diagnosis",
         "topic": "Why self-invocation bypasses Spring @Transactional",
         "core_argument": "Moving methods that need a transaction boundary into a separate bean prevents the problem.",
-        "focus_mechanisms": ["Proxy creation", "Internal calls through this", "Thread-bound transaction resources"],
+        "focus_points": ["Proxy creation", "Internal calls through this", "Thread-bound transaction resources"],
         "out_of_scope": ["Distributed transactions"],
         "keywords": ["spring", "transaction", "proxy"],
         "main_category_id": "main-1",
@@ -644,32 +652,116 @@ def make_expository_topic() -> dict[str, Any]:
     }
 
 
-def make_expository_section(number: int) -> dict[str, str]:
+def make_expository_region(
+    role: str, heading: str, key_sentence: str, elaboration: str, example: str = "", takeaway: str = ""
+) -> dict[str, str]:
+    """뼈대 region 하나. 슬롯 이름은 모든 양식이 같고, 역할이 쓰지 않는 슬롯은 빈 문자열이다."""
     return {
-        "sub_topic": f"Mechanism {number}",
-        "principle": (
-            f"The container wraps bean {number} in a proxy that runs advice before it delegates. "
-            "Therefore only calls that enter through the proxy get the advice."
-        ),
-        "mechanism_explanation": (
-            f"When placeOrder calls saveFailureLog through this, due to rule {number}, the setting is never read."
-        ),
-        "key_takeaway": f"Advice runs only on proxy entry {number}",
+        "role": role,
+        "heading": heading,
+        "key_sentence": key_sentence,
+        "elaboration": elaboration,
+        "example": example,
+        "takeaway": takeaway,
     }
 
 
+def make_expository_section(number: int) -> dict[str, str]:
+    """문제 원인 양식의 본론(cause) region 하나."""
+    return make_expository_region(
+        "cause",
+        f"Mechanism {number}",
+        f"The container wraps bean {number} in a proxy that runs advice before it delegates.",
+        "Therefore only calls that enter through the proxy get the advice.",
+        f"When placeOrder calls saveFailureLog through this, due to rule {number}, the setting is never read.",
+        f"Advice runs only on proxy entry {number}",
+    )
+
+
 def make_expository_outline(core_argument: str, section_count: int = 3) -> dict[str, Any]:
+    """문제 원인(diagnosis) 양식의 뼈대. cause region 이 section_count 개다."""
     return {
+        "form": "diagnosis",
         "core_message": core_argument,
-        "introduction": {
-            "problem_statement": "OrderService calls saveFailureLog on itself, and the log row disappears on rollback.",
-            "concept_definition": "A proxy is the object the container registers in place of the bean.",
-        },
-        "deep_dive_sections": [make_expository_section(number) for number in range(1, section_count + 1)],
-        "practical_application": {
-            "architecture_pattern": "Move saveFailureLog into a separate OrderFailureLogger bean.",
-            "exception_case": "A helper that joins the outer transaction can stay a private method.",
-        },
+        "regions": [
+            make_expository_region(
+                "problem",
+                "A failure log that disappears",
+                "The failure log row disappears when the order transaction rolls back.",
+                "OrderService calls saveFailureLog on itself inside placeOrder.",
+            ),
+            make_expository_region(
+                "concept",
+                "Proxies",
+                "A proxy is the object the container registers in place of the bean.",
+                "It runs advice before it delegates to the target.",
+            ),
+            *[make_expository_section(number) for number in range(1, section_count + 1)],
+            make_expository_region(
+                "fix",
+                "A separate bean",
+                "Move saveFailureLog into a separate OrderFailureLogger bean.",
+                "The call then enters through the proxy of that bean.",
+                "The failure log row now commits in its own transaction.",
+            ),
+            make_expository_region(
+                "exceptions",
+                "Helpers that join the caller",
+                "A helper that joins the outer transaction can stay a private method.",
+                "It needs no boundary of its own.",
+            ),
+            make_expository_region(
+                "synthesis",
+                "Where the boundary lives",
+                "A transaction boundary works only where calls cross a proxy.",
+                "Check which calls stay inside the object.",
+            ),
+        ],
+    }
+
+
+def make_expository_concept_topic() -> dict[str, Any]:
+    """개념·구조(concept) 양식의 주제. 사람이 준 1단계 결과의 모양이다(키워드·카테고리 없음)."""
+    return {
+        "form": "concept",
+        "topic": "How a B+tree index is laid out and searched",
+        "core_argument": "A B+tree keeps rows only in its leaves so that every lookup costs the same number of page reads.",
+        "focus_points": ["Root, internal, and leaf pages", "Descending from the root", "Why rows live only in leaves"],
+        "out_of_scope": ["Hash indexes"],
+    }
+
+
+def make_expository_concept_outline(core_argument: str) -> dict[str, Any]:
+    """개념·구조 양식의 뼈대: 정의 → 구성 요소 → 작동 원리 → 배경 → 종합. 문제 상황과 해결 region 이 없다."""
+    body = [("structure", "Pages of the tree"), ("mechanism", "A lookup"), ("rationale", "Rows only in leaves")]
+    return {
+        "form": "concept",
+        "core_message": core_argument,
+        "regions": [
+            make_expository_region(
+                "definition",
+                "A B+tree index",
+                "A B+tree index is a balanced tree of pages that maps key values to rows.",
+                "It has root, internal, and leaf pages. A lookup descends from the root to one leaf.",
+            ),
+            *[
+                make_expository_region(
+                    role,
+                    heading,
+                    f"The {role} of the tree follows one rule.",
+                    "Internal pages hold separator keys. Leaf pages hold the rows.",
+                    "A table of four rows fits in one leaf page.",
+                    f"One rule for the {role}",
+                )
+                for role, heading in body
+            ],
+            make_expository_region(
+                "synthesis",
+                "What the layout buys",
+                "Keeping rows in leaves makes every lookup the same depth.",
+                "Structure, lookup, and the reason for the layout describe one design.",
+            ),
+        ],
     }
 
 
@@ -678,20 +770,28 @@ def expository_section_ids(section_count: int = 3) -> list[str]:
     return ["intro", "concept", *mechanisms, "application", "exceptions", "conclusion"]
 
 
-def make_expository_markdown(sentence: str, section_count: int = 3, glossary: bool = False) -> str:
-    """섹션마다 제목 하나와 문단 하나. application 에 code-1 코드 블록이 있다. sentence 의 {id} 는 섹션 id 로 바뀐다."""
+CONCEPT_SECTION_IDS = ["intro", "structure", "mechanism", "rationale", "conclusion"]
+
+
+def make_expository_markdown(
+    sentence: str, section_count: int = 3, glossary: bool = False, ids: list[str] | None = None
+) -> str:
+    """섹션마다 제목 하나와 문단 하나. 뒤에서 셋째 섹션(문제 원인 양식의 application)에 code-1 코드 블록이 있다.
+
+    sentence 의 {id} 는 섹션 id 로 바뀐다. ids 를 주면 그 섹션들로 만든다(다른 양식의 글).
+    """
     parts: list[str] = []
-    ids = expository_section_ids(section_count) + (["glossary"] if glossary else [])
-    for number, section_id in enumerate(ids, start=1):
+    base = ids if ids is not None else expository_section_ids(section_count)
+    for number, section_id in enumerate(base + (["glossary"] if glossary else []), start=1):
         parts.append(f"<!-- sec:{section_id} -->\n## {number}. {section_id}\n\n{sentence.format(id=section_id)}\n")
-        if section_id == "application":
+        if section_id == base[-3]:
             parts.append("<!-- sec:code-1 -->\n```java-snippet\n@Service\nclass OrderFailureLogger {}\n```\n")
     return "\n".join(parts)
 
 
-def make_expository_english_article(section_count: int = 3) -> str:
+def make_expository_english_article(section_count: int = 3, ids: list[str] | None = None) -> str:
     sentence = "The {id} part explains how the proxy decides which calls get the transaction. It names no options."
-    return make_expository_markdown(sentence, section_count)
+    return make_expository_markdown(sentence, section_count, ids=ids)
 
 
 def make_expository_korean_article(section_count: int = 3, glossary: bool = True) -> str:

@@ -1,0 +1,69 @@
+{
+  "label": "Classification and types",
+  "use_when": "The subject is a family with several kinds, such as isolation levels, index types, garbage collectors, or caching directives, and the reader wants to know which kinds exist and what sets each one apart.",
+  "topic": "The family and the basis of classification, phrased the way a developer would search for it (e.g., 'The four transaction isolation levels and what each one permits'). Not a recommendation of one kind.",
+  "thesis": "One declarative sentence claiming that a single criterion explains how the kinds differ: a claim a competent engineer would want justified. 'There are N kinds' is not a thesis.",
+  "focus_points": "Three or more items: first the classification criterion, then one item per kind (two or more kinds). Each kind item names the kind and its defining trait under that criterion.",
+  "overview_header": ["Type", "Takeaway"],
+  "outline_rules": [
+    "no_invented_problem: Do not invent a failure, incident, or problem scenario to motivate the subject. The article explains the family itself.",
+    "same_axis: Describe every type on the criterion from the criteria region, with the same points in the same order, so that the types can be read side by side.",
+    "no_ranking: Do not rank the types or recommend one. State what each type is and the condition under which its defining trait applies.",
+    "one_running_example: Choose one concrete case (one query, one request, one workload) and show how each type treats it in that region's example."
+  ],
+  "review_rules": [
+    "weak_relevance: Remove a type region if the criterion does not set it apart from another type, i.e., it would get the same description as a type already covered."
+  ],
+  "write_rules": [
+    "no_invented_problem: Do not open with or build toward a failure story. Motivate the article by what the reader will be able to tell apart after reading it.",
+    "same_axis: Give every type section the same internal order of points, so a reader can compare them without rereading.",
+    "no_ranking: Do not rank the types, list pros and cons, or recommend one. Say what each type is and when its defining trait applies.",
+    "one_running_example: Show the same concrete case under each type instead of a different example per section."
+  ],
+  "regions": [
+    {
+      "role": "definition",
+      "section": "intro",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "sentences": { "elaboration": [2, 4] },
+      "outline": "key_sentence defines the family in one sentence: what its members have in common and what they are for. elaboration names the types the article covers and the point of view it takes (core_message).",
+      "write": "Open with two or three sentences that define the family and state the article's point of view (core_message). Then name the types in the order they are covered, introduce the running case, and end with the question the rest of the article answers."
+    },
+    {
+      "role": "criteria",
+      "section": "criteria",
+      "min": 1,
+      "max": 1,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 5] },
+      "outline": "The criterion that divides the family. key_sentence states the criterion. elaboration explains what it measures and why it, rather than a surface difference, is what separates the types. example shows the running case and the question the criterion asks of it.",
+      "write": "Explain the criterion and what it measures before any type is described, and show the running case the later sections will reuse."
+    },
+    {
+      "role": "type",
+      "section": "type",
+      "min": 2,
+      "max": null,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [2, 5] },
+      "outline": "One type. heading names the type. key_sentence states its defining trait under the criterion. elaboration gives how it behaves and the condition under which that trait applies. example shows how this type treats the running case.",
+      "write": "State the type's defining trait under the criterion, explain how it behaves, and show the running case under this type with code, a trace, or a text diagram."
+    },
+    {
+      "role": "synthesis",
+      "section": "conclusion",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "sentences": { "elaboration": [1, 3] },
+      "outline": "The whole family. key_sentence restates core_message in light of the types. elaboration says how the criterion orders the types relative to one another.",
+      "write": "Place the types side by side on the criterion in a few sentences and restate core_message in that light. Close with a short list of questions the reader should now be able to answer. Add no new claim. The heading names what the criterion explains, not 'Conclusion' alone."
+    }
+  ]
+}

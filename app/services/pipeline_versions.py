@@ -24,6 +24,7 @@ from app.models.pipeline import (
     BODY_FIELDS,
     COMMON_FAMILY,
     EXPOSITORY_FAMILY,
+    EXPOSITORY_FORM_FAMILY,
     PROMPT_FAMILIES,
     Parameters,
     PipelineVersion,
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_FILE = "pipeline.json"
 PROMPTS_DIR = "prompts"
 EXPOSITORY_ROUTES_FILE = "routes.json"  # 설명문 파이프라인 입력 디렉터리(pipeline/expository)의 단계별 모델
+EXPOSITORY_FORMS_DIR = "forms"  # 같은 디렉터리의 글 양식(양식 id.json)
 DEFAULT_PROMPTS_DIR = "v4"  # 저장소 app/agents/prompts/ 아래. 기준 버전의 프롬프트 입력
 
 
@@ -215,13 +217,17 @@ class PipelineVersionService:
     ) -> PipelineVersion:
         """설명문 파이프라인 입력 디렉터리(prompts/{단계}.json, routes.json)를 최신 버전에 넣은 자식 버전 (D-99).
 
-        expository 가족과 `EXPOSITORY:*` 라우트만 통째로 바꾸고 나머지는 최신 버전 것을 잇는다. 처음 넣을 때와 여러 단계를
-        한 번에 바꿀 때 쓴다. 한 단계만 고칠 때는 edit_prompt·edit_route 다. 파일이 없으면 FileNotFoundError.
+        expository·expository_form 가족과 `EXPOSITORY:*` 라우트만 통째로 바꾸고 나머지는 최신 버전 것을 잇는다. 처음 넣을 때와
+        여러 단계를 한 번에 바꿀 때 쓴다. 한 단계·한 양식만 고칠 때는 edit_prompt·edit_route 다. 파일이 없으면 FileNotFoundError.
         """
         latest = await self.require_latest()
-        prompts, routes = read_expository_directory(directory)
+        prompts, forms, routes = read_expository_directory(directory)
         body = latest.body()
-        body.prompts = {**{key: dict(value) for key, value in body.prompts.items()}, EXPOSITORY_FAMILY: prompts}
+        body.prompts = {
+            **{key: dict(value) for key, value in body.prompts.items()},
+            EXPOSITORY_FAMILY: prompts,
+            EXPOSITORY_FORM_FAMILY: forms,
+        }
         kept = {key: value for key, value in body.routes.items() if not key.startswith(EXPOSITORY_ROUTE_PREFIX)}
         body.routes = {**kept, **routes}
         return await self.create(
@@ -249,7 +255,7 @@ class PipelineVersionService:
         오타가 아무도 읽지 않는 템플릿을 만들고 바꾼 줄 알게 되는 것을 막는다. CLI edit-prompt 는 새 템플릿을 넣을 수 있어야
         해서(polish_revise 처음 넣기) edit_prompt 를 그대로 쓴다.
         """
-        if family not in (*PROMPT_FAMILIES, COMMON_FAMILY, EXPOSITORY_FAMILY):
+        if family not in (*PROMPT_FAMILIES, COMMON_FAMILY, EXPOSITORY_FAMILY, EXPOSITORY_FORM_FAMILY):
             raise ValueError(f"unknown prompt family {family}")
         latest = await self.require_latest()
         if name not in latest.prompts.get(family, {}):
@@ -391,20 +397,25 @@ def read_directory(directory: str | Path) -> PipelineVersionBody:
     return PipelineVersionBody.model_validate(payload)
 
 
-def read_expository_directory(directory: str | Path) -> tuple[dict[str, str], dict[str, list[CallModel]]]:
-    """설명문 파이프라인 입력 디렉터리 → (단계 key → 프롬프트 본문, 라우트 id → 후보).
+def read_expository_directory(
+    directory: str | Path,
+) -> tuple[dict[str, str], dict[str, str], dict[str, list[CallModel]]]:
+    """설명문 파이프라인 입력 디렉터리 → (단계 key → 프롬프트 본문, 양식 id → 양식 본문, 라우트 id → 후보).
 
-    prompts/{단계 key}.json 과 routes.json(단계 key → 후보 배열)을 읽는다. 파일이 없으면 FileNotFoundError.
-    본문·단계 이름 검사는 버전 검증(R-13)이 한다.
+    prompts/{단계 key}.json, forms/{양식 id}.json(D-104), routes.json(단계 key → 후보 배열)을 읽는다.
+    단계 프롬프트나 routes.json 이 없으면 FileNotFoundError. 본문·단계 이름·양식 검사는 버전 검증(R-13)이 한다.
     """
     base = Path(directory)
     prompts = {key: (base / PROMPTS_DIR / f"{key}.json").read_text(encoding="utf-8") for key in STAGE_KEYS}
+    forms = {
+        path.stem: path.read_text(encoding="utf-8") for path in sorted((base / EXPOSITORY_FORMS_DIR).glob("*.json"))
+    }
     raw = json.loads((base / EXPOSITORY_ROUTES_FILE).read_text(encoding="utf-8"))
     routes = {
         expository_route(key): [CallModel.model_validate(candidate) for candidate in candidates]
         for key, candidates in raw.items()
     }
-    return prompts, routes
+    return prompts, forms, routes
 
 
 def describe(findings: list[Finding]) -> list[str]:

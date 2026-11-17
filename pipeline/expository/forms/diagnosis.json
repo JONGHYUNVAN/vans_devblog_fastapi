@@ -1,0 +1,82 @@
+{
+  "label": "Diagnosis of a failure",
+  "use_when": "The subject is a concrete behavior or failure a developer runs into, such as an annotation that silently does nothing or a query that locks more rows than expected. The article explains why it happens through internal mechanisms and then gives the design decision that prevents it.",
+  "topic": "The behavior or failure the article explains, phrased the way a developer would search for it.",
+  "thesis": "One arguable declarative sentence stating the design decision that prevents or resolves the problem. A competent engineer could reasonably argue for a different choice. A plain fact (e.g., 'the server returns 403') is not a thesis.",
+  "focus_points": "Three or more internal mechanisms, one per cause section. Each explains a different part of why the problem occurs, and no two rely on the same underlying principle.",
+  "overview_header": ["Mechanism", "Takeaway"],
+  "outline_rules": [
+    "argument_placement: cause regions explain why the problem in the problem region occurs. Do NOT state the solution of core_message there; state it only in the fix region.",
+    "expository_flow: Do NOT mechanically list 1:1 pros and cons. Explain HOW the mechanisms in inputs.focus_points operate under the hood.",
+    "class_names: Name a framework class or method only if the reader will meet it in logs, stack traces, or while debugging."
+  ],
+  "review_rules": [
+    "weak_relevance: Remove a cause region if deleting it would leave the wrong result in the problem region explained just as well, i.e., its example does not lead to the observed wrong result."
+  ],
+  "write_rules": [
+    "argument_placement: Do not end cause sections with the solution. The cause sections explain why the problem happens; the solution first appears in the application section."
+  ],
+  "regions": [
+    {
+      "role": "problem",
+      "section": "intro",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "outline": "A concrete, hypothetical problem situation. key_sentence states the wrong result that is observed. elaboration describes the code path that runs. No first-person anecdotes.",
+      "write": "Open with two or three sentences that state the problem and the article's point of view (core_message). Then develop the problem as a concrete scenario with a short code excerpt, and end with the question the rest of the article answers."
+    },
+    {
+      "role": "concept",
+      "section": "concept",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "outline": "key_sentence defines the core concepts named in inputs.topic. elaboration states their structural roles.",
+      "write": "Define each core concept once, in the terms the later sections rely on."
+    },
+    {
+      "role": "cause",
+      "section": "mech",
+      "min": 3,
+      "max": null,
+      "focus": true,
+      "example": true,
+      "sentences": { "elaboration": [1, 1], "example": [1, 1] },
+      "outline": "One internal mechanism from inputs.focus_points. heading names the mechanism. key_sentence is the topic sentence stating how the mechanism works, which the section will develop. elaboration is exactly one concluding sentence stating what necessarily follows from it, independent of the scenario. example is exactly one declarative causal sentence about the problem situation: 'When [A: the code path from the problem region] executes, due to [B: this mechanism], [C: the observed result] occurs.' Do not restate core_message.",
+      "write": "Open with key_sentence as the topic sentence, develop it with supporting sentences and code or a text diagram, and apply it to the intro scenario through example. elaboration is the point the section must have established by its end: work it into the last explanatory paragraph in your own words instead of appending it as a separate closing line."
+    },
+    {
+      "role": "fix",
+      "section": "application",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": true,
+      "outline": "key_sentence states the design decision of core_message. elaboration gives the concrete design (schema, code, or configuration) that puts it into practice. example states how that design resolves the situation in the problem region.",
+      "write": "Develop the design with code that resolves the intro scenario. This is the first place the article presents the solution."
+    },
+    {
+      "role": "exceptions",
+      "section": "exceptions",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "outline": "Cases where core_message does not hold and the opposite choice is acceptable, to prevent dogmatic application. key_sentence names the cases. elaboration gives the condition under which each one applies.",
+      "write": "Develop each exception, giving the condition under which it applies."
+    },
+    {
+      "role": "synthesis",
+      "section": "conclusion",
+      "min": 1,
+      "max": 1,
+      "focus": false,
+      "example": false,
+      "outline": "key_sentence restates core_message in light of the mechanisms. elaboration names what a developer must weigh before applying it.",
+      "write": "Restate core_message in light of the mechanisms, then give a short checklist of questions a developer should ask before applying it. The heading names what the developer must weigh (e.g., 'Conclusion: Where the Transaction Boundary Should Live')."
+    }
+  ]
+}
