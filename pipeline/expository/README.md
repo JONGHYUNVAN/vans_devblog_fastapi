@@ -101,13 +101,39 @@ python -m cli.expository publish expository-20261111-120000
 | 2 | `2_outline.json` | 1의 topic, core_argument, focus_mechanisms, out_of_scope | 뼈대 | 아니오 |
 | 3 | `3_outline_review.json` | 2의 입력 + outline | outline, review_log | 아니오 |
 | 4 | `4_outline_fact_check.json` | topic, outline | outline(고친 것), claims | 예 |
-| 5 | `5_write.json` | outline, out_of_scope, max_words | title, content_markdown(영어) | 아니오 |
-| 6 | `6_article_fact_check.json` | outline, content_markdown | claims, patches | 예 |
-| 7 | `7_summary_glossary.json` | content_markdown, section_ids | section_summaries, terms | 아니오 |
-| 8 | `8_translate.json` | title, 표·용어를 넣은 content_markdown, terms | 한국어 title, content_markdown | 아니오 |
+| 5 | `5_write.json` | outline, out_of_scope, max_words | 문서: 영어 제목 + 본문 | 아니오 |
+| 6 | `6_article_fact_check.json` | outline, 문서 content_markdown | claims, patches | 예 |
+| 7 | `7_summary_glossary.json` | section_ids, 문서 content_markdown | section_summaries, terms | 아니오 |
+| 8 | `8_translate.json` | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 한국어 제목 + 본문 | 아니오 |
 | 9 | `9_summarize.json` | 한국어 title, 서론 첫 문단 | summary(메타 설명) | 아니오 |
 
-러너는 `inputs` 의 `{{...}}` 를 문자열로 치환하지 않고 `inputs` 객체를 통째로 바꾼다(배열·객체가 그대로 들어간다). 벤더 구조화 출력은 쓰지 않고 JSON 을 글로 받아 꺼낸다(검색 단계는 구조화 출력과 같이 쓸 수 없다).
+러너는 `inputs` 의 `{{...}}` 를 문자열로 치환하지 않고 `inputs` 객체를 통째로 바꾼다(배열·객체가 그대로 들어간다). 벤더 구조화 출력은 쓰지 않고 글로 받아 꺼낸다(검색 단계는 구조화 출력과 같이 쓸 수 없다).
+
+## 주고받는 형식 (09 문서 D-103)
+
+프롬프트(단계 지시문 JSON)는 벤더와 무관한 한 벌이고, 보내기 직전에 배치가 그 호출의 메시지로 바꾼다.
+
+| 프롬프트 키 | 뜻 |
+|---|---|
+| `inputs` | JSON 안에 들어가는 입력 |
+| `documents` | 긴 글 입력(본문). 배치에 따라 JSON 밖으로 나간다. 없어도 된다 |
+| `expected_output_schema` | 출력을 JSON 으로 받는다 |
+| `output_document` | 출력을 문서로 받는다: 첫 줄 `# 제목`, 빈 줄, 본문 마크다운. 5·8단계에만 둔다. 코드가 `title`·`content_markdown` 으로 읽는다 |
+
+출력 키는 둘 중 하나만 둔다. 러너가 넘기는 값의 이름은 그대로이고, 어느 값이 `documents` 인지는 프롬프트가 정한다.
+
+| 배치 | user 메시지 |
+|---|---|
+| `json_blob` | 값을 채운 JSON 전체. `documents` 도 JSON 문자열로 들어간다 |
+| `documents_first` | `<documents>` 안에 문서마다 `<이름>` 태그로 원문 그대로, 그 아래 `<instructions>` 안에 지시문 JSON. 본문이 이스케이프되지 않는다 |
+
+`documents` 가 없는 단계는 어느 배치에서나 JSON 하나를 받는다. 어느 배치를 쓸지는 버전의 조절 값이고 호출 모델의 가족(`claude`·`gemini`·`grok`·`haiku`)별로 정할 수 있다. 없는 가족은 `default` 다. 코드 기본값은 `json_blob` 이다.
+
+```bash
+python -m cli agents pipeline edit-param 'expository.layouts={"default":"documents_first"}'
+```
+
+실행 문서의 `stage_prompts` 는 배치와 무관한 값 채운 지시문이다. 배치나 모델만 바꾼 뒤 같은 실행을 이어 하면 끝난 단계는 다시 부르지 않는다. 다시 부르려면 `--redo-from` 을 쓴다.
 
 ## 단계 사이에 코드가 하는 일
 
@@ -130,6 +156,7 @@ python -m cli.expository publish expository-20261111-120000
 - 용어 표기(통용 한국어 용어, 음차 금지, 본문 첫 등장에 영어 원어 괄호): v4 `write_draft.md`·`propose_topic.md`
 - 한국어 제목 규칙(40자, 글 형태별 제목 꼴): v4 `write_draft.md`
 - 사실 확인의 주장 종류·판정·"기억으로 판단 금지": v4 `claude/fact_check.md`. 사실 확인 첫 후보는 Gemini 다(D-92). 기존은 검색 호출을 글로 받아 `FACT_TRANSFORM` 으로 JSON 으로 바꾼다. 여기서는 JSON 을 글로 받아 바로 꺼낸다. 꺼내기 실패가 잦으면 기존처럼 변환 단계를 둔다.
+- 긴 자료를 위에, 지시를 끝에 두는 배치(`documents_first`): Anthropic·Gemini 프롬프트 지침. 근거와 확인하지 못한 것은 `.claude/reviews/exchange_format_design_2026-11-17.md` A부 3절.
 - 용어 정의는 사전체 명사구: 09 문서 D-88, `haiku/glossary.md`
 - 번역에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1
 - 메타 설명 규칙: v4 `common/summarize.md`(D-95)를 `9_summarize.json` 으로 옮겼다.
@@ -138,6 +165,7 @@ python -m cli.expository publish expository-20261111-120000
 ## 아직 없는 것
 
 - 실제 모델로 돌린 결과. 단위 테스트는 가짜 LLM 이다(`tests/services/test_expository*.py`, `tests/agents/test_expository.py`). 2단계 뼈대만 대화 세션에서 한 번 돌렸다(2026-11-11, 영어 출력으로 바꾸기 전 버전).
+- 문서 출력과 `documents_first` 배치(D-103)의 실제 실행 확인. 같은 뼈대로 전후를 견주는 방법: 새 프롬프트를 넣기 전에 실행을 끝까지 돌려 `show --out a.md`, `seed` 와 `edit-param` 뒤 같은 실행을 `run --run-id … --redo-from 5` 로 다시 돌려 `show --out b.md`. 두 글과 영수증의 5·8단계 출력 토큰·재시도, 실행 문서의 `rejected_patches` 수를 본다.
 - 자동 발행. `run` 이 끝나도 올리지 않는다. `publish` 를 따로 부른다.
 - 발행한 글의 용어 사전·제작 기록 연결.
 - 실행이 고칠 수 없는 사실 오류(blocking)에서 뼈대를 자동으로 다시 만드는 것. 지금은 멈추고 사람이 다시 돌린다.

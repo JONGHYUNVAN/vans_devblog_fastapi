@@ -216,6 +216,14 @@ class CodeCommentParameters(BaseModel):
     lines_per_comment: int = 25  # 이 줄 수마다 주석 1줄 이상. 파일 경로 머리줄은 주석으로 세지 않는다
 
 
+class ExpositoryParameters(BaseModel):
+    """설명문 파이프라인의 조절 값 (D-103)."""
+
+    # 프롬프트 가족(claude·gemini·grok·haiku) → 메시지 배치 이름(agents/expository.LAYOUTS). 없는 가족은 default 다.
+    # 기본값 json_blob 은 D-103 전의 동작이라, 이 필드가 없는 옛 버전 문서는 전과 같은 메시지를 보낸다
+    layouts: dict[str, str] = Field(default_factory=lambda: {"default": "json_blob"})
+
+
 class Parameters(BaseModel):
     """조절 값 (09 문서 2.4절). 기본값은 1a 이전 Settings 기본값과 같다."""
 
@@ -246,6 +254,7 @@ class Parameters(BaseModel):
     glossary: GlossaryParameters = Field(default_factory=GlossaryParameters)
     style: StyleParameters = Field(default_factory=StyleParameters)  # 문체 게이트 (D-85)
     code_comments: CodeCommentParameters = Field(default_factory=CodeCommentParameters)  # 코드 주석 게이트 (D-85)
+    expository: ExpositoryParameters = Field(default_factory=ExpositoryParameters)  # 설명문 파이프라인 (D-103)
     # 템플릿 이름 → 있어야 하는 구절. 코드의 기본 목록(services/pipeline_validation.py)에 더해 합친다 (R-08, Q-38)
     prompt_lint: dict[str, list[str]] = Field(default_factory=dict)
 

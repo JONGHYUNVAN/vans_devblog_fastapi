@@ -79,18 +79,19 @@ def _full_script() -> list[str]:
     topic = make_expository_topic()
     outline = make_expository_outline(topic["core_argument"])
     patch = {"section_id": "concept", "before": "The concept part", "after": "The concept section", "reason": "r"}
+    # 작성(5)·번역(8)은 "# 제목" + 본문 문서로, 나머지는 JSON 으로 답한다 (D-103)
     outputs = [
         topic,
         outline,
         {"outline": outline, "review_log": []},
         {"outline": outline, "claims": []},
-        {"title": "Self-invocation and transactions", "content_markdown": make_expository_english_article()},
+        f"# Self-invocation and transactions\n\n{make_expository_english_article()}",
         {"claims": [], "patches": [patch]},
         {"section_summaries": make_expository_summaries(), "terms": make_expository_terms()},
-        {"title": KOREAN_TITLE, "content_markdown": make_expository_korean_article()},
+        f"# {KOREAN_TITLE}\n\n{make_expository_korean_article()}",
         {"summary": "같은 객체 안의 호출은 프록시를 거치지 않아 트랜잭션 설정이 적용되지 않습니다."},
     ]
-    return [json.dumps(output, ensure_ascii=False) for output in outputs]
+    return [output if isinstance(output, str) else json.dumps(output, ensure_ascii=False) for output in outputs]
 
 
 async def test_run_completes_every_stage_and_stores_the_article_and_receipts():
@@ -154,6 +155,54 @@ async def test_run_sends_check_errors_back_and_retries():
     assert result.finished_stages == ["1_topic_thesis", "2_outline"] and result.markdown is None
     stored = await harness.runs.get(RUN_ID)
     assert stored is not None and stored.stage_outputs["2_outline"] == right
+
+
+async def test_run_sends_the_article_outside_the_json_when_the_layout_is_documents_first():
+    body = make_expository_body(draft_min_chars=10, expository={"layouts": {"default": "documents_first"}})
+    harness = Harness(body=body)
+    client = FakeLLMClient(_full_script())
+
+    result = await (await harness.pipeline(client)).run(RUN_ID, RunSeed())
+
+    assert result.title == KOREAN_TITLE
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.assembled_markdown is not None
+    translate = client.calls[7].messages[1].content
+    # 번역 입력 본문이 이스케이프 없이 원문 그대로 지시문 위에 있다
+    assert translate.startswith(f"<documents>\n<content_markdown>\n{stored.assembled_markdown}\n</content_markdown>")
+    instructions = json.loads(translate.split("\n\n<instructions>\n")[1].removesuffix("\n</instructions>"))
+    assert instructions["documents"] == {"content_markdown": "provided above in <content_markdown>"}
+    # 실행 문서에 남는 프롬프트는 배치와 무관한 중심 양식이다. 배치만 바꾼 뒤 이어 해도 이 단계를 다시 부르지 않는다
+    assert json.loads(stored.stage_prompts["8_translate"])["documents"]["content_markdown"] == stored.assembled_markdown
+    # 문서 입력이 없는 단계는 배치와 무관하게 JSON 하나다
+    assert client.calls[1].messages[1].content == stored.stage_prompts["2_outline"]
+
+
+async def test_run_asks_for_the_whole_document_again_when_the_title_line_is_missing():
+    harness = Harness()
+    topic = make_expository_topic()
+    outline = make_expository_outline(topic["core_argument"])
+    article = make_expository_english_article()
+    script = [
+        json.dumps(outline),
+        json.dumps({"outline": outline, "review_log": []}),
+        json.dumps({"outline": outline, "claims": []}),
+        article,  # 제목 줄 없이 본문만
+        f"# Self-invocation and transactions\n\n{article}",
+    ]
+    client = FakeLLMClient(script)
+
+    result = await (await harness.pipeline(client)).run(RUN_ID, RunSeed(topic=topic), stop_after=5)
+
+    retry = client.calls[4].messages
+    assert [message.role for message in retry] == ["system", "user", "assistant", "user"]
+    assert "'# ' title line" in retry[-1].content and "complete corrected document" in retry[-1].content
+    assert result.finished_stages[-1] == "5_write"
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.stage_outputs["5_write"] == {
+        "title": "Self-invocation and transactions",
+        "content_markdown": article.strip("\n"),
+    }
 
 
 async def test_run_keeps_the_old_result_out_of_the_cache_when_a_changed_stage_fails():

@@ -3,11 +3,13 @@
     "role": "Korean Technical Blog Translator",
     "target_register": "합쇼체 (~습니다) in every prose sentence, as in every post on this blog"
   },
-  "task": "Rewrite inputs.content_markdown as a natural Korean technical blog post and write its Korean headline. Translate meaning, not sentence structure.",
+  "task": "Rewrite documents.content_markdown as a natural Korean technical blog post and write its Korean headline. Translate meaning, not sentence structure.",
   "inputs": {
     "title": "{{title}}",
-    "content_markdown": "{{content_markdown}}",
     "terms": "{{terms}}"
+  },
+  "documents": {
+    "content_markdown": "{{content_markdown}}"
   },
   "constraints": [
     "naturalness: Keep every claim and its conditions, and keep the order of sections and paragraphs. Inside a paragraph, reorder, split, and merge sentences so that it reads as Korean written from scratch; a sentence that points at a code block stays next to that block. Translate what a sentence says happens, not how the English phrases it: find who or what acts and what it actually does in the system, then write the Korean sentence with that actor and that action. When the English makes an abstraction the subject (an option, an approach, a symptom, a fact) or uses a figurative verb, replace them with the concrete actor and the literal action. Reword or drop sentences that carry no claim, such as transitions and lines that only sum up. Never add a claim.",
@@ -20,12 +22,8 @@
     "title: Write a Korean blog headline, not a translation of inputs.title. Choose the form that fits: a symptom the reader runs into -> '…하는 이유' or '왜 …할까?'; how something works -> '…는 어떻게 동작할까' or '… 이해하기'. At most 40 characters, one promise, the words a reader would search for, no parentheses or English glosses, no colon subtitle, and no first-person framing ('도입기', '개선기').",
     "no_meta_commentary: No '이 글에서는', '지금까지 ~를 살펴봤습니다', or '마치며'."
   ],
-  "expected_output_schema": {
-    "type": "object",
-    "properties": {
-      "title": { "type": "string", "description": "Korean headline, at most 40 characters" },
-      "content_markdown": { "type": "string", "description": "Full Korean markdown body with every anchor preserved" }
-    },
-    "required": ["title", "content_markdown"]
+  "output_document": {
+    "title": "Korean headline, at most 40 characters",
+    "body": "Full Korean markdown body with every anchor preserved"
   }
 }

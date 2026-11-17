@@ -1,8 +1,8 @@
 {
   "meta": {
     "label": "baseline",
-    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성, 2026-11-09 D-90(다듬기 문체 패턴 탐지·polish_tone 규칙)과 그 개정(예시 교체·부정어 아닌/아닙, 사람 글 기준 패턴 정리)으로 재생성, 2026-11-09 D-91(다듬기 제안을 작성 모델이 검토해 적용, common/polish_revise)로 재생성",
-    "content_hash": "sha256:4f4f2640fb4dffa5af69c2db3774ff36dffdc9be45dc145298f321262446b11d"
+    "note": "기준 버전: app/agents/prompts/v4 + agents_design/routes.example.json + 코드 상수. 2026-11-08 D-87(글 끝 AI Information 표기)·D-88(용어 정의 사전체)로 재생성, 2026-11-09 D-90(다듬기 문체 패턴 탐지·polish_tone 규칙)과 그 개정(예시 교체·부정어 아닌/아닙, 사람 글 기준 패턴 정리)으로 재생성, 2026-11-09 D-91(다듬기 제안을 작성 모델이 검토해 적용, common/polish_revise)로 재생성, 2026-11-17 D-103(설명문 파이프라인 메시지 배치 조절 값 expository.layouts)으로 재생성",
+    "content_hash": "sha256:da3b1eb6045fcc48cdcde698eedee6938984633e18c88b21f18b7a6bb2724bef"
   },
   "schema_version": 1,
   "slots": {
@@ -428,6 +428,11 @@
     "code_comments": {
       "min_lines": 12,
       "lines_per_comment": 25
+    },
+    "expository": {
+      "layouts": {
+        "default": "json_blob"
+      }
     },
     "prompt_lint": {}
   }

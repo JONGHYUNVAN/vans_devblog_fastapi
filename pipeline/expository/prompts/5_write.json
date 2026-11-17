@@ -36,18 +36,8 @@
     "no_instruction_terms: Never write the project scale, audience level, or wording from these instructions (e.g., 'toy project', 'undergraduate', 'dilemma', 'problem_statement', 'core_message') into the article.",
     "no_meta_commentary: No 'In this article', 'Let's dive in', 'To wrap up', or 'We have seen'."
   ],
-  "expected_output_schema": {
-    "type": "object",
-    "properties": {
-      "title": {
-        "type": "string",
-        "description": "English working title. The translation step writes the Korean headline."
-      },
-      "content_markdown": {
-        "type": "string",
-        "description": "Full English markdown body with section and code anchors"
-      }
-    },
-    "required": ["title", "content_markdown"]
+  "output_document": {
+    "title": "English working title. The translation step writes the Korean headline.",
+    "body": "Full English markdown body with section and code anchors. The constraints above apply to the body; the title line is the only # heading."
   }
 }

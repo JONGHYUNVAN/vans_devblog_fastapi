@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from app.agents.expository import STAGE_KEYS, parse_prompt
+from app.agents.expository import DEFAULT_LAYOUT_KEY, DOCUMENT_STAGE_KEYS, LAYOUTS, STAGE_KEYS, parse_prompt
 from app.agents.prompts.registry import (
     COMMON_FAMILY,
     PROMPT_FAMILIES,
@@ -164,8 +164,9 @@ def _r08_template_contents(body: PipelineVersionBody) -> list[Finding]:
 def _r13_expository(body: PipelineVersionBody) -> list[Finding]:
     """설명문 파이프라인의 프롬프트·라우트 (D-99). 둘 다 없으면 통과다(그 파이프라인을 쓰지 않는 버전).
 
-    하나라도 있으면 단계마다 프롬프트(inputs·expected_output_schema 가 있는 JSON 객체)와 라우트 후보가 있어야 한다.
-    일부만 있는 버전이 최신이 되면 실행이 글 중간 단계에서 멈춘다.
+    하나라도 있으면 단계마다 프롬프트(inputs 와, expected_output_schema·output_document 중 하나가 있는 JSON 객체)와
+    라우트 후보가 있어야 한다. 일부만 있는 버전이 최신이 되면 실행이 글 중간 단계에서 멈춘다.
+    output_document 는 러너가 결과를 title·content_markdown 으로 읽는 단계에만 둘 수 있다(D-103).
     """
     prompts = body.prompts.get(EXPOSITORY_FAMILY, {})
     routes = {
@@ -182,9 +183,14 @@ def _r13_expository(body: PipelineVersionBody) -> list[Finding]:
             findings.append(Finding("R-13", "error", f"{label}: unknown stage"))
             continue
         try:
-            parse_prompt(text)
+            prompt = parse_prompt(text)
         except ValueError as exc:
             findings.append(Finding("R-13", "error", f"{label}: {exc}"))
+            continue
+        if "output_document" in prompt and name not in DOCUMENT_STAGE_KEYS:
+            findings.append(
+                Finding("R-13", "error", f"{label}: output_document is allowed only in {list(DOCUMENT_STAGE_KEYS)}")
+            )
     for name in routes:
         if name not in STAGE_KEYS:
             findings.append(Finding("R-13", "error", f"route {expository_route(name)}: unknown stage"))
@@ -263,4 +269,13 @@ def _r09_parameters(body: PipelineVersionBody) -> list[Finding]:
     glossary = parameters.glossary
     require(0 < glossary.min_terms <= glossary.max_terms, "glossary.min_terms must be positive and at most max_terms")
     require(glossary.full_list_max >= 0 and glossary.surface_max_chars > 0, "glossary limits must be positive")
+    # 설명문 파이프라인의 메시지 배치(D-103). 러너가 가족에 없으면 default 를 읽으므로 default 가 꼭 있어야 한다
+    layouts = parameters.expository.layouts
+    require(DEFAULT_LAYOUT_KEY in layouts, "expository.layouts must have a default entry")
+    for family, layout in layouts.items():
+        require(
+            family in (*PROMPT_FAMILIES, DEFAULT_LAYOUT_KEY),
+            f"expository.layouts key {family!r} must be a prompt family or default",
+        )
+        require(layout in LAYOUTS, f"expository.layouts.{family} {layout!r} is not one of {list(LAYOUTS)}")
     return findings

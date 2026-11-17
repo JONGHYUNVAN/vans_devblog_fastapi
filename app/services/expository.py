@@ -8,6 +8,8 @@ AgentCallService 를 거쳐 영수증(`agent_calls`, kind EXPOSITORY, round_id �
 고친 단계부터 다시 돌리는 것이 이어 하기의 목적이고, 어느 버전으로 부른 호출인지는 영수증마다 남는다.
 이어 하기: 단계 결과가 있고 입력을 채운 프롬프트가 그 결과를 만든 프롬프트와 같으면 그 단계를 다시 부르지 않는다. 앞 단계
 결과나 버전의 프롬프트가 바뀌면 그 단계부터 다시 부른다. 1단계는 입력에 Post BE 카테고리가 들어가므로 결과가 있으면 그대로 쓴다.
+보내는 메시지의 배치는 조절 값 `expository.layouts` 가 호출 모델의 가족별로 고른다(D-103). 실행 문서에 남는 프롬프트는
+배치와 무관한 중심 양식이라, 배치나 모델만 바꾼 뒤 이어 하면 끝난 단계를 다시 부르지 않는다.
 """
 
 import logging
@@ -18,15 +20,19 @@ from string import Template
 from typing import Any
 
 from app.agents.expository import (
+    DEFAULT_LAYOUT_KEY,
+    DOCUMENT_RETRY_GUIDANCE,
     RETRY_GUIDANCE,
     STAGES,
-    SYSTEM_INSTRUCTION,
     Stage,
+    parse_document,
     parse_output,
+    render_messages,
     render_prompt,
     stage_models,
     stage_prompts,
 )
+from app.agents.prompts.registry import prompt_family
 from app.clients.publisher.base import PostCreatePayload
 from app.clients.publisher.post_be import PostBEPublisher
 from app.core.exceptions import InvalidRequestError, LLMOutputError, NotFoundError, PublishFailedError
@@ -119,6 +125,7 @@ class ExpositoryPipeline:
         self._prompts: dict[str, dict[str, Any]] = {}
         self._models: dict[str, CallModel] = {}
         self._parameters = Parameters()
+        self._layouts: dict[str, str] = {}
         self._run = ExpositoryRun(run_id="")
         self._seed = RunSeed()
 
@@ -135,6 +142,7 @@ class ExpositoryPipeline:
         self._models = stage_models(version.routes, self._providers)
         # 번역본의 길이·문체·코드 주석 기준과 재시도 수는 기존 파이프라인과 같은 조절 값이다
         self._parameters = version.parameters
+        self._layouts = version.parameters.expository.layouts
         self._run = await self._repository.get(run_id) or ExpositoryRun(run_id=run_id)
         self._seed = seed
         if redo_from is not None:
@@ -266,7 +274,7 @@ class ExpositoryPipeline:
             "categories": categories,
         }
         prompt = render_prompt(self._prompts[stage.key], inputs)
-        topic = await self._call_until_valid(stage, prompt, lambda output: check_topic(output, categories))
+        topic = await self._call_until_valid(stage, inputs, lambda output: check_topic(output, categories))
         await self._save_stage(stage, topic, prompt)
 
     async def _outline(self, stage: Stage) -> None:
@@ -362,7 +370,7 @@ class ExpositoryPipeline:
         cached = self._run.stage_outputs.get(stage.key)
         if cached is not None and self._run.stage_prompts.get(stage.key) == prompt:
             return cached
-        output = await self._call_until_valid(stage, prompt, check)
+        output = await self._call_until_valid(stage, inputs, check)
         await self._save_stage(stage, output, prompt)
         return output
 
@@ -381,12 +389,18 @@ class ExpositoryPipeline:
         self._run.updated_at = datetime.now(UTC)
         await self._repository.upsert(self._run)
 
-    async def _call_until_valid(self, stage: Stage, prompt: str, check: Check) -> dict[str, Any]:
+    async def _call_until_valid(self, stage: Stage, inputs: dict[str, Any], check: Check) -> dict[str, Any]:
         """검사를 통과한 출력. 걸리면 AgentCallService 가 직전 출력과 오류를 대화에 붙여 고치게 한다(처음부터 다시 쓰지 않게)."""
+        prompt, model = self._prompts[stage.key], self._models[stage.key]
+        # 프롬프트가 output_document 를 두면 JSON 이 아니라 "# 제목" + 본문 문서로 받는다. 결과 모양은 둘 다 title·content_markdown 이다
+        as_document = "output_document" in prompt
+        # 배치는 호출 모델의 가족이 고른다. 같은 프롬프트라도 벤더에 따라 다른 메시지로 나갈 수 있다 (D-103)
+        layout = self._layouts.get(prompt_family(model), self._layouts[DEFAULT_LAYOUT_KEY])
+        system, user = render_messages(prompt, inputs, layout)
 
         def parse(text: str) -> dict[str, Any]:
             try:
-                output = parse_output(text)
+                output = parse_document(text) if as_document else parse_output(text)
             except ValueError as exc:
                 raise LLMOutputError(str(exc)) from exc
             errors = check(output)
@@ -398,17 +412,14 @@ class ExpositoryPipeline:
         output, _ = await self._calls.call_text(
             kind=CallKind.EXPOSITORY,
             round_id=self._run.run_id,
-            binding=self._models[stage.key],
-            messages=[
-                ChatMessage(role="system", content=SYSTEM_INSTRUCTION),
-                ChatMessage(role="user", content=prompt),
-            ],
+            binding=model,
+            messages=[ChatMessage(role="system", content=system), ChatMessage(role="user", content=user)],
             parse=parse,
             web_search=stage.web_search,
             item_id=stage.key,
             max_attempts=self._parameters.max_llm_retries,
             pipeline_version=self._version_id,
-            retry_guidance=RETRY_GUIDANCE,
+            retry_guidance=DOCUMENT_RETRY_GUIDANCE if as_document else RETRY_GUIDANCE,
         )
         return output
 

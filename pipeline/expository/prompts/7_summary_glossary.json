@@ -3,10 +3,12 @@
     "role": "Technical Blog Summary and Glossary Engine",
     "technical_depth": "Advanced CS undergraduate level"
   },
-  "task": "Write one summary table for each listed section of inputs.content_markdown, and list the technical terms the article relies on with the Korean term the translation step must use.",
+  "task": "Write one summary table for each listed section of documents.content_markdown, and list the technical terms the article relies on with the Korean term the translation step must use.",
   "inputs": {
-    "content_markdown": "{{content_markdown}}",
     "section_ids": "{{section_ids}}"
+  },
+  "documents": {
+    "content_markdown": "{{content_markdown}}"
   },
   "constraints": [
     "output_language: Write summaries and definitions in English. Write term_ko in Korean.",

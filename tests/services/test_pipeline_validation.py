@@ -136,3 +136,25 @@ def test_r13_passes_the_repository_expository_inputs_and_names_what_is_missing()
     assert any("EXPOSITORY:8_translate has no candidate" in message for message in messages)
     assert any("expository.2_outline: " in message for message in messages)
     assert any("expository.10_extra: unknown stage" in message for message in messages)
+
+
+def test_r13_allows_a_document_output_only_where_the_runner_reads_title_and_body():
+    body = make_expository_body()
+    body.prompts[EXPOSITORY_FAMILY]["9_summarize"] = (
+        '{"inputs": {"title": "{{title}}"}, "output_document": {"title": "t", "body": "b"}}'
+    )
+
+    messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-13"]
+
+    assert messages == ["prompts.expository.9_summarize: output_document is allowed only in ['5_write', '8_translate']"]
+
+
+def test_r09_checks_the_expository_layouts():
+    body = make_pipeline_body(expository={"layouts": {"claude": "documents_first", "gpt": "xml"}})
+
+    messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-09"]
+
+    assert "expository.layouts must have a default entry" in messages
+    assert "expository.layouts key 'gpt' must be a prompt family or default" in messages
+    assert "expository.layouts.gpt 'xml' is not one of ['json_blob', 'documents_first']" in messages
+    assert not any("claude" in message for message in messages)
