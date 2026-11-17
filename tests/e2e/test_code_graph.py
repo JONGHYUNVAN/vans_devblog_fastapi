@@ -22,7 +22,7 @@ REPOS = json.loads((Path(__file__).parents[2] / "code_graph_design" / "repos.exa
 @pytest.mark.parametrize(
     ("repo", "expected"),
     [
-        ("vans_devblog_fastapi", {}),  # 선언된 예외 7건 밖의 위반이 없다
+        ("vans_devblog_fastapi", {}),  # 선언된 예외 9건 밖의 위반이 없다
         ("vans_story", {"components -> app": 17, "lib -> store": 2, "lib -> components": 1, "constants -> lib": 1}),
         ("vans_story_be_post", {}),
         ("vans_story_be", {}),

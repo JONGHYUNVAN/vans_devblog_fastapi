@@ -22,7 +22,9 @@ from app.models.model_binding import CallModel
 from app.models.persona import PersonaProfile
 from app.models.pipeline import (
     BODY_FIELDS,
+    COMMON_FAMILY,
     EXPOSITORY_FAMILY,
+    PROMPT_FAMILIES,
     Parameters,
     PipelineVersion,
     PipelineVersionBody,
@@ -114,6 +116,18 @@ class PipelineVersionService:
     async def list_versions(self) -> list[PipelineVersion]:
         """모든 버전(순번 순). 조회 명령이 없으므로 테스트와 검증 도구가 쓴다."""
         return await self._repo.list_all()
+
+    async def resolve_prompts(self, reference: str | None) -> PromptSet:
+        """프롬프트 집합 참조 → 템플릿. None 이면 최신 버전, 버전 id 면 그 버전, 아니면 디렉터리(내보내기 또는 저장소 프롬프트)다.
+
+        None 인데 버전이 없으면 NoPipelineVersionError. CLI compare-prompts·fact-check 가 쓴다.
+        """
+        if reference is None:
+            return (await self.require_latest()).prompts
+        try:
+            return (await self.get(reference)).prompts
+        except NotFoundError:
+            return prompts_from_reference(reference)
 
     # ---------- 생성 ----------
 
@@ -226,6 +240,21 @@ class PipelineVersionService:
         return await self.create(
             body, source="edit-prompt", note=note or f"edit-prompt {family}/{name}", created_by=created_by
         )
+
+    async def edit_existing_prompt(
+        self, family: str, name: str, text: str, *, note: str = "", created_by: str | None = None
+    ) -> PipelineVersion:
+        """edit_prompt 와 같되 모르는 가족과 최신 버전에 없는 템플릿 이름은 ValueError 로 거절한다(내부 API 용, D-89).
+
+        오타가 아무도 읽지 않는 템플릿을 만들고 바꾼 줄 알게 되는 것을 막는다. CLI edit-prompt 는 새 템플릿을 넣을 수 있어야
+        해서(polish_revise 처음 넣기) edit_prompt 를 그대로 쓴다.
+        """
+        if family not in (*PROMPT_FAMILIES, COMMON_FAMILY, EXPOSITORY_FAMILY):
+            raise ValueError(f"unknown prompt family {family}")
+        latest = await self.require_latest()
+        if name not in latest.prompts.get(family, {}):
+            raise ValueError(f"template {family}/{name} does not exist in {latest.version_id}")
+        return await self.edit_prompt(family, name, text, note=note, created_by=created_by)
 
     async def edit_parameters(
         self, assignments: Mapping[str, Any], *, note: str = "", created_by: str | None = None
@@ -381,6 +410,12 @@ def read_expository_directory(directory: str | Path) -> tuple[dict[str, str], di
 def describe(findings: list[Finding]) -> list[str]:
     """검증 결과를 CLI 가 찍을 문자열 목록으로 바꾼다."""
     return [str(finding) for finding in findings]
+
+
+def hash_body(body: PipelineVersionBody) -> str:
+    """저장된 버전의 content_hash 와 같은 방식의 본문 해시. CLI bootstrap --dry-run·validate 가 pipeline/baseline 과 견줄 때 쓴다."""
+    # CLI 는 models 를 import 하지 않는다(CONVENTIONS 1절). 해시 계산은 엔티티에 두고 CLI 는 이 함수로 부른다
+    return content_hash_of(body)
 
 
 def meta_of(version: PipelineVersion) -> dict[str, Any]:

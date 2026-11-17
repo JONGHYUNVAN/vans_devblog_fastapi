@@ -10,6 +10,7 @@ import difflib
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.models.agent_call import AgentCall
 from app.models.enums import ClaimStatus, ResolutionStatus, RevisionCause, RoundStatus
+from app.models.pipeline import PipelineVersion
 from app.models.post_draft import DraftVersion, PostDraft, ReviewItem
 from app.models.publishing_round import PublishingRound
 from app.repositories.agent_call import AgentCallRepository
@@ -21,11 +22,13 @@ from app.schemas.agent_pipeline import (
     DraftPublic,
     EscalationSummary,
     ItemSummary,
+    PipelineVersionCreated,
     RoundDetail,
     RoundProgress,
     RoundPublic,
 )
 from app.services.metrics import PipelineMetrics, compute_metrics
+from app.services.pipeline_validation import validate_version
 from app.services.pipeline_versions import PipelineVersionService
 from app.services.round import RoundService
 
@@ -284,4 +287,18 @@ def build_call_public(call: AgentCall) -> CallPublic:
         latency_ms=call.latency_ms,
         started_at=call.started_at,
         finished_at=call.finished_at,
+    )
+
+
+def build_version_created(version: PipelineVersion) -> PipelineVersionCreated:
+    """새로 넣은 버전의 응답. create() 는 경고를 로그로만 남긴다. 원격에서 넣는 사람은 로그를 못 보므로 같은 검증을 다시 돌려 경고를 돌려준다."""
+    warnings = [str(finding) for finding in validate_version(version.body()) if finding.level == "warning"]
+    return PipelineVersionCreated(
+        version_id=version.version_id,
+        parent_version_id=version.parent_version_id,
+        content_hash=version.content_hash,
+        source=version.source,
+        note=version.note,
+        created_at=version.created_at,
+        warnings=warnings,
     )

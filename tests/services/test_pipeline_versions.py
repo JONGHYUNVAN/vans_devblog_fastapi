@@ -147,6 +147,46 @@ async def test_edit_prompt_param_and_routes_make_child_versions_of_the_latest():
         await service.edit_prompt("common", "glossary", "", note="빈 템플릿")
 
 
+async def test_edit_existing_prompt_makes_a_child_version_of_the_latest():
+    service = _service()
+    await service.create(make_pipeline_body(), source="import")
+
+    edited = await service.edit_existing_prompt(
+        "common", "write_draft", "[template:write_draft] 글 한 편을 한국어로 쓴다. JSON!"
+    )
+
+    assert (edited.version_id, edited.parent_version_id, edited.source) == ("v2", "v1", "edit-prompt")
+    assert edited.prompts["common"]["write_draft"].endswith("JSON!")
+
+
+async def test_edit_existing_prompt_rejects_unknown_families_and_templates():
+    service = _service()
+    await service.create(make_pipeline_body(), source="import")
+
+    with pytest.raises(ValueError, match="unknown prompt family x"):
+        await service.edit_existing_prompt("x", "write_draft", "[template:write_draft] JSON")
+    with pytest.raises(ValueError, match="template common/nope does not exist in v1"):
+        await service.edit_existing_prompt("common", "nope", "[template:nope] JSON")
+    assert (await service.require_latest()).version_id == "v1"
+
+
+async def test_resolve_prompts_reads_the_latest_a_version_or_a_directory():
+    service = _service()
+    first = await service.create(make_pipeline_body(), source="import")
+    latest = await service.edit_prompt(
+        "common", "write_draft", "[template:write_draft] 글 한 편을 한국어로 쓴다. JSON!"
+    )
+
+    assert await service.resolve_prompts(None) == latest.prompts
+    assert await service.resolve_prompts("v1") == first.prompts
+    assert "claude" in await service.resolve_prompts("v4")  # 버전 id 가 아니면 저장소 프롬프트 디렉터리
+
+
+async def test_resolve_prompts_raises_when_no_version_exists():
+    with pytest.raises(NoPipelineVersionError):
+        await _service().resolve_prompts(None)
+
+
 async def test_get_caches_immutable_versions():
     service = _service()
     created = await service.create(make_pipeline_body(), source="import")

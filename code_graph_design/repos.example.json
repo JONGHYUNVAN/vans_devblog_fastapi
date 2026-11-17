@@ -18,7 +18,9 @@
     "allowed_edges": [
       { "source": "app/routers/agent_rounds.py", "target": "app/models/enums.py" },
       { "source": "cli/__main__.py", "target": "app/models/enums.py" },
+      { "source": "app/schemas/provenance.py", "target": "app/models/enums.py" },
       { "source": "app/schemas/agent_pipeline.py", "target": "app/models/enums.py" },
+      { "source": "app/schemas/agent_pipeline.py", "target": "app/models/glossary.py" },
       { "source": "app/schemas/agent_pipeline.py", "target": "app/models/model_binding.py" },
       { "source": "app/schemas/agent_pipeline.py", "target": "app/models/post_draft.py" },
       { "source": "app/schemas/agent_pipeline.py", "target": "app/models/publishing_round.py" },

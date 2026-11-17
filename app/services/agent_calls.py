@@ -11,6 +11,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
@@ -453,12 +454,21 @@ class AgentCallService:
         )
 
     async def probe_fact_check(
-        self, content_markdown: str, *, binding: CallModel, transformer: CallModel, prompts: PromptSet
+        self,
+        content_markdown: str,
+        *,
+        binding: Mapping[str, Any],
+        transformer: Mapping[str, Any],
+        prompts: PromptSet,
     ) -> tuple[list[FactClaim], list[CitationRef]]:
         """글 하나를 사실 확인해 주장 목록을 돌려준다. 잘못된 API 를 심은 글로 모델별 재현율·오탐을 잴 때 쓴다.
 
-        prompts 는 버전 문서(또는 디렉터리)의 템플릿이다. 영수증·상태를 남기지 않는다. 재시도하지 않으며 전송 실패는 LLMTransportError 그대로다.
+        binding·transformer 는 CallModel 필드 dict 다. prompts 는 버전 문서(또는 디렉터리)의 템플릿이다. 영수증·상태를 남기지 않는다.
+        재시도하지 않으며 전송 실패는 LLMTransportError 그대로다.
         """
+        # CLI 는 models 를 import 하지 않으므로(CONVENTIONS 1절) 옵션 값을 dict 로 넘기고 여기서 CallModel 로 검증한다(edit_route 와 같다)
+        search_model = CallModel.model_validate(binding)
+        transform_model = CallModel.model_validate(transformer)
         topic = TopicForReviewer(
             title="",
             audience="",
@@ -480,11 +490,11 @@ class AgentCallService:
             link_status=[],
             tone_preservation=TonePreservationRule(author_tone_markers=[]),
         )
-        async with self._llm.gate(binding.provider).slot():
-            searched = await self._llm.get(binding.provider).complete(
-                _to_llm_messages(render_messages(fact_input, prompts, binding)),
+        async with self._llm.gate(search_model.provider).slot():
+            searched = await self._llm.get(search_model.provider).complete(
+                _to_llm_messages(render_messages(fact_input, prompts, search_model)),
                 None,
-                _params(binding, True),
+                _params(search_model, True),
                 float(self._settings.draft_timeout_s),
             )
         citations = [CitationRef(url=each.url, title=each.title) for each in searched.citations]
@@ -496,11 +506,11 @@ class AgentCallService:
             verification_text=searched.text,
             citations=citations,
         )
-        async with self._llm.gate(transformer.provider).slot():
-            transformed = await self._llm.get(transformer.provider).complete(
-                _to_llm_messages(render_messages(transform_input, prompts, transformer)),
+        async with self._llm.gate(transform_model.provider).slot():
+            transformed = await self._llm.get(transform_model.provider).complete(
+                _to_llm_messages(render_messages(transform_input, prompts, transform_model)),
                 FactCheckOutput.model_json_schema(),
-                _params(transformer, False),
+                _params(transform_model, False),
                 float(self._settings.review_timeout_s),
             )
         claims = FactCheckOutput.model_validate_json(transformed.text).claims

@@ -73,7 +73,7 @@
 전문은 [repos.example.json](repos.example.json). 저장소 키 → `{owner, name, ref, source_roots, layers[{id, path, may_import[]}], allowed_edges[{source, target}], entry_points(glob), diagnostics{orphans, hubs}, service, openapi, client_env{환경변수: 경로 접두}, call_sites(glob), route_root, route_framework}`. `service` 가 비면 저장소 키를 서비스 이름으로 쓴다.
 
 - `layers[].path` 는 저장소 루트 기준 디렉터리 접두다. `may_import` 는 그 레이어가 import 해도 되는 레이어 id 목록이고 같은 레이어 안은 항상 허용이다. 위반 = `source.layer ≠ root`, `target.layer ≠ root`, `target.layer ∉ may_import(source.layer)`, `(source, target) ∉ allowed_edges`.
-- 이 앱: CONVENTIONS 1절 표 그대로. `routers`·`cli → services, schemas, core`, `services → repositories, models, schemas, agents, clients, core`, `agents → models, core`, `repositories → models, clients, core`, `models`·`schemas`·`clients → core`, `core → 없음`. `allowed_edges` 는 위 예외 7건.
+- 이 앱: CONVENTIONS 1절 표 그대로. `routers`·`cli → services, schemas, core`, `services → repositories, models, schemas, agents, clients, core`, `agents → models, core`, `repositories → models, clients, core`, `models`·`schemas`·`clients → core`, `core → 없음`. `allowed_edges` 는 위 예외 7건에 같은 예외인 `schemas/provenance.py → models/enums.py`·`schemas/agent_pipeline.py → models/glossary.py` 를 더한 9건이다(2026-11-17).
 - vans_story(제안, G-15): `app → components, hooks, lib, store, constants, types`, `components → hooks, lib, store, constants, types`, `hooks → lib, store, constants, types`, `store → lib, constants, types`, `lib → constants, types`, `constants → types`, `types → 없음`. PoC 기준 위반 21건(`components → app` 17, `lib → store` 2, `lib → components` 1, `constants → lib` 1).
 - vans_story_be_post(제안, G-15): `posts → categories, auth, common, config, search-service, user-service`, `categories → auth, common, config`, `auth`·`search-service`·`user-service`·`swagger → common, config`, `common → config`, `config → 없음`. PoC 기준 위반 0.
 - vans_story_be: `config → domain, global`, `domain → global`, `global → 없음`. PoC 기준 위반 0.
@@ -244,7 +244,7 @@ A 단계 코드는 2026-11-03 에 들어갔다. `tests/e2e/test_code_graph.py` �
 
 | 단계 | 내용 | 완료 기준 |
 |---|---|---|
-| A | 파일 그래프 + 진단 + context 마크다운. 이 앱 자기 자신부터, 이어서 나머지 셋 | `code-graph analyze vans_devblog_fastapi` 가 Mongo 에 저장하고 `GET {repo}/context/` 가 CONVENTIONS 표와 같은 레이어·허용 쌍을 돌려주고, 선언된 예외 7건을 뺀 위반이 0 이다. vans_story 는 PoC 기준 위반 21건(`components → app` 17 포함), vans_story_be_post·vans_story_be 는 0 이 나온다 |
+| A | 파일 그래프 + 진단 + context 마크다운. 이 앱 자기 자신부터, 이어서 나머지 셋 | `code-graph analyze vans_devblog_fastapi` 가 Mongo 에 저장하고 `GET {repo}/context/` 가 CONVENTIONS 표와 같은 레이어·허용 쌍을 돌려주고, 선언된 예외 9건을 뺀 위반이 0 이다. vans_story 는 PoC 기준 위반 21건(`components → app` 17 포함), vans_story_be_post·vans_story_be 는 0 이 나온다 |
 | B | 서비스 그래프: `outbound_calls` 추출(세 BFF 패턴 포함) → `client_env` 접두로 서비스 식별 → OpenAPI 경로 매칭. flows + mermaid | `search`·`publish` 두 흐름이 hop 마다 스키마 이름과 함께 나온다 |
 | C | vans_story 뷰어(별도 저장소): 저장소 탭, 좌측 진단 목록·파일 검색, 중앙 mermaid(레이어 블록 / 선택 파일 ego-network / 흐름 시퀀스), 우측 파일 인스펙터(심볼·import·GitHub 링크). 재분석 버튼은 없다(G-34). 프로젝트 페이지의 구조도 자리를 이 뷰로 바꾼다 | 블로그 프로젝트 페이지에서 보인다. 캔버스 라이브러리는 ego-network 가 안 읽힐 때만 |
 | A·B 보강 | 2026-11-05 감사에서 나온 G-24~G-33 | 위 감사 표. 2026-11-05 코드 완료. 남은 확인은 Mongo·Docker·실제 OpenAPI 다 |

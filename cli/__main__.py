@@ -39,8 +39,6 @@ from app.dependencies import (
     open_clients,
 )
 from app.models.enums import EscalationDecisionKind, RoundStatus
-from app.models.model_binding import CallModel
-from app.models.pipeline import PromptSet, content_hash_of
 from app.schemas.agent_pipeline import RoundProgress
 from app.schemas.sync import SyncOptions
 from app.services.pipeline_validation import errors_of, validate_version
@@ -50,8 +48,8 @@ from app.services.pipeline_versions import (
     build_baseline_version,
     describe,
     export_version,
+    hash_body,
     meta_of,
-    prompts_from_reference,
     read_directory,
 )
 from app.services.pipeline_views import build_draft_public
@@ -398,7 +396,8 @@ def compare_prompts(
     async def _compare(database, settings):
         service = build_agent_call_service(database, settings)
         prompt_sets = {
-            reference: await _prompts_of(build_pipeline_version_service(database), reference) for reference in version
+            reference: await build_pipeline_version_service(database).resolve_prompts(reference)
+            for reference in version
         }
         rows = await service.compare_write_prompts(
             await service.get(call_id),
@@ -423,16 +422,6 @@ def compare_prompts(
     _run_agents(_compare)
 
 
-async def _prompts_of(service: PipelineVersionService, reference: str | None) -> PromptSet:
-    """프롬프트 집합 참조 → 템플릿. None 이면 최신 버전, 버전 id 면 그 버전, 아니면 디렉터리(내보내기 또는 저장소 프롬프트)다."""
-    if reference is None:
-        return (await service.require_latest()).prompts
-    try:
-        return (await service.get(reference)).prompts
-    except NotFoundError:
-        return prompts_from_reference(reference)
-
-
 @agents.command()
 def fact_check(
     file: Path,
@@ -451,9 +440,9 @@ def fact_check(
     async def _fact_check(database, settings):
         claims, citations = await build_agent_call_service(database, settings).probe_fact_check(
             file.read_text(encoding="utf-8"),
-            binding=CallModel(provider=provider, model_id=model, effort=effort, max_output_tokens=max_output_tokens),
-            transformer=CallModel(provider=transform_provider, model_id=transform_model, max_output_tokens=8000),
-            prompts=await _prompts_of(build_pipeline_version_service(database), pipeline),
+            binding={"provider": provider, "model_id": model, "effort": effort, "max_output_tokens": max_output_tokens},
+            transformer={"provider": transform_provider, "model_id": transform_model, "max_output_tokens": 8000},
+            prompts=await build_pipeline_version_service(database).resolve_prompts(pipeline),
         )
         _echo(
             {
@@ -688,7 +677,7 @@ def pipeline_bootstrap(
             _echo(
                 {
                     "dry_run": True,
-                    "content_hash": content_hash_of(body),
+                    "content_hash": hash_body(body),
                     "routes": sorted(body.routes),
                     "prompt_families": {family: sorted(templates) for family, templates in body.prompts.items()},
                     "parameters": body.parameters.model_dump(mode="json"),
@@ -717,7 +706,7 @@ def pipeline_validate(
         failed = False
         if Path(target).is_dir():
             body = read_directory(target)
-            typer.echo(f"{target}: {content_hash_of(body)}")
+            typer.echo(f"{target}: {hash_body(body)}")
             failed |= _echo_findings(validate_version(body))
         else:
             version = await service.get(target)

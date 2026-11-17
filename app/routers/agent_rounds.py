@@ -18,7 +18,6 @@ from app.dependencies import (
     verify_agents_key,
 )
 from app.models.enums import RoundStatus
-from app.models.pipeline import COMMON_FAMILY, EXPOSITORY_FAMILY, PROMPT_FAMILIES, PipelineVersion
 from app.schemas.agent_pipeline import (
     CallPublic,
     DraftApproval,
@@ -38,9 +37,13 @@ from app.schemas.agent_pipeline import (
 )
 from app.services.draft_decision import DraftDecisionService
 from app.services.metrics import PipelineMetrics
-from app.services.pipeline_validation import validate_version
 from app.services.pipeline_versions import PipelineVersionService
-from app.services.pipeline_views import PipelineViewService, build_draft_public, build_round_public
+from app.services.pipeline_views import (
+    PipelineViewService,
+    build_draft_public,
+    build_round_public,
+    build_version_created,
+)
 from app.services.round import RoundService
 
 router = APIRouter(prefix="/api/v1/agents", tags=["Agents"], dependencies=[Depends(verify_agents_key)])
@@ -145,16 +148,11 @@ async def edit_prompt(family: str, name: str, body: PromptEdit, versions: Versio
 
     최신 버전에 없는 템플릿 이름은 400 이다. 오타가 아무도 읽지 않는 템플릿을 만들고 바꾼 줄 알게 되는 것을 막는다.
     """
-    if family not in (*PROMPT_FAMILIES, COMMON_FAMILY, EXPOSITORY_FAMILY):
-        raise InvalidRequestError(f"unknown prompt family {family}")
     try:
-        latest = await versions.require_latest()
-        if name not in latest.prompts.get(family, {}):
-            raise InvalidRequestError(f"template {family}/{name} does not exist in {latest.version_id}")
-        version = await versions.edit_prompt(family, name, body.text, note=body.note)
-    except ValueError as exc:  # 검증 오류, 최신과 같은 내용, 버전 없음
+        version = await versions.edit_existing_prompt(family, name, body.text, note=body.note)
+    except ValueError as exc:  # 모르는 가족·템플릿, 검증 오류, 최신과 같은 내용, 버전 없음
         raise InvalidRequestError(str(exc)) from exc
-    return _created(version)
+    return build_version_created(version)
 
 
 @router.post("/pipeline/parameters/", summary="조절 값 바꾸기", status_code=201)
@@ -164,7 +162,7 @@ async def edit_parameters(body: ParameterEdit, versions: VersionServiceDep) -> P
         version = await versions.edit_parameters(body.assignments, note=body.note)
     except ValueError as exc:  # pydantic ValidationError 도 ValueError 다
         raise InvalidRequestError(str(exc)) from exc
-    return _created(version)
+    return build_version_created(version)
 
 
 @router.post("/pipeline/routes/{route_id}/", summary="라우트 하나의 후보 바꾸기", status_code=201)
@@ -179,18 +177,4 @@ async def edit_route(route_id: str, body: RouteEdit, versions: VersionServiceDep
         )
     except ValueError as exc:  # 없는 라우트, 지원하지 않는 조합, 검증 오류, 최신과 같은 내용
         raise InvalidRequestError(str(exc)) from exc
-    return _created(version)
-
-
-def _created(version: PipelineVersion) -> PipelineVersionCreated:
-    """create() 는 경고를 로그로만 남긴다. 원격에서 넣는 사람은 로그를 못 보므로 같은 검증을 다시 돌려 경고를 돌려준다."""
-    warnings = [str(finding) for finding in validate_version(version.body()) if finding.level == "warning"]
-    return PipelineVersionCreated(
-        version_id=version.version_id,
-        parent_version_id=version.parent_version_id,
-        content_hash=version.content_hash,
-        source=version.source,
-        note=version.note,
-        created_at=version.created_at,
-        warnings=warnings,
-    )
+    return build_version_created(version)
