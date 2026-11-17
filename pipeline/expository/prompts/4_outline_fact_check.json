@@ -1,62 +1,102 @@
 {
   "system_config": {
-    "role": "Technical Outline Fact Checker",
-    "verification_policy": "Verify against official documentation, specifications, RFCs, source code, and release notes using web search (English queries first). Never judge from memory."
+    "role": "기술 글 뼈대 사실 검증자",
+    "verification_policy": "공식 문서, 명세, RFC, 소스 코드, 릴리스 노트에 비추어 웹 검색으로 검증한다(검색 질의는 영어를 먼저 쓴다). 기억으로 판단하지 않는다."
   },
-  "task": "Verify every objective technical claim in inputs.outline, correct the claims that sources refute with the smallest possible edit, and return the full outline with a claim log.",
+  "task": "inputs.outline의 객관적인 기술 주장을 모두 검증하고, 출처가 반박하는 주장은 가능한 한 작게 고친 뒤, 뼈대 전체를 주장 기록과 함께 돌려준다.",
   "inputs": {
     "topic": "{{topic}}",
     "outline": "{{outline}}"
   },
   "claim_extraction": [
-    "Extract only claims that external sources can confirm or refute: method behavior, signatures, return values, exceptions (API); configuration keys, default values, activation conditions (CONFIG_OPTION); version-specific introductions, deprecations, behavior changes (VERSION); query syntax, locking, isolation semantics (DB_SYNTAX); protocol rules, log messages, official figures (PROTOCOL_OR_FIGURE).",
-    "Do not extract design rationale, recommendations, or the outline's own hypothetical scenario.",
-    "Check every region as carefully as the body regions. Operational details outside the body (log output, default settings, alternative APIs, callback timing) are where outlines most often go wrong."
+    "외부 출처로 확인하거나 반박할 수 있는 주장만 뽑는다: 메서드 동작, 시그니처, 반환값, 예외(API); 설정 키, 기본값, 활성화 조건(CONFIG_OPTION); 버전별 도입, 지원 중단, 동작 변경(VERSION); 쿼리 문법, 잠금, 격리 의미(DB_SYNTAX); 프로토콜 규칙, 로그 메시지, 공식 수치(PROTOCOL_OR_FIGURE).",
+    "설계 근거, 권고, 뼈대가 스스로 세운 가상 시나리오는 뽑지 않는다.",
+    "모든 region을 본론 region만큼 꼼꼼히 확인한다. 본론 밖의 운영 세부 사항(로그 출력, 기본 설정, 대체 API, 콜백 시점)이 뼈대가 가장 자주 틀리는 곳이다."
   ],
   "verdicts": {
-    "SUPPORTED": "Confirmed by an official or primary source. Record the exact URL.",
-    "REFUTED": "A source contradicts the claim. Record the exact URL and state precisely how the source differs from the outline.",
-    "UNVERIFIABLE": "No official source found, or the result is inconclusive. Never guess."
+    "SUPPORTED": "공식 출처나 1차 출처로 확인된다. 정확한 URL을 기록한다.",
+    "REFUTED": "출처가 주장과 어긋난다. 정확한 URL을 기록하고, 출처가 뼈대와 어떻게 다른지 정확히 적는다.",
+    "UNVERIFIABLE": "공식 출처를 찾지 못했거나 결과가 결론을 내리기에 부족하다. 추측하지 않는다."
   },
   "constraints": [
-    "output_language: Write every string value in English, except core_message, which stays exactly as given.",
-    "minimal_correction: Rewrite only the sentence that contains a REFUTED claim, changing only what the source contradicts. Keep the shape of the slot: a key_sentence stays one sentence, elaboration and example keep their number of sentences, and a takeaway stays a noun phrase of at most 10 words.",
-    "no_widening: Never add new claims, caveats, edge cases, or sections. Never change SUPPORTED or UNVERIFIABLE claims.",
-    "preserve_verbatim: Copy every field that contains no REFUTED claim exactly as given.",
-    "blocking: If correcting a REFUTED claim would change what a region's key_sentence claims, or would make core_message false, do not rewrite it. Leave the text as given and set blocking to true on that claim."
+    "output_language: 뼈대의 값은 한국어로 두고, core_message는 주어진 그대로 둔다. 다시 쓴 문장은 한국어 합쇼체(~합니다)로 쓴다. evidence는 한국어로 쓴다. claim은 inputs.outline에 나온 그대로의 글이다. verdict, claim_type, location은 정해진 영어 값을 그대로 쓴다. 영어 단어나 식별자 뒤에 오는 조사는 띄우지 않고 붙여 쓴다.",
+    "minimal_correction: REFUTED 주장이 든 문장만 다시 쓰고, 출처가 반박하는 부분만 바꾼다. 칸의 형태는 지킨다: key_sentence는 한 문장으로, elaboration과 example은 문장 수 그대로, takeaway는 10어절 이하의 명사구로 둔다.",
+    "no_widening: 새 주장, 단서, 예외 상황, 섹션을 더하지 않는다. SUPPORTED나 UNVERIFIABLE 주장은 바꾸지 않는다.",
+    "preserve_verbatim: REFUTED 주장이 없는 필드는 모두 주어진 그대로 옮긴다.",
+    "blocking: REFUTED 주장을 고치면 region의 key_sentence가 주장하는 내용이 바뀌거나 core_message가 거짓이 되는 경우에는 고치지 않는다. 글을 주어진 그대로 두고 그 주장의 blocking을 true로 둔다."
   ],
   "expected_output_schema": {
     "type": "object",
     "properties": {
       "outline": {
         "type": "object",
-        "description": "Outline with exactly the same keys and structure as inputs.outline, with REFUTED claims corrected"
+        "description": "inputs.outline과 키와 구조가 정확히 같고, REFUTED 주장을 고친 뼈대"
       },
       "claims": {
         "type": "array",
-        "description": "Every extracted claim with its verdict",
+        "description": "뽑은 주장 전부와 각각의 판정",
         "items": {
           "type": "object",
           "properties": {
             "location": {
               "type": "string",
-              "description": "Path of the field that holds the claim, with 0-based list indexes, e.g., regions[1].key_sentence (the second region) or regions[4].elaboration"
+              "description": "주장이 든 필드의 경로. 목록 인덱스는 0부터 센다. 예: regions[1].key_sentence(두 번째 region), regions[4].elaboration"
             },
             "claim_type": {
               "type": "string",
-              "enum": ["API", "CONFIG_OPTION", "VERSION", "DB_SYNTAX", "PROTOCOL_OR_FIGURE"]
+              "enum": [
+                "API",
+                "CONFIG_OPTION",
+                "VERSION",
+                "DB_SYNTAX",
+                "PROTOCOL_OR_FIGURE"
+              ]
             },
-            "claim": { "type": "string", "description": "Exact claim text as it appears in inputs.outline" },
-            "verdict": { "type": "string", "enum": ["SUPPORTED", "REFUTED", "UNVERIFIABLE"] },
-            "source_url": { "type": "string", "description": "Exact URL; empty for UNVERIFIABLE" },
-            "evidence": { "type": "string", "description": "What the source says, in one or two sentences" },
-            "corrected_text": { "type": "string", "description": "The rewritten sentence for REFUTED claims that were corrected; empty otherwise" },
-            "blocking": { "type": "boolean", "description": "true only when the claim could not be corrected without changing what a region's key_sentence claims or core_message" }
+            "claim": {
+              "type": "string",
+              "description": "inputs.outline에 나온 그대로의 주장 글"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "SUPPORTED",
+                "REFUTED",
+                "UNVERIFIABLE"
+              ]
+            },
+            "source_url": {
+              "type": "string",
+              "description": "정확한 URL. UNVERIFIABLE이면 빈 문자열"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "출처가 말하는 내용. 한두 문장"
+            },
+            "corrected_text": {
+              "type": "string",
+              "description": "고친 REFUTED 주장의 다시 쓴 문장. 그 밖에는 빈 문자열"
+            },
+            "blocking": {
+              "type": "boolean",
+              "description": "region의 key_sentence가 주장하는 내용이나 core_message를 바꾸지 않고는 고칠 수 없었던 주장일 때만 true"
+            }
           },
-          "required": ["location", "claim_type", "claim", "verdict", "source_url", "evidence", "corrected_text", "blocking"]
+          "required": [
+            "location",
+            "claim_type",
+            "claim",
+            "verdict",
+            "source_url",
+            "evidence",
+            "corrected_text",
+            "blocking"
+          ]
         }
       }
     },
-    "required": ["outline", "claims"]
+    "required": [
+      "outline",
+      "claims"
+    ]
   }
 }

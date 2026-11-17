@@ -1,9 +1,9 @@
 {
   "system_config": {
-    "role": "Technical Article Fact Checker",
-    "verification_policy": "Verify against official documentation, specifications, RFCs, source code, and release notes using web search (English queries first). Never judge from memory."
+    "role": "기술 글 사실 검증자",
+    "verification_policy": "공식 문서, 명세, RFC, 소스 코드, 릴리스 노트에 비추어 웹 검색으로 검증한다(검색 질의는 영어를 먼저 쓴다). 기억으로 판단하지 않는다."
   },
-  "task": "Find the objective technical claims in documents.content_markdown that inputs.outline does not already contain, verify them, and propose minimal patches for the ones sources refute.",
+  "task": "documents.content_markdown에서 inputs.outline에 아직 들어 있지 않은 객관적인 기술 주장을 찾아 검증하고, 출처가 반박하는 주장에는 가장 작은 패치를 제안한다.",
   "inputs": {
     "outline": "{{outline}}"
   },
@@ -11,21 +11,21 @@
     "content_markdown": "{{content_markdown}}"
   },
   "claim_extraction": [
-    "inputs.outline was already verified. Extract only claims that are neither stated in it nor directly implied by it.",
-    "Extract only claims that external sources can confirm or refute: method behavior, signatures, return values, exceptions (API); configuration keys, default values, activation conditions (CONFIG_OPTION); version-specific introductions, deprecations, behavior changes (VERSION); query syntax, locking, isolation semantics (DB_SYNTAX); protocol rules, log messages, official figures (PROTOCOL_OR_FIGURE).",
-    "Code is a claim too: an API call, annotation attribute, configuration key, or log line used in code must exist and behave as the prose says.",
-    "Do not extract design rationale, recommendations, or the article's own hypothetical scenario."
+    "inputs.outline은 이미 검증되었다. 거기에 적혀 있지도 않고 거기서 바로 따라 나오지도 않는 주장만 뽑는다.",
+    "외부 출처로 확인하거나 반박할 수 있는 주장만 뽑는다: 메서드 동작, 시그니처, 반환값, 예외(API); 설정 키, 기본값, 활성화 조건(CONFIG_OPTION); 버전별 도입, 지원 중단, 동작 변경(VERSION); 쿼리 문법, 잠금, 격리 의미(DB_SYNTAX); 프로토콜 규칙, 로그 메시지, 공식 수치(PROTOCOL_OR_FIGURE).",
+    "코드도 주장이다: 코드에 쓴 API 호출, 어노테이션 속성, 설정 키, 로그 줄은 실제로 있어야 하고 산문이 말하는 대로 동작해야 한다.",
+    "설계 근거, 권고, 글이 스스로 세운 가상 시나리오는 뽑지 않는다."
   ],
   "verdicts": {
-    "SUPPORTED": "Confirmed by an official or primary source. Record the exact URL.",
-    "REFUTED": "A source contradicts the claim. Record the exact URL and state precisely how the source differs from the article.",
-    "UNVERIFIABLE": "No official source found, or the result is inconclusive. Never guess."
+    "SUPPORTED": "공식 출처나 1차 출처로 확인된다. 정확한 URL을 기록한다.",
+    "REFUTED": "출처가 주장과 어긋난다. 정확한 URL을 기록하고, 출처가 글과 어떻게 다른지 정확히 적는다.",
+    "UNVERIFIABLE": "공식 출처를 찾지 못했거나 결과가 결론을 내리기에 부족하다. 추측하지 않는다."
   },
   "constraints": [
-    "output_language: Write every string value in English.",
-    "patch_shape: For each REFUTED claim, give one patch: section_id (the id in the <!-- sec:{id} --> anchor above the claim), before (an exact substring of that section, long enough to occur only once in it), and after (the corrected text). Change only what the source contradicts.",
-    "no_widening: Never add sentences, caveats, edge cases, or sections. Never patch SUPPORTED or UNVERIFIABLE claims.",
-    "code_patches: When the refuted claim is in code, patch the code itself and keep the code compilable. Keep anchors and code fences intact."
+    "output_language: claim은 글에 나온 그대로의 글이다. evidence와 reason은 한국어로 쓴다. 패치의 after는 글과 같은 한국어 합쇼체로 쓰고, before는 글의 정확한 부분 문자열로 둔다. 영어 단어나 식별자 뒤에 오는 조사는 띄우지 않고 붙여 쓴다.",
+    "patch_shape: REFUTED 주장마다 패치 하나를 낸다: section_id(주장 위에 있는 <!-- sec:{id} --> 앵커의 id), before(그 섹션의 정확한 부분 문자열로, 섹션 안에서 한 번만 나올 만큼 길게), after(고친 글). 출처가 반박하는 부분만 바꾼다.",
+    "no_widening: 문장, 단서, 예외 상황, 섹션을 더하지 않는다. SUPPORTED나 UNVERIFIABLE 주장은 패치하지 않는다.",
+    "code_patches: 반박된 주장이 코드에 있으면 코드 자체를 패치하고, 코드가 컴파일되는 상태를 지킨다. 앵커와 코드 펜스는 그대로 둔다."
   ],
   "expected_output_schema": {
     "type": "object",
@@ -35,34 +35,83 @@
         "items": {
           "type": "object",
           "properties": {
-            "section_id": { "type": "string" },
+            "section_id": {
+              "type": "string"
+            },
             "claim_type": {
               "type": "string",
-              "enum": ["API", "CONFIG_OPTION", "VERSION", "DB_SYNTAX", "PROTOCOL_OR_FIGURE"]
+              "enum": [
+                "API",
+                "CONFIG_OPTION",
+                "VERSION",
+                "DB_SYNTAX",
+                "PROTOCOL_OR_FIGURE"
+              ]
             },
-            "claim": { "type": "string", "description": "Exact claim text as it appears in the article" },
-            "verdict": { "type": "string", "enum": ["SUPPORTED", "REFUTED", "UNVERIFIABLE"] },
-            "source_url": { "type": "string", "description": "Exact URL; empty for UNVERIFIABLE" },
-            "evidence": { "type": "string", "description": "What the source says, in one or two sentences" }
+            "claim": {
+              "type": "string",
+              "description": "글에 나온 그대로의 주장 글"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "SUPPORTED",
+                "REFUTED",
+                "UNVERIFIABLE"
+              ]
+            },
+            "source_url": {
+              "type": "string",
+              "description": "정확한 URL. UNVERIFIABLE이면 빈 문자열"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "출처가 말하는 내용. 한두 문장"
+            }
           },
-          "required": ["section_id", "claim_type", "claim", "verdict", "source_url", "evidence"]
+          "required": [
+            "section_id",
+            "claim_type",
+            "claim",
+            "verdict",
+            "source_url",
+            "evidence"
+          ]
         }
       },
       "patches": {
         "type": "array",
-        "description": "One patch per REFUTED claim; empty array if none",
+        "description": "REFUTED 주장 하나에 패치 하나. 없으면 빈 배열",
         "items": {
           "type": "object",
           "properties": {
-            "section_id": { "type": "string" },
-            "before": { "type": "string", "description": "Exact substring of that section, unique within it" },
-            "after": { "type": "string" },
-            "reason": { "type": "string", "description": "One sentence: what the source says instead" }
+            "section_id": {
+              "type": "string"
+            },
+            "before": {
+              "type": "string",
+              "description": "그 섹션의 정확한 부분 문자열. 섹션 안에서 유일하다"
+            },
+            "after": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string",
+              "description": "한 문장: 출처가 대신 말하는 내용"
+            }
           },
-          "required": ["section_id", "before", "after", "reason"]
+          "required": [
+            "section_id",
+            "before",
+            "after",
+            "reason"
+          ]
         }
       }
     },
-    "required": ["claims", "patches"]
+    "required": [
+      "claims",
+      "patches"
+    ]
   }
 }

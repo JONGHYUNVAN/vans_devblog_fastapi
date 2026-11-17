@@ -94,7 +94,7 @@ def run(
         typer.Option("--redo-from", min=1, max=LAST_STAGE, help="이 단계부터의 결과를 지우고 다시 부른다"),
     ] = None,
     max_words: Annotated[
-        int, typer.Option("--max-words", help="5단계 영어 본문의 단어 상한(코드 제외)")
+        int, typer.Option("--max-words", help="5단계 본문의 어절 상한(코드 제외)")
     ] = DEFAULT_MAX_WORDS,
     form: Annotated[
         str | None,

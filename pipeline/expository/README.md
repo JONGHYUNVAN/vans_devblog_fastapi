@@ -7,7 +7,7 @@
 ## 정한 것 (2026-11-11)
 
 - 설명문만 쓴다. 주제는 대상 하나이고 A vs B 비교 구조는 쓰지 않는다.
-- 번역 전 단계는 모두 영어로 진행하고, 완성된 글을 한 번 번역한다.
+- 주제부터 본문까지 한국어로 쓴다(2026-11-18, 09 문서 D-105). 지시문도 한국어이고 키·제약 이름·역할·양식 id·열거 값·치환자만 영어다. 8단계는 번역 대신 최종 제목을 짓고 문장을 교정한다(단계 key 는 `8_translate` 그대로다). 처음에는 번역 전 단계를 모두 영어로 진행하고 완성된 글을 한 번 번역했다. 그 지시문은 커밋 `da8f98c` 에 있다.
 - 글의 목적에 따라 뼈대의 양식이 다르다(2026-11-17, 아래 "글 양식"). 처음의 "문제 → 원인 → 해결" 뼈대는 `diagnosis` 양식으로 남았고, 아래 세 줄은 그 양식의 규칙이다.
 - 원인 region 은 3개 이상이고 상한은 없다. 리뷰가 연관도가 낮거나 중복된 것을 빼고, 3개 미만이 되면 리뷰어가 모자란 만큼 채운다.
 - 원인 region 은 문제의 원인을 설명한다. 논제의 해법은 실무 적용(`application`)에서 처음 나온다.
@@ -80,7 +80,7 @@ python -m cli.expository run --theme spring
 - `--stop-after 4`: 그 단계까지만 돌린다. `--run-id <실행 id>` 로 이어 한다.
 - `--redo-from 5`: 그 단계부터의 결과를 지우고 다시 부른다.
 - `--out post.md`: 끝난 글을 파일로 쓴다.
-- `--max-words 2200`: 5단계 영어 본문의 단어 상한(코드 제외). 첫 실행에서 3000(실제 2,794단어)이 표·용어 정리를 더해 한국어 22,945자가 되어 20,000자를 넘었다. 2200 은 19,000자 안팎을 겨눈 값이고 실제 실행으로 다시 재야 한다.
+- `--max-words 1800`: 5단계 본문의 어절 상한(코드 제외). 1800 은 2026-11-17 실제 실행 세 번에 쓴 값이고 표·코드까지 합친 글이 9,509~13,979자였다.
 - 환경 변수의 Mongo 접속 값과 벤더 키(`ANTHROPIC_API_KEY`·`GOOGLE_API_KEY`)를 쓴다. 단계 라우트 후보 중 키가 있는 첫 벤더를 부른다. `POST_BE_URL` 이 있으면 1단계에 카테고리 목록을 넣고, 없으면 카테고리 없이 고른다.
 
 ### 운영 컨테이너에서
@@ -119,8 +119,8 @@ python -m cli.expository publish expository-20261111-120000
 |---|---|
 | `stage_outputs.{단계}` | 검사를 통과한 결과 |
 | `stage_prompts.{단계}` | 그 결과를 만든 프롬프트(입력을 채운 것) |
-| `checked_markdown`, `rejected_patches` | 6단계 패치를 적용한 영어 본문, 버린 패치 |
-| `assembled_markdown` | 표·용어 정리를 넣은 영어 본문(번역 입력) |
+| `checked_markdown`, `rejected_patches` | 6단계 패치를 적용한 본문, 버린 패치 |
+| `assembled_markdown` | 표·용어 정리를 넣은 본문(8단계 입력) |
 | `article` | 한국어 제목·요약·본문, 키워드·카테고리, 글을 끝낸 실행의 `pipeline_version` |
 | `stage_models.{단계}` | 그 결과를 낸 모델 |
 | `publication`, `publish_attempted_at` | 올린 게시글 id·시각·계정·글 끝 표기, 발행 호출을 시작한 시각 |
@@ -137,11 +137,11 @@ python -m cli.expository publish expository-20261111-120000
 | 2 | `2_outline.json` | 1의 topic, core_argument, focus_points, out_of_scope + 양식 | 뼈대(form, core_message, regions) | 아니오 |
 | 3 | `3_outline_review.json` | 2의 입력 + outline. 여러 번 올 수 있는 본론 역할이 없는 양식(`concept`)은 부르지 않는다 | outline, review_log | 아니오 |
 | 4 | `4_outline_fact_check.json` | topic, outline | outline(고친 것), claims | 예 |
-| 5 | `5_write.json` | outline, out_of_scope, max_words + 양식(섹션마다 앵커 id 와 쓰는 법) | 문서: 영어 제목 + 본문 | 아니오 |
+| 5 | `5_write.json` | outline, out_of_scope, max_words + 양식(섹션마다 앵커 id 와 쓰는 법) | 문서: 임시 제목 + 본문 | 아니오 |
 | 6 | `6_article_fact_check.json` | outline, 문서 content_markdown | claims, patches | 예 |
 | 7 | `7_summary_glossary.json` | section_ids, 문서 content_markdown | section_summaries, terms | 아니오 |
-| 8 | `8_translate.json` | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 한국어 제목 + 본문 | 아니오 |
-| 9 | `9_summarize.json` | 한국어 title, 서론 첫 문단 | summary(메타 설명) | 아니오 |
+| 8 | `8_translate.json`(제목·교정) | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 최종 제목 + 교정한 본문 | 아니오 |
+| 9 | `9_summarize.json` | 8의 title, 서론 첫 문단 | summary(메타 설명) | 아니오 |
 
 러너는 `inputs` 의 `{{...}}` 를 문자열로 치환하지 않고 `inputs` 객체를 통째로 바꾼다(배열·객체가 그대로 들어간다). 벤더 구조화 출력은 쓰지 않고 글로 받아 꺼낸다(검색 단계는 구조화 출력과 같이 쓸 수 없다).
 
@@ -183,8 +183,8 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location(`regions[2].key_sentence` 꼴)만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `--redo-from 2` 로 뼈대부터 다시 돌린다.
 - 5 뒤: 섹션 앵커가 뼈대와 양식에서 나온 순서 그대로다(`diagnosis` 면 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion`). 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
 - 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 실행 문서의 `rejected_patches` 에 남는다.
-- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 정의가 있는 용어로 `<!-- sec:glossary -->` 용어 정리 절을 붙인다.
-- 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 영어본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 길이(`draft_min_chars`~`draft_reject_chars`, 버전의 조절 값)·변환·합쇼체·명령형·코드 주석 검사.
+- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 정의가 있는 용어로 `<!-- sec:glossary -->` 용어 정리 절을 붙인다. 표 문구(`Summary`·`Item`·`Explanation`·`Overview`·`Glossary`·`Term`·`Definition`)는 코드가 영어로 넣고 8단계가 한국어로 옮긴다.
+- 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 7단계 조립본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 길이(`draft_min_chars`~`draft_reject_chars`, 버전의 조절 값)·변환·합쇼체·명령형·코드 주석 검사.
 - 9 뒤: 요약 150자 이하, "이 글"로 시작하지 않는다.
 
 ## 기존 프로젝트에서 가져온 규칙
@@ -192,19 +192,20 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 섹션·코드 앵커, 허용 마크다운, 언어 태그와 `-snippet`, 긴 코드 블록 주석: `app/agents/prompts/v4/claude/write_draft.md`, `app/services/validation.py`
 - 합쇼체: 09 문서 D-86
 - 용어 표기(통용 한국어 용어, 음차 금지, 본문 첫 등장에 영어 원어 괄호): v4 `write_draft.md`·`propose_topic.md`
-- 한국어 제목 규칙(40자, 글 형태별 제목 꼴): v4 `write_draft.md`
+- 한국어 제목 규칙(40자): v4 `write_draft.md`. 글 형태별 제목 꼴은 뺐다. 8단계 제목은 글이 설명하는 대상을 가리키는 명사구이고 질문형·괄호·콜론 부제를 쓰지 않는다(2026-11-17, 제목 꼴 목록을 주면 모든 제목이 그 꼴로 나왔다)
 - 사실 확인의 주장 종류·판정·"기억으로 판단 금지": v4 `claude/fact_check.md`. 사실 확인 첫 후보는 Gemini 다(D-92). 기존은 검색 호출을 글로 받아 `FACT_TRANSFORM` 으로 JSON 으로 바꾼다. 여기서는 JSON 을 글로 받아 바로 꺼낸다. 꺼내기 실패가 잦으면 기존처럼 변환 단계를 둔다.
 - 긴 자료를 위에, 지시를 끝에 두는 배치(`documents_first`): Anthropic·Gemini 프롬프트 지침. 근거와 확인하지 못한 것은 `.claude/reviews/exchange_format_design_2026-11-17.md` A부 3절.
 - 용어 정의는 사전체 명사구: 09 문서 D-88, `haiku/glossary.md`
-- 번역에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1
+- 작성(5단계)·교정(8단계)에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1
 - 메타 설명 규칙: v4 `common/summarize.md`(D-95)를 `9_summarize.json` 으로 옮겼다.
-- 단계 모델(`routes.json`): 작성·번역은 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성·번역은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다. 첫 실제 실행에서 번역은 32000 에서도 한 번 잘려 한도를 올린 재시도로 끝났다).
+- 단계 모델(`routes.json`): 작성·8단계(제목·교정)는 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성·번역은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다. 첫 실제 실행에서 번역은 32000 에서도 한 번 잘려 한도를 올린 재시도로 끝났다).
 
 ## 아직 없는 것
 
-- 실제 모델로 돌린 결과. 단위 테스트는 가짜 LLM 이다(`tests/services/test_expository*.py`, `tests/agents/test_expository.py`). 2단계 뼈대만 대화 세션에서 한 번 돌렸다(2026-11-11, 영어 출력으로 바꾸기 전 버전).
-- 글 양식(D-104)의 실제 실행 확인. `diagnosis` 는 `examples/spring_self_invocation.topic.json` 으로 돌려 전에 나온 글과 견주어 나빠진 곳이 없는지, `concept` 은 개념 주제 하나를 `--form concept` 로 돌려 문제 상황을 지어내지 않는지 본다. 양식의 영어 문구는 실제 글을 보고 고쳐야 한다. D-104 전에 시작한 실행은 이어 할 수 없다(1단계 결과에 form 이 없다). 끝난 실행의 `show`·`publish` 는 된다.
+- 한국어 지시문(D-105)의 실제 실행은 2026-11-17 세 번뿐이다(Claude `diagnosis`, Gemini `concept`, Grok `procedure`, 모두 9단계 완주·발행). `taxonomy` 양식은 1단계까지만 돌렸다. 단위 테스트는 가짜 LLM 이다(`tests/services/test_expository*.py`, `tests/agents/test_expository.py`).
+- 양식 문구는 실제 글을 보고 고쳐야 한다. D-104 전에 시작한 실행은 이어 할 수 없다(1단계 결과에 form 이 없다). 끝난 실행의 `show`·`publish` 는 된다.
+- 지시문 낱말 검사(`LEAK_PATTERN`)와 비교 주제 검사(`COMPARISON_PATTERN`)는 영어 낱말만 안다. 한국어 본문에 지시문 낱말이 새도 잡지 못한다.
 - 문서 출력과 `documents_first` 배치(D-103)의 실제 실행 확인. 같은 뼈대로 전후를 견주는 방법: 새 프롬프트를 넣기 전에 실행을 끝까지 돌려 `show --out a.md`, `seed` 와 `edit-param` 뒤 같은 실행을 `run --run-id … --redo-from 5` 로 다시 돌려 `show --out b.md`. 두 글과 영수증의 5·8단계 출력 토큰·재시도, 실행 문서의 `rejected_patches` 수를 본다.
 - 자동 발행. `run` 이 끝나도 올리지 않는다. `publish` 를 따로 부른다.
-- 발행한 글의 용어 사전·제작 기록 연결.
+- 발행한 글의 용어 사전·제작 기록 연결. 용어 사전 등록은 2026-11-15 에 다른 PC 에서 만든 것이 있다(운영 v28 의 7단계 지시문 "정의를 쓰지 않는다", 실행 `expository-localtest-20261115-125200` 의 `glossary` 와 그 글의 `post_glossary`). 그 코드는 이 저장소에 없다.
 - 실행이 고칠 수 없는 사실 오류(blocking)에서 뼈대를 자동으로 다시 만드는 것. 지금은 멈추고 사람이 다시 돌린다.

@@ -37,7 +37,7 @@ _ABBREVIATION = re.compile(r"(?:\be\.g|\bi\.e|\betc|\bvs|\bcf)\.$", re.IGNORECAS
 _HANGUL = re.compile(r"[가-힣]")
 _TABLE_LINE = re.compile(r"^\s*\|")
 _PATH_TOKEN = re.compile(r"[A-Za-z_]+|\d+")
-_NO_LENGTH_LIMIT = 10**9  # 영어 본문은 단어 수로만 조절한다. 글자 수 상한은 번역본에만 건다
+_NO_LENGTH_LIMIT = 10**9  # 5단계 본문은 어절 수로만 조절한다. 글자 수 상한은 8단계 결과에만 건다
 _REQUIRED_SLOTS = ("heading", "key_sentence", "elaboration")  # 어느 역할이든 채운다. example·takeaway 는 역할이 정한다
 
 Form = dict[str, Any]
@@ -201,7 +201,7 @@ def check_article(output: dict[str, Any], sections: list[str]) -> list[str]:
     gate = ValidationGate(
         min_chars=1, max_chars=_NO_LENGTH_LIMIT, structure=StructureParameters(required_sections=sections)
     )
-    # check_style 의 어미 검사는 한국어 어미만 가리므로 영어 본문에서는 코드 주석 검사만 실제로 걸린다
+    # check_style 의 어미 검사는 한국어 어미만 가린다. 본문을 한국어로 쓰는 지시문(09 문서 D-105)에서는 여기서도 걸린다
     errors += gate.check_markdown(markdown, None) + gate.check_style(markdown)
     prose = mask_code_fences(markdown)
     if any(_TABLE_LINE.match(line) for line in prose.split("\n")):

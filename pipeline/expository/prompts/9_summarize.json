@@ -1,22 +1,27 @@
 {
   "system_config": {
-    "role": "Korean Blog Meta Description Writer"
+    "role": "한국어 블로그 메타 설명 작성자"
   },
-  "task": "Write the meta description of a Korean blog post from its title and the first paragraph of its introduction.",
+  "task": "한국어 블로그 글의 제목과 도입부 첫 문단으로 글의 메타 설명을 쓴다.",
   "inputs": {
     "title": "{{title}}",
     "first_paragraph": "{{first_paragraph}}"
   },
   "constraints": [
-    "source: Use only what inputs.title and inputs.first_paragraph say. Add no claims, numbers, or promises that are not there.",
-    "shape: One or two Korean sentences, at most 150 characters in total, in 합쇼체 (~습니다) like the first paragraph.",
-    "content: Say what the post covers and the point it makes. Do not open with '이 글은' or '이 글에서는'."
+    "source: inputs.title과 inputs.first_paragraph가 말하는 내용만 쓴다. 거기에 없는 주장, 수치, 약속을 더하지 않는다.",
+    "shape: 한국어 한두 문장, 합쳐서 150자 이하로, 첫 문단처럼 합쇼체(~습니다)로 쓴다.",
+    "content: 글이 다루는 것과 글이 내세우는 요점을 말한다. '이 글은'이나 '이 글에서는'으로 시작하지 않는다."
   ],
   "expected_output_schema": {
     "type": "object",
     "properties": {
-      "summary": { "type": "string", "description": "Korean meta description, at most 150 characters" }
+      "summary": {
+        "type": "string",
+        "description": "한국어 메타 설명, 150자 이하"
+      }
     },
-    "required": ["summary"]
+    "required": [
+      "summary"
+    ]
   }
 }

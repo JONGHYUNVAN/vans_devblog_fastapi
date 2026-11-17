@@ -53,9 +53,9 @@ class ExpositoryRun(BaseModel):
     stage_prompts: dict[str, str] = Field(default_factory=dict)
     # 단계 key → 그 결과를 낸 모델. 글 끝 표기와 발행 계정을 여기서 정한다. D-101 전 실행에는 없다
     stage_models: dict[str, CallModel] = Field(default_factory=dict)
-    checked_markdown: str | None = None  # 6단계 패치를 적용한 영어 본문
+    checked_markdown: str | None = None  # 6단계 패치를 적용한 본문
     rejected_patches: list[dict[str, Any]] = Field(default_factory=list)  # 6단계에서 버린 패치와 이유
-    assembled_markdown: str | None = None  # 7단계 표·용어 정리를 넣은 영어 본문(번역 입력)
+    assembled_markdown: str | None = None  # 7단계 표·용어 정리를 넣은 본문(8단계 입력)
     article: ExpositoryArticle | None = None  # 9단계까지 끝났을 때만
     # 발행 호출을 시작한 시각. publication 없이 이 값만 있으면 결과를 모른다(응답 전 끊김): 다시 올리면 중복 게시가 될 수 있다
     publish_attempted_at: datetime | None = None

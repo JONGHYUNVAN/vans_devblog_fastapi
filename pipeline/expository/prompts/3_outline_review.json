@@ -1,10 +1,10 @@
 {
   "system_config": {
-    "role": "Technical Blog Outline Review Engine",
-    "scenario_scale": "Toy projects and undergraduate-level applications (Exclude everything listed in inputs.out_of_scope and enterprise over-engineering)",
-    "technical_depth": "Advanced CS undergraduate level (Focus on what inputs.focus_points lists)"
+    "role": "기술 블로그 뼈대 검토 엔진",
+    "scenario_scale": "토이 프로젝트와 학부 수준의 애플리케이션 (inputs.out_of_scope의 항목과 엔터프라이즈식 과잉 설계는 제외한다)",
+    "technical_depth": "컴퓨터공학 학부 고학년 수준 (inputs.focus_points가 적은 내용에 집중한다)"
   },
-  "task": "Review the regions of inputs.outline whose role is listed in form.repeatable_roles. Remove regions that are weakly related or duplicated. If fewer regions of a role remain than that role's min, write new regions to bring the count back to min. Return the full outline in the same structure.",
+  "task": "inputs.outline의 region 가운데 role이 form.repeatable_roles에 있는 region을 검토한다. 관련이 약하거나 중복된 region은 뺀다. 어떤 role의 region이 그 role의 min보다 적게 남으면 새 region을 써서 개수를 min까지 채운다. 뼈대 전체를 같은 구조로 돌려준다.",
   "inputs": {
     "topic": "{{topic}}",
     "core_argument": "{{core_argument}}",
@@ -14,46 +14,62 @@
   },
   "form": "{{form}}",
   "review_criteria": [
-    "out_of_scope: Remove a region whose explanation depends on anything listed in inputs.out_of_scope.",
-    "weak_relevance: Remove a region that the article does not need in order to carry core_message. form.review_rules states the test for this form.",
-    "duplication: If two regions of the same role rest on the same principle or cover the same part of the subject, keep the one with the clearer explanation and remove the other. Judge by substance, not by wording."
+    "out_of_scope: 설명이 inputs.out_of_scope의 항목에 기대는 region은 뺀다.",
+    "weak_relevance: 글이 core_message를 전하는 데 필요하지 않은 region은 뺀다. 이 양식에서 무엇으로 판단하는지는 form.review_rules가 정한다.",
+    "duplication: 같은 role의 두 region이 같은 원리에 기대거나 대상의 같은 부분을 다루면, 설명이 더 분명한 쪽을 남기고 다른 쪽을 뺀다. 표현이 아니라 내용으로 판단한다."
   ],
   "constraints": [
-    "output_language: Write every string value in English, except core_message, which stays exactly as given.",
-    "reviewable_roles: Remove or add only regions whose role is in form.repeatable_roles. Every other region is outside this review.",
-    "remove_only_by_criteria: Remove a region only when it meets one of review_criteria. Never remove a region just to shorten the outline.",
-    "preserve_verbatim: Copy every kept region, every region outside form.repeatable_roles, form, and core_message exactly as given. Do NOT rewrite, polish, merge, or reorder them.",
-    "refill_only_when_short: Add new regions of a role only if fewer than that role's min remain after removal, and add exactly as many as needed to reach min. If min or more remain, add nothing.",
-    "refill_source: Each new region must cover an item of inputs.focus_points that no region in inputs.outline (kept or removed) covered. If none is left, cover a closely related point that carries core_message. A new region must not meet any review_criteria itself.",
-    "refill_position: Insert each new region where it fits the logical flow among the kept regions of the same role.",
-    "new_region_rules: Write every new region as the outline step would: what the guidance of its role in form.regions asks for, key_sentence as exactly one sentence, each slot inside the role's sentences range, takeaway as a noun phrase of at most 10 words, and every item of form.rules.",
-    "no_instruction_terms: Never write the project scale, audience level, or wording from these instructions (e.g., 'toy project', 'undergraduate', 'dilemma', 'key_sentence') into output text.",
-    "no_meta_commentary: Strictly forbid meta-statements explaining the purpose of the article (e.g., 'This article explores...', 'Let's take a look at...')."
+    "output_language: 모든 문자열 값은 한국어로 쓰고, 문장은 합쇼체(~합니다)로 쓴다. core_message는 주어진 그대로 둔다. form, role, 그리고 식별자는 한국어로 옮기지 않는다. 영어 단어나 식별자 뒤에 오는 조사는 띄우지 않고 붙여 쓴다.",
+    "reviewable_roles: role이 form.repeatable_roles에 있는 region만 빼거나 더한다. 나머지 region은 이 검토의 대상이 아니다.",
+    "remove_only_by_criteria: region은 review_criteria 중 하나에 해당할 때만 뺀다. 뼈대를 줄이려고 region을 빼지 않는다.",
+    "preserve_verbatim: 남긴 region, form.repeatable_roles 밖의 region, form, core_message는 모두 주어진 그대로 옮긴다. 다시 쓰거나 다듬거나 합치거나 순서를 바꾸지 않는다.",
+    "refill_only_when_short: 뺀 뒤 어떤 role의 region이 그 role의 min보다 적게 남을 때만 그 role의 새 region을 더하고, min에 이르는 데 필요한 만큼만 정확히 더한다. min 이상 남으면 아무것도 더하지 않는다.",
+    "refill_source: 새 region은 inputs.outline의 어떤 region(남긴 것이든 뺀 것이든)도 다루지 않은 inputs.focus_points 항목을 다룬다. 그런 항목이 남아 있지 않으면 core_message를 전하는 가까운 관련 요점을 다룬다. 새 region 자체도 review_criteria 어느 것에도 해당하지 않아야 한다.",
+    "refill_position: 새 region은 같은 role의 남긴 region 사이에서 논리 흐름에 맞는 자리에 넣는다.",
+    "new_region_rules: 새 region은 뼈대 단계가 쓰듯이 쓴다: form.regions에서 그 role의 guidance가 요구하는 것을 말하고, key_sentence는 정확히 한 문장, 각 칸은 그 role의 sentences 범위 안, takeaway는 10어절 이하의 명사구로 쓰며, form.rules의 모든 항목을 따른다.",
+    "no_instruction_terms: 프로젝트 규모, 독자 수준, 이 지시문의 표현(예: '토이 프로젝트', '학부', '딜레마', 'key_sentence')을 출력 글에 쓰지 않는다.",
+    "no_meta_commentary: 글의 목적을 설명하는 문장을 쓰지 않는다(예: '이 글에서는 …을 살펴봅니다', '…을 알아보겠습니다')."
   ],
   "expected_output_schema": {
     "type": "object",
     "properties": {
       "outline": {
         "type": "object",
-        "description": "Revised outline with exactly the same keys and structure as inputs.outline; each role appears at least its min times"
+        "description": "inputs.outline과 키와 구조가 정확히 같은 수정된 뼈대. 각 role은 min 번 이상 나온다"
       },
       "review_log": {
         "type": "array",
-        "description": "One entry per removed or added region; empty array if nothing changed",
+        "description": "뺀 region이나 더한 region 하나에 항목 하나. 바뀐 것이 없으면 빈 배열",
         "items": {
           "type": "object",
           "properties": {
-            "action": { "type": "string", "enum": ["removed", "added"] },
-            "heading": { "type": "string", "description": "heading of the removed or added region" },
+            "action": {
+              "type": "string",
+              "enum": [
+                "removed",
+                "added"
+              ]
+            },
+            "heading": {
+              "type": "string",
+              "description": "뺀 region이나 더한 region의 heading"
+            },
             "reason": {
               "type": "string",
-              "description": "One English sentence. For removed: which review_criteria applied and why. For added: which gap it fills."
+              "description": "한국어 한 문장. removed면 어떤 review_criteria에 해당했고 왜인지, added면 어떤 빈자리를 채우는지 쓴다."
             }
           },
-          "required": ["action", "heading", "reason"]
+          "required": [
+            "action",
+            "heading",
+            "reason"
+          ]
         }
       }
     },
-    "required": ["outline", "review_log"]
+    "required": [
+      "outline",
+      "review_log"
+    ]
   }
 }

@@ -1,22 +1,25 @@
 {
-  "label": "Procedure and flow",
-  "use_when": "The subject is a process that runs in stages over time, such as a request lifecycle, a startup sequence, a commit protocol, or a compilation pipeline, and the reader wants to follow what happens at each stage.",
-  "topic": "The process itself, named as one noun phrase that says what runs and in which system. Not a question, not a symptom, and not a how-to.",
-  "thesis": "One declarative sentence claiming what the order or the division of the stages guarantees or makes possible: a claim a competent engineer would want justified. A list of the stages is not a thesis.",
-  "focus_points": "Three or more items, one per stage, in the order the stages run. Each item names the stage and what it is responsible for.",
-  "overview_header": ["Stage", "Takeaway"],
+  "label": "절차와 흐름",
+  "use_when": "대상이 시간에 따라 단계별로 진행되는 과정이고(요청 생명 주기, 기동 순서, 커밋 프로토콜, 컴파일 파이프라인 등), 독자가 단계마다 무슨 일이 일어나는지 따라가고 싶어 할 때.",
+  "topic": "과정 자체를 명사구 하나로 쓴다: 무엇이 어느 시스템에서 진행되는지를 가리킨다. 질문도 증상도 사용법 안내도 아니다.",
+  "thesis": "단계의 순서나 단계를 나눈 방식이 무엇을 보장하거나 가능하게 하는지를 주장하는 평서문 한 문장. 실력 있는 엔지니어가 근거를 요구할 만한 주장이어야 한다. 단계의 나열은 논제가 아니다.",
+  "focus_points": "3개 이상. 단계 하나에 항목 하나, 단계가 진행되는 순서대로 쓴다. 각 항목은 단계의 이름과 그 단계가 맡는 일을 가리킨다.",
+  "overview_header": [
+    "단계",
+    "요점"
+  ],
   "outline_rules": [
-    "no_invented_problem: Do not invent a failure, incident, or problem scenario to motivate the subject. The article explains the process itself.",
-    "stage_boundaries: Each step region covers one stage. Consecutive step regions must connect: what one stage hands on is what the next one receives.",
-    "one_running_example: Choose one concrete input (a single request, one transaction, one source file) and follow it through every step region's example."
+    "no_invented_problem: 대상을 꺼내려고 장애, 사고, 문제 상황을 지어내지 않는다. 글은 과정 자체를 설명한다.",
+    "stage_boundaries: step region 하나는 단계 하나를 다룬다. 이웃한 step region은 이어져야 한다: 한 단계가 넘기는 것이 다음 단계가 받는 것이다.",
+    "one_running_example: 구체적인 입력 하나(요청 하나, 트랜잭션 하나, 소스 파일 하나)를 고르고, 모든 step region의 example에서 그 입력을 따라간다."
   ],
   "review_rules": [
-    "weak_relevance: Remove a step region if the process reads the same without it, i.e., what the previous stage hands on is exactly what the next stage receives."
+    "weak_relevance: 그 region이 없어도 과정이 똑같이 읽히면, 즉 앞 단계가 넘기는 것이 다음 단계가 받는 것과 정확히 같으면 그 step region을 뺀다."
   ],
   "write_rules": [
-    "no_invented_problem: Do not open with or build toward a failure story. Motivate the article by what the reader will be able to trace after reading it.",
-    "one_running_example: Follow the same concrete input through every stage instead of starting a new example in each section.",
-    "handoffs: Begin each step section from what the previous stage handed on, so the reader never loses the thread between stages."
+    "no_invented_problem: 장애 이야기로 시작하거나 장애 이야기로 끌고 가지 않는다. 글을 읽고 나면 독자가 무엇을 추적할 수 있게 되는지로 글의 동기를 세운다.",
+    "one_running_example: 섹션마다 새 예시를 꺼내지 않고, 고른 입력 하나를 모든 단계에 걸쳐 따라간다.",
+    "handoffs: 각 step 섹션은 앞 단계가 넘긴 것에서 시작해, 독자가 단계 사이에서 흐름을 놓치지 않게 한다."
   ],
   "regions": [
     {
@@ -26,9 +29,14 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "sentences": { "elaboration": [2, 4] },
-      "outline": "key_sentence defines the process in one sentence: what goes in and what comes out. elaboration names the stages in order and the point of view the article takes (core_message).",
-      "write": "Open with two or three sentences that define the process and state the article's point of view (core_message). Then name the stages in order, introduce the running input, and end with the question the rest of the article answers."
+      "sentences": {
+        "elaboration": [
+          2,
+          4
+        ]
+      },
+      "outline": "key_sentence는 과정을 한 문장으로 정의한다: 무엇이 들어가고 무엇이 나오는지. elaboration은 단계들의 이름을 순서대로 들고, 글이 취하는 관점(core_message)을 말한다.",
+      "write": "과정을 정의하고 글의 관점(core_message)을 말하는 두세 문장으로 시작한다. 이어서 단계들의 이름을 순서대로 들고, 고른 입력을 처음 보여 주고, 글의 나머지가 답하는 질문으로 끝낸다."
     },
     {
       "role": "step",
@@ -37,9 +45,14 @@
       "max": null,
       "focus": true,
       "example": true,
-      "sentences": { "elaboration": [2, 5] },
-      "outline": "One stage of the process. heading names the stage. key_sentence states what this stage is responsible for. elaboration states what it receives, what it does, and what it hands on. example shows the running input at this stage.",
-      "write": "Say what the stage receives, what it does to it, and what it hands on, showing the running input with code, a log excerpt, or a text diagram. Explain why this work happens at this point in the order where the order matters."
+      "sentences": {
+        "elaboration": [
+          2,
+          5
+        ]
+      },
+      "outline": "과정의 한 단계. heading은 그 단계의 이름을 가리킨다. key_sentence는 이 단계가 맡는 일을 말한다. elaboration은 이 단계가 무엇을 받고, 무엇을 하고, 무엇을 넘기는지 말한다. example은 이 단계에서 고른 입력의 모습을 보여 준다.",
+      "write": "이 단계가 무엇을 받고, 그것에 무엇을 하고, 무엇을 넘기는지 말하며, 고른 입력을 코드, 로그 발췌, 텍스트 다이어그램으로 보여 준다. 순서가 중요한 곳에서는 이 일이 왜 순서상 이 지점에서 일어나는지 설명한다."
     },
     {
       "role": "synthesis",
@@ -48,9 +61,14 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "sentences": { "elaboration": [1, 3] },
-      "outline": "The whole flow. key_sentence restates core_message in light of the stages. elaboration says what the order of the stages guarantees from end to end.",
-      "write": "Trace the running input once more from the first stage to the last in a few sentences, and restate core_message in that light. Close with a short list of questions the reader should now be able to answer. Add no new claim. The heading names what the order of the stages guarantees, not 'Conclusion' alone."
+      "sentences": {
+        "elaboration": [
+          1,
+          3
+        ]
+      },
+      "outline": "흐름 전체. key_sentence는 단계들에 비추어 core_message를 다시 말한다. elaboration은 단계의 순서가 처음부터 끝까지 무엇을 보장하는지 말한다.",
+      "write": "고른 입력을 첫 단계부터 마지막 단계까지 몇 문장으로 다시 한번 따라가고, 그에 비추어 core_message를 다시 말한다. 독자가 이제 답할 수 있어야 하는 질문들의 짧은 목록으로 마무리한다. 새 주장을 더하지 않는다. 제목은 '결론'만으로 짓지 않고, 단계의 순서가 보장하는 것을 가리킨다."
     }
   ]
 }

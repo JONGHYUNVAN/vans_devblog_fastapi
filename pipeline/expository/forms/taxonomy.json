@@ -1,24 +1,27 @@
 {
-  "label": "Classification and types",
-  "use_when": "The subject is a family with several kinds, such as isolation levels, index types, garbage collectors, or caching directives, and the reader wants to know which kinds exist and what sets each one apart.",
-  "topic": "The family itself, named as one noun phrase: the set of kinds the article classifies. Not a question and not a recommendation of one kind.",
-  "thesis": "One declarative sentence claiming that a single criterion explains how the kinds differ: a claim a competent engineer would want justified. 'There are N kinds' is not a thesis.",
-  "focus_points": "Three or more items: first the classification criterion, then one item per kind (two or more kinds). Each kind item names the kind and its defining trait under that criterion.",
-  "overview_header": ["Type", "Takeaway"],
+  "label": "분류와 유형",
+  "use_when": "대상이 여러 종류로 이루어진 묶음이고(격리 수준, 인덱스 유형, 가비지 컬렉터, 캐시 지시자 등), 독자가 어떤 종류가 있고 각각이 무엇으로 구별되는지 알고 싶어 할 때.",
+  "topic": "묶음 자체를 명사구 하나로 쓴다: 글이 분류하는 종류들의 집합을 가리킨다. 질문이 아니고, 한 종류를 권하는 말도 아니다.",
+  "thesis": "하나의 기준이 종류들의 차이를 설명한다고 주장하는 평서문 한 문장. 실력 있는 엔지니어가 근거를 요구할 만한 주장이어야 한다. '종류가 N개 있다'는 논제가 아니다.",
+  "focus_points": "3개 이상: 먼저 분류 기준, 그다음 종류 하나에 항목 하나(종류는 2개 이상). 종류 항목은 그 종류의 이름과, 그 기준에서 그 종류를 규정하는 특징을 가리킨다.",
+  "overview_header": [
+    "유형",
+    "요점"
+  ],
   "outline_rules": [
-    "no_invented_problem: Do not invent a failure, incident, or problem scenario to motivate the subject. The article explains the family itself.",
-    "same_axis: Describe every type on the criterion from the criteria region, with the same points in the same order, so that the types can be read side by side.",
-    "no_ranking: Do not rank the types or recommend one. State what each type is and the condition under which its defining trait applies.",
-    "one_running_example: Choose one concrete case (one query, one request, one workload) and show how each type treats it in that region's example."
+    "no_invented_problem: 대상을 꺼내려고 장애, 사고, 문제 상황을 지어내지 않는다. 글은 묶음 자체를 설명한다.",
+    "same_axis: 모든 유형을 criteria region의 기준 위에서 같은 요점을 같은 순서로 설명해, 유형들을 나란히 놓고 읽을 수 있게 한다.",
+    "no_ranking: 유형들의 우열을 매기거나 하나를 권하지 않는다. 각 유형이 무엇인지와, 그 유형을 규정하는 특징이 적용되는 조건을 말한다.",
+    "one_running_example: 구체적인 경우 하나(쿼리 하나, 요청 하나, 작업 부하 하나)를 고르고, 각 region의 example에서 각 유형이 그 경우를 어떻게 다루는지 보여 준다."
   ],
   "review_rules": [
-    "weak_relevance: Remove a type region if the criterion does not set it apart from another type, i.e., it would get the same description as a type already covered."
+    "weak_relevance: 기준이 그 type region을 다른 유형과 구별하지 못하면, 즉 이미 다룬 유형과 같은 설명을 받게 되면 그 region을 뺀다."
   ],
   "write_rules": [
-    "no_invented_problem: Do not open with or build toward a failure story. Motivate the article by what the reader will be able to tell apart after reading it.",
-    "same_axis: Give every type section the same internal order of points, so a reader can compare them without rereading.",
-    "no_ranking: Do not rank the types, list pros and cons, or recommend one. Say what each type is and when its defining trait applies.",
-    "one_running_example: Show the same concrete case under each type instead of a different example per section."
+    "no_invented_problem: 장애 이야기로 시작하거나 장애 이야기로 끌고 가지 않는다. 글을 읽고 나면 독자가 무엇을 구별할 수 있게 되는지로 글의 동기를 세운다.",
+    "same_axis: 모든 type 섹션 안의 요점 순서를 같게 해, 독자가 다시 읽지 않고도 비교할 수 있게 한다.",
+    "no_ranking: 유형들의 우열을 매기거나, 장단점을 나열하거나, 하나를 권하지 않는다. 각 유형이 무엇이고 그 유형을 규정하는 특징이 언제 적용되는지 말한다.",
+    "one_running_example: 섹션마다 다른 예시를 쓰지 않고, 고른 경우 하나를 각 유형 아래에서 보여 준다."
   ],
   "regions": [
     {
@@ -28,9 +31,14 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "sentences": { "elaboration": [2, 4] },
-      "outline": "key_sentence defines the family in one sentence: what its members have in common and what they are for. elaboration names the types the article covers and the point of view it takes (core_message).",
-      "write": "Open with two or three sentences that define the family and state the article's point of view (core_message). Then name the types in the order they are covered, introduce the running case, and end with the question the rest of the article answers."
+      "sentences": {
+        "elaboration": [
+          2,
+          4
+        ]
+      },
+      "outline": "key_sentence는 묶음을 한 문장으로 정의한다: 구성원들의 공통점과 쓰임새. elaboration은 글이 다루는 유형들의 이름과 글이 취하는 관점(core_message)을 말한다.",
+      "write": "묶음을 정의하고 글의 관점(core_message)을 말하는 두세 문장으로 시작한다. 이어서 다룰 순서대로 유형들의 이름을 들고, 고른 경우를 처음 보여 주고, 글의 나머지가 답하는 질문으로 끝낸다."
     },
     {
       "role": "criteria",
@@ -39,9 +47,14 @@
       "max": 1,
       "focus": true,
       "example": true,
-      "sentences": { "elaboration": [2, 5] },
-      "outline": "The criterion that divides the family. key_sentence states the criterion. elaboration explains what it measures and why it, rather than a surface difference, is what separates the types. example shows the running case and the question the criterion asks of it.",
-      "write": "Explain the criterion and what it measures before any type is described, and show the running case the later sections will reuse."
+      "sentences": {
+        "elaboration": [
+          2,
+          5
+        ]
+      },
+      "outline": "묶음을 나누는 기준. key_sentence는 기준을 말한다. elaboration은 그 기준이 무엇을 재는지, 그리고 겉보기 차이가 아니라 왜 그 기준이 유형들을 가르는지 설명한다. example은 고른 경우와, 기준이 그 경우에 던지는 질문을 보여 준다.",
+      "write": "어느 유형을 설명하기 전에 기준과 그것이 재는 것을 설명하고, 이후 섹션들이 다시 쓸 고른 경우를 보여 준다."
     },
     {
       "role": "type",
@@ -50,9 +63,14 @@
       "max": null,
       "focus": true,
       "example": true,
-      "sentences": { "elaboration": [2, 5] },
-      "outline": "One type. heading names the type. key_sentence states its defining trait under the criterion. elaboration gives how it behaves and the condition under which that trait applies. example shows how this type treats the running case.",
-      "write": "State the type's defining trait under the criterion, explain how it behaves, and show the running case under this type with code, a trace, or a text diagram."
+      "sentences": {
+        "elaboration": [
+          2,
+          5
+        ]
+      },
+      "outline": "유형 하나. heading은 그 유형의 이름을 가리킨다. key_sentence는 기준에서 본 그 유형의 규정적 특징을 말한다. elaboration은 그 유형이 어떻게 동작하는지와 그 특징이 적용되는 조건을 말한다. example은 이 유형이 고른 경우를 어떻게 다루는지 보여 준다.",
+      "write": "기준에서 본 유형의 규정적 특징을 말하고, 어떻게 동작하는지 설명하고, 이 유형 아래에서 고른 경우를 코드, 실행 추적, 텍스트 다이어그램으로 보여 준다."
     },
     {
       "role": "synthesis",
@@ -61,9 +79,14 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "sentences": { "elaboration": [1, 3] },
-      "outline": "The whole family. key_sentence restates core_message in light of the types. elaboration says how the criterion orders the types relative to one another.",
-      "write": "Place the types side by side on the criterion in a few sentences and restate core_message in that light. Close with a short list of questions the reader should now be able to answer. Add no new claim. The heading names what the criterion explains, not 'Conclusion' alone."
+      "sentences": {
+        "elaboration": [
+          1,
+          3
+        ]
+      },
+      "outline": "묶음 전체. key_sentence는 유형들에 비추어 core_message를 다시 말한다. elaboration은 기준이 유형들을 서로에 대해 어떻게 늘어세우는지 말한다.",
+      "write": "몇 문장으로 유형들을 기준 위에 나란히 놓고, 그에 비추어 core_message를 다시 말한다. 독자가 이제 답할 수 있어야 하는 질문들의 짧은 목록으로 마무리한다. 새 주장을 더하지 않는다. 제목은 '결론'만으로 짓지 않고, 기준이 설명하는 것을 가리킨다."
     }
   ]
 }

@@ -1,10 +1,10 @@
 {
   "system_config": {
-    "role": "Technical Blog Outline Structuring Engine",
-    "scenario_scale": "Toy projects and undergraduate-level applications (Exclude everything listed in inputs.out_of_scope and enterprise over-engineering)",
-    "technical_depth": "Advanced CS undergraduate level (Focus on what inputs.focus_points lists)"
+    "role": "기술 블로그 뼈대 설계 엔진",
+    "scenario_scale": "토이 프로젝트와 학부 수준의 애플리케이션 (inputs.out_of_scope의 항목과 엔터프라이즈식 과잉 설계는 제외한다)",
+    "technical_depth": "컴퓨터공학 학부 고학년 수준 (inputs.focus_points가 적은 내용에 집중한다)"
   },
-  "task": "Design the outline of an expository article that carries inputs.core_argument. The outline is a sequence of regions. form states which regions this article has, in which order and number, and what each one must say.",
+  "task": "inputs.core_argument를 주장하는 설명문의 뼈대를 설계한다. 뼈대는 region의 나열이다. 이 글에 어떤 region이 어떤 순서로 몇 개 오고 각각 무엇을 말해야 하는지는 form이 정한다.",
   "inputs": {
     "topic": "{{topic}}",
     "core_argument": "{{core_argument}}",
@@ -13,54 +13,84 @@
   },
   "form": "{{form}}",
   "region_shape": [
-    "role: The role of the region, copied from form.regions.",
-    "heading: A specific noun phrase naming what the region covers. It becomes the section heading.",
-    "key_sentence: Exactly one declarative sentence stating the region's point. The section will open with it.",
-    "elaboration: The explanation that supports the key sentence, written as the claims themselves and not as a plan of what to write.",
-    "example: One concrete example, scenario, or code path that makes the key sentence visible. An empty string when the role's example is false.",
-    "takeaway: A single English noun phrase of at most 10 words. An empty string when the role's focus is false."
+    "role: region의 역할. form.regions의 role을 그대로 옮긴다.",
+    "heading: 이 region이 다루는 것을 가리키는 구체적인 명사구. 섹션 제목이 된다.",
+    "key_sentence: 이 region의 요점을 말하는 평서문 정확히 한 문장. 섹션의 첫 문장이 된다.",
+    "elaboration: key_sentence를 뒷받침하는 설명. 무엇을 쓸지에 대한 계획이 아니라 주장 자체를 쓴다.",
+    "example: key_sentence가 눈에 보이게 하는 구체적인 예시·상황·코드 경로 하나. 역할의 example이 false면 빈 문자열.",
+    "takeaway: 10어절 이하의 한국어 명사구 하나. 역할의 focus가 false면 빈 문자열."
   ],
   "constraints": [
-    "output_language: Write every string value in English, except core_message, which is copied verbatim from inputs.core_argument.",
-    "core_message: Copy the exact string from inputs.core_argument 100% verbatim without any modification or translation.",
-    "form_id: Copy form.id into the form field of the output.",
-    "region_order: Output the regions in the order of form.regions. Write each role at least min and at most max times (max null means no upper limit), and keep regions of the same role next to each other.",
-    "region_guidance: Each region says what the guidance of its role in form.regions asks for, and nothing that belongs to another role.",
-    "focus_regions: Roles whose focus is true are the body of the article. Write exactly one focus region per item of inputs.focus_points, in the same order.",
-    "sentence_counts: Where a role gives sentences for a slot, write that slot with a number of sentences inside the given [min, max] range.",
-    "form_rules: Follow every item of form.rules.",
-    "no_first_person: Strictly forbid first-person anecdotes (e.g., 'When I built...').",
-    "no_instruction_terms: Use scenario_scale and technical_depth only to calibrate depth. Never write the project scale, audience level, or wording from these instructions (e.g., 'toy project', 'undergraduate', 'dilemma', 'key_sentence') into output text.",
-    "no_meta_commentary: Strictly forbid meta-statements explaining the purpose of the article (e.g., 'This article explores...', 'Let's take a look at...')."
+    "output_language: 모든 문자열 값은 한국어로 쓴다. 문장은 합쇼체(~합니다)로 쓰고 마침표로 끝낸다. form, role, 그리고 API·클래스·어노테이션·설정 이름 같은 식별자는 한국어로 옮기지 않는다. 영어 단어나 식별자 뒤에 오는 조사는 띄우지 않고 붙여 쓴다.",
+    "core_message: inputs.core_argument의 문자열을 한 글자도 바꾸지 않고 그대로 옮긴다.",
+    "form_id: form.id를 출력의 form 필드에 그대로 옮긴다.",
+    "region_order: region은 form.regions의 순서대로 낸다. 각 role은 min 번 이상 max 번 이하로 쓰고(max가 null이면 상한 없음), 같은 role의 region은 붙여 둔다.",
+    "region_guidance: 각 region은 form.regions에서 그 role의 guidance가 요구하는 것을 말하고, 다른 role에 속하는 내용은 말하지 않는다.",
+    "focus_regions: focus가 true인 role이 글의 본론이다. inputs.focus_points의 항목 하나마다 본론 region을 정확히 하나씩, 같은 순서로 쓴다.",
+    "sentence_counts: role이 어떤 칸의 sentences를 주면, 그 칸은 주어진 [min, max] 범위 안의 문장 수로 쓴다.",
+    "form_rules: form.rules의 모든 항목을 따른다.",
+    "terminology: API·클래스·어노테이션·설정 이름은 공식 문서의 표기 그대로 쓴다. 일반 개념어는 한국 개발자들이 통용하는 한국어 용어를 쓰고, 통용 용어가 없는 말을 임의로 음차하지 않는다.",
+    "no_first_person: 1인칭 경험담을 쓰지 않는다(예: '제가 …을 만들 때').",
+    "no_instruction_terms: scenario_scale과 technical_depth는 깊이를 맞추는 데만 쓴다. 프로젝트 규모, 독자 수준, 이 지시문의 표현(예: '토이 프로젝트', '학부', 'key_sentence')을 출력 글에 쓰지 않는다.",
+    "no_meta_commentary: 글의 목적을 설명하는 문장을 쓰지 않는다(예: '이 글에서는 …을 살펴봅니다', '…을 알아보겠습니다')."
   ],
   "expected_output_schema": {
     "type": "object",
     "properties": {
       "form": {
         "type": "string",
-        "description": "Exact copy of form.id"
+        "description": "form.id를 그대로 옮긴 값"
       },
       "core_message": {
         "type": "string",
-        "description": "Exact verbatim copy of inputs.core_argument"
+        "description": "inputs.core_argument를 한 글자도 바꾸지 않고 옮긴 값"
       },
       "regions": {
         "type": "array",
-        "description": "The regions of the article in the order and number form.regions gives",
+        "description": "form.regions가 정한 순서와 개수의 region 들",
         "items": {
           "type": "object",
           "properties": {
-            "role": { "type": "string", "description": "One role of form.regions" },
-            "heading": { "type": "string", "description": "Specific noun phrase; becomes the section heading" },
-            "key_sentence": { "type": "string", "description": "Exactly one declarative sentence" },
-            "elaboration": { "type": "string", "description": "Supporting explanation, as the role's guidance asks" },
-            "example": { "type": "string", "description": "Concrete example; empty string when the role's example is false" },
-            "takeaway": { "type": "string", "description": "Noun phrase, max 10 words; empty string when the role's focus is false" }
+            "role": {
+              "type": "string",
+              "description": "form.regions의 role 하나"
+            },
+            "heading": {
+              "type": "string",
+              "description": "구체적인 명사구. 섹션 제목이 된다"
+            },
+            "key_sentence": {
+              "type": "string",
+              "description": "평서문 정확히 한 문장"
+            },
+            "elaboration": {
+              "type": "string",
+              "description": "role의 guidance가 요구하는 뒷받침 설명"
+            },
+            "example": {
+              "type": "string",
+              "description": "구체적인 예시. 역할의 example이 false면 빈 문자열"
+            },
+            "takeaway": {
+              "type": "string",
+              "description": "명사구, 10어절 이하. 역할의 focus가 false면 빈 문자열"
+            }
           },
-          "required": ["role", "heading", "key_sentence", "elaboration", "example", "takeaway"]
+          "required": [
+            "role",
+            "heading",
+            "key_sentence",
+            "elaboration",
+            "example",
+            "takeaway"
+          ]
         }
       }
     },
-    "required": ["form", "core_message", "regions"]
+    "required": [
+      "form",
+      "core_message",
+      "regions"
+    ]
   }
 }

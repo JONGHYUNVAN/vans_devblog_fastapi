@@ -1,20 +1,23 @@
 {
-  "label": "Diagnosis of a failure",
-  "use_when": "The subject is a concrete behavior or failure a developer runs into, such as an annotation that silently does nothing or a query that locks more rows than expected. The article explains why it happens through internal mechanisms and then gives the design decision that prevents it.",
-  "topic": "The behavior or failure the article explains, phrased the way a developer would search for it.",
-  "thesis": "One arguable declarative sentence stating the design decision that prevents or resolves the problem. A competent engineer could reasonably argue for a different choice. A plain fact (e.g., 'the server returns 403') is not a thesis.",
-  "focus_points": "Three or more internal mechanisms, one per cause section. Each explains a different part of why the problem occurs, and no two rely on the same underlying principle.",
-  "overview_header": ["Mechanism", "Takeaway"],
+  "label": "장애 진단",
+  "use_when": "대상이 개발자가 겪는 구체적인 동작이나 장애일 때(조용히 아무 일도 하지 않는 어노테이션, 예상보다 많은 행을 잠그는 쿼리 등). 글은 내부 동작 원리로 왜 그런 일이 일어나는지 설명한 다음, 그것을 막는 설계 결정을 제시한다.",
+  "topic": "글이 설명하는 동작이나 장애. 개발자가 검색할 때 쓸 법한 표현으로 쓴다.",
+  "thesis": "문제를 막거나 해결하는 설계 결정을 말하는, 반박할 수 있는 평서문 한 문장. 실력 있는 엔지니어라면 다른 선택을 주장할 수도 있어야 한다. 단순한 사실(예: '서버는 403을 반환합니다')은 논제가 아니다.",
+  "focus_points": "내부 동작 원리 3개 이상. 원인 섹션 하나에 항목 하나. 각 항목은 문제가 일어나는 이유의 서로 다른 부분을 설명하고, 어느 둘도 같은 원리에 기대지 않는다.",
+  "overview_header": [
+    "원인",
+    "요점"
+  ],
   "outline_rules": [
-    "argument_placement: cause regions explain why the problem in the problem region occurs. Do NOT state the solution of core_message there; state it only in the fix region.",
-    "expository_flow: Do NOT mechanically list 1:1 pros and cons. Explain HOW the mechanisms in inputs.focus_points operate under the hood.",
-    "class_names: Name a framework class or method only if the reader will meet it in logs, stack traces, or while debugging."
+    "argument_placement: cause region은 problem region의 문제가 왜 일어나는지 설명한다. 거기서는 core_message의 해결책을 말하지 않고, 해결책은 fix region에서만 말한다.",
+    "expository_flow: 장단점을 1:1로 기계적으로 나열하지 않는다. inputs.focus_points의 동작 원리가 내부에서 어떻게 작동하는지 설명한다.",
+    "class_names: 프레임워크의 클래스나 메서드 이름은 독자가 로그, 스택 트레이스, 디버깅 중에 마주칠 때만 쓴다."
   ],
   "review_rules": [
-    "weak_relevance: Remove a cause region if deleting it would leave the wrong result in the problem region explained just as well, i.e., its example does not lead to the observed wrong result."
+    "weak_relevance: cause region을 지워도 problem region의 잘못된 결과가 똑같이 잘 설명되면, 즉 그 region의 example이 관찰된 잘못된 결과로 이어지지 않으면 그 region을 뺀다."
   ],
   "write_rules": [
-    "argument_placement: Do not end cause sections with the solution. The cause sections explain why the problem happens; the solution first appears in the application section."
+    "argument_placement: cause 섹션을 해결책으로 끝내지 않는다. cause 섹션은 문제가 왜 일어나는지 설명하고, 해결책은 application 섹션에서 처음 나온다."
   ],
   "regions": [
     {
@@ -24,8 +27,8 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "outline": "A concrete, hypothetical problem situation. key_sentence states the wrong result that is observed. elaboration describes the code path that runs. No first-person anecdotes.",
-      "write": "Open with two or three sentences that state the problem and the article's point of view (core_message). Then develop the problem as a concrete scenario with a short code excerpt, and end with the question the rest of the article answers."
+      "outline": "구체적인 가상의 문제 상황. key_sentence는 관찰되는 잘못된 결과를 말한다. elaboration은 실행되는 코드 경로를 설명한다. 1인칭 일화는 쓰지 않는다.",
+      "write": "문제와 글의 관점(core_message)을 말하는 두세 문장으로 시작한다. 이어서 짧은 코드 발췌와 함께 문제를 구체적인 시나리오로 펼치고, 글의 나머지가 답하는 질문으로 끝낸다."
     },
     {
       "role": "concept",
@@ -34,8 +37,8 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "outline": "key_sentence defines the core concepts named in inputs.topic. elaboration states their structural roles.",
-      "write": "Define each core concept once, in the terms the later sections rely on."
+      "outline": "key_sentence는 inputs.topic에 나온 핵심 개념들을 정의한다. elaboration은 그 개념들의 구조적 역할을 말한다.",
+      "write": "각 핵심 개념을 이후 섹션들이 기대는 용어로 한 번씩 정의한다."
     },
     {
       "role": "cause",
@@ -44,9 +47,18 @@
       "max": null,
       "focus": true,
       "example": true,
-      "sentences": { "elaboration": [1, 1], "example": [1, 1] },
-      "outline": "One internal mechanism from inputs.focus_points. heading names the mechanism. key_sentence is the topic sentence stating how the mechanism works, which the section will develop. elaboration is exactly one concluding sentence stating what necessarily follows from it, independent of the scenario. example is exactly one declarative causal sentence about the problem situation: 'When [A: the code path from the problem region] executes, due to [B: this mechanism], [C: the observed result] occurs.' Do not restate core_message.",
-      "write": "Open with key_sentence as the topic sentence, develop it with supporting sentences and code or a text diagram, and apply it to the intro scenario through example. elaboration is the point the section must have established by its end: work it into the last explanatory paragraph in your own words instead of appending it as a separate closing line."
+      "sentences": {
+        "elaboration": [
+          1,
+          1
+        ],
+        "example": [
+          1,
+          1
+        ]
+      },
+      "outline": "inputs.focus_points의 내부 동작 원리 하나. heading은 그 동작 원리의 이름을 가리킨다. key_sentence는 동작 원리가 어떻게 작동하는지 말하는 주제문이고, 섹션이 이것을 펼친다. elaboration은 시나리오와 무관하게 그 원리에서 반드시 따라 나오는 것을 말하는 맺음 문장 정확히 한 문장이다. example은 문제 상황에 대한 평서형 인과 문장 정확히 한 문장이다: '[A: problem region의 코드 경로]가 실행될 때, [B: 이 동작 원리] 때문에 [C: 관찰된 결과]가 일어납니다.' core_message를 다시 말하지 않는다.",
+      "write": "key_sentence를 주제문으로 삼아 시작하고, 뒷받침 문장과 코드나 텍스트 다이어그램으로 펼치고, example을 통해 도입부 시나리오에 적용한다. elaboration은 섹션이 끝날 때까지 전달되어 있어야 하는 요점이다: 따로 맺는 문장으로 덧붙이지 않고, 마지막 설명 문단에 자기 말로 녹여 넣는다."
     },
     {
       "role": "fix",
@@ -55,8 +67,8 @@
       "max": 1,
       "focus": false,
       "example": true,
-      "outline": "key_sentence states the design decision of core_message. elaboration gives the concrete design (schema, code, or configuration) that puts it into practice. example states how that design resolves the situation in the problem region.",
-      "write": "Develop the design with code that resolves the intro scenario. This is the first place the article presents the solution."
+      "outline": "key_sentence는 core_message의 설계 결정을 말한다. elaboration은 그것을 실행에 옮기는 구체적인 설계(스키마, 코드, 설정)를 준다. example은 그 설계가 problem region의 상황을 어떻게 해결하는지 말한다.",
+      "write": "도입부 시나리오를 해결하는 코드로 설계를 펼친다. 글이 해결책을 처음 내놓는 곳이 여기다."
     },
     {
       "role": "exceptions",
@@ -65,8 +77,8 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "outline": "Cases where core_message does not hold and the opposite choice is acceptable, to prevent dogmatic application. key_sentence names the cases. elaboration gives the condition under which each one applies.",
-      "write": "Develop each exception, giving the condition under which it applies."
+      "outline": "독단적인 적용을 막기 위해, core_message가 성립하지 않고 반대 선택이 받아들여지는 경우들. key_sentence는 그 경우들을 든다. elaboration은 각 경우가 적용되는 조건을 준다.",
+      "write": "각 예외를 펼치고, 그것이 적용되는 조건을 준다."
     },
     {
       "role": "synthesis",
@@ -75,8 +87,8 @@
       "max": 1,
       "focus": false,
       "example": false,
-      "outline": "key_sentence restates core_message in light of the mechanisms. elaboration names what a developer must weigh before applying it.",
-      "write": "Restate core_message in light of the mechanisms, then give a short checklist of questions a developer should ask before applying it. The heading names what the developer must weigh (e.g., 'Conclusion: Where the Transaction Boundary Should Live')."
+      "outline": "key_sentence는 동작 원리들에 비추어 core_message를 다시 말한다. elaboration은 개발자가 그것을 적용하기 전에 따져야 할 것을 든다.",
+      "write": "동작 원리들에 비추어 core_message를 다시 말하고, 개발자가 적용하기 전에 스스로 물어야 할 질문들의 짧은 체크리스트를 준다. 제목은 개발자가 따져야 할 것을 가리킨다."
     }
   ]
 }

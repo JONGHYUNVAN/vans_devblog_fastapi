@@ -75,9 +75,9 @@ from app.services.round import category_options
 
 logger = logging.getLogger(__name__)
 
-# 5단계 영어 본문(코드 제외)의 단어 상한. 첫 실행(2026-11-11)에서 영어 2,794단어 + 표·용어 정리 1,014단어가 한국어 22,945자
-# (코드 7,900자 포함, 영어 1단어 ≈ 한국어 3.9자)가 되어 작성 상한 20,000자를 넘었다. 표를 줄인 것과 합쳐 19,000자 안팎을 겨눈다
-DEFAULT_MAX_WORDS = 2200
+# 5단계 본문(코드 제외)의 어절 상한. 본문을 한국어로 바로 쓰게 되면서(09 문서 D-105) 단위가 영어 단어에서 어절로 바뀌었다.
+# 1800 은 2026-11-17 실제 실행 세 번에 쓴 값이고 표·코드까지 합친 글이 9,509~13,979자였다(게이트 퇴짜 기준은 25,000자)
+DEFAULT_MAX_WORDS = 1800
 LAST_STAGE = len(STAGES)
 RUN_ID_PREFIX = "expository-"  # 실행 id 이자 영수증의 round_id. 라운드 id 와 섞이지 않게 앞에 붙인다
 TOPIC_KEYS = ("topic", "core_argument", "focus_points", "out_of_scope")  # 1단계 결과 중 뼈대 단계에 들어가는 것
