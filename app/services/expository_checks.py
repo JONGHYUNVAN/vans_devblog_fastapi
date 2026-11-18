@@ -37,7 +37,7 @@ _ABBREVIATION = re.compile(r"(?:\be\.g|\bi\.e|\betc|\bvs|\bcf)\.$", re.IGNORECAS
 _HANGUL = re.compile(r"[가-힣]")
 _TABLE_LINE = re.compile(r"^\s*\|")
 _PATH_TOKEN = re.compile(r"[A-Za-z_]+|\d+")
-_NO_LENGTH_LIMIT = 10**9  # 5단계 본문은 어절 수로만 조절한다. 글자 수 상한은 8단계 결과에만 건다
+_NO_LENGTH_LIMIT = 10**9  # 5단계 본문은 어절 수로만 조절한다. 8단계(교정) 결과에도 글자 수 제한을 걸지 않는다 (09 문서 D-109)
 _REQUIRED_SLOTS = ("heading", "key_sentence", "elaboration")  # 어느 역할이든 채운다. example·takeaway 는 역할이 정한다
 
 Form = dict[str, Any]
@@ -258,7 +258,10 @@ def check_summary_glossary(output: dict[str, Any], section_ids: list[str]) -> li
 
 
 def check_translation(output: dict[str, Any], english_markdown: str, parameters: Parameters) -> list[str]:
-    """8단계. 앵커·코드 블록은 영어본과 같고, 기존 게이트의 길이·변환·합쇼체·명령형·코드 주석 검사를 통과해야 한다."""
+    """8단계. 앵커·코드 블록은 영어본과 같고, 기존 게이트의 변환·합쇼체·명령형·코드 주석 검사를 통과해야 한다.
+
+    글자 수는 보지 않는다(D-109). 잘린 출력은 앵커와 코드 블록 줄 수가 달라져 걸린다.
+    """
     errors = _require_strings(output, ("title", "content_markdown"))
     if errors:
         return errors
@@ -277,8 +280,8 @@ def check_translation(output: dict[str, Any], english_markdown: str, parameters:
         )
     sections = [anchor for anchor in source_anchors if not CODE_ANCHOR_PATTERN.match(anchor)]
     gate = ValidationGate(
-        min_chars=parameters.draft_min_chars,
-        max_chars=parameters.draft_reject_chars,
+        min_chars=1,
+        max_chars=_NO_LENGTH_LIMIT,
         min_code_blocks=parameters.min_code_blocks,
         structure=StructureParameters(required_sections=sections, prose_register="polite"),  # 블로그 글은 합쇼체(D-86)
         style=parameters.style,

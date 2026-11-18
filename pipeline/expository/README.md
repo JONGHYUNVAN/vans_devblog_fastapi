@@ -197,7 +197,7 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 5 뒤: 섹션 앵커가 뼈대와 양식에서 나온 순서 그대로다(`diagnosis` 면 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion`). 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
 - 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 실행 문서의 `rejected_patches` 에 남는다.
 - 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 용어에 `definition` 이 있으면 `<!-- sec:glossary -->` 용어 정리 절을 붙인다. 지금 7단계 지시문은 정의를 쓰지 않아 이 절이 붙지 않는다(용어는 용어 사전으로 간다, D-106). 표 문구(`Summary`·`Item`·`Explanation`·`Overview`)는 코드가 영어로 넣고 8단계가 한국어로 옮긴다.
-- 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 7단계 조립본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 길이(`draft_min_chars`~`draft_reject_chars`, 버전의 조절 값)·변환·합쇼체·명령형·코드 주석 검사.
+- 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 7단계 조립본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 변환·합쇼체·명령형·코드 주석 검사. 글자 수는 보지 않는다(D-109).
 - 9 뒤: 요약 150자 이하, "이 글"로 시작하지 않는다.
 
 ## 기존 프로젝트에서 가져온 규칙
