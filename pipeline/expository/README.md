@@ -7,7 +7,7 @@
 ## 정한 것 (2026-11-11)
 
 - 설명문만 쓴다. 주제는 대상 하나이고 A vs B 비교 구조는 쓰지 않는다.
-- 주제부터 본문까지 한국어로 쓴다(2026-11-18, 09 문서 D-105). 지시문도 한국어이고 키·제약 이름·역할·양식 id·열거 값·치환자만 영어다. 8단계는 번역 대신 최종 제목을 짓고 문장을 교정한다(단계 key 는 `8_translate` 그대로다). 처음에는 번역 전 단계를 모두 영어로 진행하고 완성된 글을 한 번 번역했다. 그 지시문은 커밋 `da8f98c` 에 있다.
+- 주제부터 본문까지 한국어로 쓴다(2026-11-18, 09 문서 D-105). 지시문도 한국어이고 키·제약 이름·역할·양식 id·열거 값·치환자만 영어다. 8단계는 번역 대신 최종 제목을 짓고 산문을 문단 단위로 다시 쓴다(D-110. 단계 key 는 `8_translate` 그대로다). 처음에는 번역 전 단계를 모두 영어로 진행하고 완성된 글을 한 번 번역했다. 그 지시문은 커밋 `da8f98c` 에 있다.
 - 글의 목적에 따라 뼈대의 양식이 다르다(2026-11-17, 아래 "글 양식"). 처음의 "문제 → 원인 → 해결" 뼈대는 `diagnosis` 양식으로 남았고, 아래 세 줄은 그 양식의 규칙이다.
 - 원인 region 은 3개 이상이고 상한은 없다. 리뷰가 연관도가 낮거나 중복된 것을 빼고, 3개 미만이 되면 리뷰어가 모자란 만큼 채운다.
 - 원인 region 은 문제의 원인을 설명한다. 논제의 해법은 실무 적용(`application`)에서 처음 나온다.
@@ -153,7 +153,7 @@ python -m cli.expository glossary expository-20261111-120000
 | 5 | `5_write.json` | outline, out_of_scope, max_words + 양식(섹션마다 앵커 id 와 쓰는 법) | 문서: 임시 제목 + 본문 | 아니오 |
 | 6 | `6_article_fact_check.json` | outline, 문서 content_markdown | claims, patches | 예 |
 | 7 | `7_summary_glossary.json` | section_ids, 문서 content_markdown | section_summaries, terms | 아니오 |
-| 8 | `8_translate.json`(제목·교정) | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 최종 제목 + 교정한 본문 | 아니오 |
+| 8 | `8_translate.json`(제목·문단 단위 다시 쓰기) | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 최종 제목 + 다시 쓴 본문 | 아니오 |
 | 9 | `9_summarize.json` | 8의 title, 서론 첫 문단 | summary(메타 설명) | 아니오 |
 
 러너는 `inputs` 의 `{{...}}` 를 문자열로 치환하지 않고 `inputs` 객체를 통째로 바꾼다(배열·객체가 그대로 들어간다). 벤더 구조화 출력은 쓰지 않고 글로 받아 꺼낸다(검색 단계는 구조화 출력과 같이 쓸 수 없다).
@@ -211,7 +211,7 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 용어 정의는 사전체 명사구: 09 문서 D-88, `haiku/glossary.md`
 - 작성(5단계)·교정(8단계)에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1
 - 메타 설명 규칙: v4 `common/summarize.md`(D-95)를 `9_summarize.json` 으로 옮겼다.
-- 단계 모델(`routes.json`): 작성·8단계(제목·교정)는 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성·번역은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다. 첫 실제 실행에서 번역은 32000 에서도 한 번 잘려 한도를 올린 재시도로 끝났다).
+- 단계 모델(`routes.json`): 작성·8단계(제목·문단 단위 다시 쓰기)는 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다). 8단계는 64000 이다: 문단 단위로 다시 쓰게 된 뒤(D-110) 2026-11-18 시험에서 14,001자 글이 32000 으로는 첫 시도가 잘렸고 64000 에서 출력 41,185 토큰으로 끝났다. 64000 은 비스트리밍 호출의 상한이라, 다시 쓴 글이 이보다 길어지면 8단계가 잘림 오류로 멈춘다.
 
 ## 아직 없는 것
 
