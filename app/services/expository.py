@@ -14,9 +14,10 @@ AgentCallService 를 거쳐 영수증(`agent_calls`, kind EXPOSITORY, round_id �
 배치와 무관한 중심 양식이라, 배치나 모델만 바꾼 뒤 이어 하면 끝난 단계를 다시 부르지 않는다.
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from string import Template
 from typing import Any
@@ -59,13 +60,21 @@ from app.models.tiptap import markdown_to_tiptap
 from app.repositories.expository_run import ExpositoryRunRepository
 from app.schemas.expository import ExpositoryResult
 from app.services.agent_calls import AgentCallService
-from app.services.expository_assembly import apply_patches, assemble_article, first_paragraph
+from app.services.expository_assembly import (
+    Block,
+    apply_patches,
+    assemble_article,
+    first_paragraph,
+    join_blocks,
+    split_blocks,
+)
 from app.services.expository_checks import (
     blocking_claims,
     check_article,
     check_article_fact_check,
     check_outline,
     check_outline_fact_check,
+    check_paragraph,
     check_review,
     check_summary,
     check_summary_glossary,
@@ -89,6 +98,7 @@ FACT_CHECK_STAGES = ("4_outline_fact_check", "6_article_fact_check")
 _FACT_CHECK_LENS = "FACT_STRUCTURE"  # 글 끝 표기의 렌즈 라벨(사실·구조). 기존 라운드의 사실 확인 렌즈와 같은 이름이다
 _LANGUAGE = "ko"
 _TOPIC_MAX_CHARS = 200  # Post BE CreatePostDto.topic 상한
+_PARAGRAPH_CONCURRENCY = 6  # 8단계에서 동시에 고치는 문단 수의 상한
 
 Check = Callable[[dict[str, Any]], list[str]]
 
@@ -477,13 +487,44 @@ class ExpositoryPipeline:
         await self._save()
 
     async def _translate(self, stage: Stage) -> None:
-        assembled = self._run.assembled_markdown or ""
-        inputs = {
-            "title": self._output("5_write")["title"],
-            "content_markdown": assembled,
-            "terms": self._output("7_summary_glossary")["terms"],
-        }
-        await self._run_stage(stage, inputs, lambda output: check_translation(output, assembled, self._parameters))
+        """조립된 글의 산문(문단·목록)을 한 덩어리씩 따로 불러 고친다. 제목·앵커·표·코드·인용은 그대로 둔다.
+
+        제목은 5단계 제목이 최종이다. 실행 문서에 남는 프롬프트는 조립본 전체를 paragraph 자리에 넣은 것이라,
+        지시문이나 조립본이 바뀌지 않으면 이 단계를 다시 부르지 않는다.
+        """
+        assembled, topic = self._run.assembled_markdown or "", self._output("1_topic_thesis")["topic"]
+        prompt = render_prompt(self._prompts[stage.key], {"topic": topic, "paragraph": assembled, "section": ""})
+        if stage.key in self._run.stage_outputs and self._run.stage_prompts.get(stage.key) == prompt:
+            return
+        blocks = split_blocks(assembled)
+        sections: dict[str, list[str]] = {}
+        for block in blocks:
+            if block.kind in ("heading", "paragraph", "list"):
+                sections.setdefault(block.section, []).append(block.text)
+        edited = list(blocks)
+        semaphore = asyncio.Semaphore(_PARAGRAPH_CONCURRENCY)
+
+        async def edit(index: int, block: Block) -> None:
+            inputs = {"topic": topic, "paragraph": block.text, "section": "\n\n".join(sections[block.section])}
+            async with semaphore:
+                output = await self._call_until_valid(
+                    stage, inputs, lambda output: check_paragraph(output, block.text, block.kind)
+                )
+            edited[index] = replace(block, text=output["paragraph"].strip())
+
+        # 한 호출이 실패하면 나머지를 취소하고 단계가 실패한다. 실패 계약(LLMRetriesExhaustedError 등)대로 첫 예외를 그대로 낸다
+        try:
+            async with asyncio.TaskGroup() as group:
+                for index, block in enumerate(blocks):
+                    if block.kind in ("paragraph", "list"):
+                        group.create_task(edit(index, block))
+        except ExceptionGroup as failed:
+            raise failed.exceptions[0] from failed
+        output = {"title": self._output("5_write")["title"], "content_markdown": join_blocks(edited)}
+        errors = check_translation(output, assembled, self._parameters)
+        if errors:
+            raise LLMOutputError(f"{stage.key}: 고친 글이 검사에 걸렸다: " + "; ".join(errors))
+        await self._save_stage(stage, output, prompt)
 
     async def _summarize(self, stage: Stage) -> None:
         translated, topic = self._output("8_translate"), self._output("1_topic_thesis")

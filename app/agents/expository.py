@@ -91,7 +91,7 @@ STAGES = (
     Stage(5, "write", document_output=True, form=True),
     Stage(6, "article_fact_check", web_search=True),
     Stage(7, "summary_glossary"),
-    Stage(8, "translate", document_output=True),
+    Stage(8, "translate"),  # 문단 하나씩 JSON 으로 받는다. 결과(title·content_markdown)는 러너가 조립한다
     Stage(9, "summarize"),
 )
 STAGE_KEYS = tuple(stage.key for stage in STAGES)

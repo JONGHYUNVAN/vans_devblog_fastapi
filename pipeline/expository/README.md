@@ -7,7 +7,7 @@
 ## 정한 것 (2026-11-11)
 
 - 설명문만 쓴다. 주제는 대상 하나이고 A vs B 비교 구조는 쓰지 않는다.
-- 주제부터 본문까지 한국어로 쓴다(2026-11-18, 09 문서 D-105). 지시문도 한국어이고 키·제약 이름·역할·양식 id·열거 값·치환자만 영어다. 8단계는 번역 대신 최종 제목을 짓고 산문을 문단 단위로 다시 쓴다(D-110. 단계 key 는 `8_translate` 그대로다). 처음에는 번역 전 단계를 모두 영어로 진행하고 완성된 글을 한 번 번역했다. 그 지시문은 커밋 `da8f98c` 에 있다.
+- 주제부터 본문까지 한국어로 쓴다(2026-11-18, 09 문서 D-105). 지시문도 한국어이고 키·제약 이름·역할·양식 id·열거 값·치환자만 영어다. 8단계는 번역 대신 산문을 문단 하나씩 따로 불러 고친다(D-111. 단계 key 는 `8_translate` 그대로다). 최종 제목은 5단계가 짓는다. 처음에는 번역 전 단계를 모두 영어로 진행하고 완성된 글을 한 번 번역했다. 그 지시문은 커밋 `da8f98c` 에 있다.
 - 글의 목적에 따라 뼈대의 양식이 다르다(2026-11-17, 아래 "글 양식"). 처음의 "문제 → 원인 → 해결" 뼈대는 `diagnosis` 양식으로 남았고, 아래 세 줄은 그 양식의 규칙이다.
 - 원인 region 은 3개 이상이고 상한은 없다. 리뷰가 연관도가 낮거나 중복된 것을 빼고, 3개 미만이 되면 리뷰어가 모자란 만큼 채운다.
 - 원인 region 은 문제의 원인을 설명한다. 논제의 해법은 실무 적용(`application`)에서 처음 나온다.
@@ -150,10 +150,10 @@ python -m cli.expository glossary expository-20261111-120000
 | 2 | `2_outline.json` | 1의 topic, core_argument, focus_points, out_of_scope + 양식 | 뼈대(form, core_message, regions) | 아니오 |
 | 3 | `3_outline_review.json` | 2의 입력 + outline. 여러 번 올 수 있는 본론 역할이 없는 양식(`concept`)은 부르지 않는다 | outline, review_log | 아니오 |
 | 4 | `4_outline_fact_check.json` | topic, outline | outline(고친 것), claims | 예 |
-| 5 | `5_write.json` | outline, out_of_scope, max_words + 양식(섹션마다 앵커 id 와 쓰는 법) | 문서: 임시 제목 + 본문 | 아니오 |
+| 5 | `5_write.json` | outline, out_of_scope, max_words + 양식(섹션마다 앵커 id 와 쓰는 법) | 문서: 최종 제목 + 본문 | 아니오 |
 | 6 | `6_article_fact_check.json` | outline, 문서 content_markdown | claims, patches | 예 |
 | 7 | `7_summary_glossary.json` | section_ids, 문서 content_markdown | section_summaries, terms | 아니오 |
-| 8 | `8_translate.json`(제목·문단 단위 다시 쓰기) | title, terms, 문서 content_markdown(표·용어를 넣은 것) | 문서: 최종 제목 + 다시 쓴 본문 | 아니오 |
+| 8 | `8_translate.json`(문단 고치기. 산문 문단·목록마다 한 번씩 부른다) | topic(1의 주제), paragraph(고칠 문단), section(그 문단이 든 섹션의 제목과 산문) | paragraph(고친 문단). 러너가 5의 제목과 이어 붙인 본문을 결과로 둔다 | 아니오 |
 | 9 | `9_summarize.json` | 8의 title, 서론 첫 문단 | summary(메타 설명) | 아니오 |
 
 러너는 `inputs` 의 `{{...}}` 를 문자열로 치환하지 않고 `inputs` 객체를 통째로 바꾼다(배열·객체가 그대로 들어간다). 벤더 구조화 출력은 쓰지 않고 글로 받아 꺼낸다(검색 단계는 구조화 출력과 같이 쓸 수 없다).
@@ -167,7 +167,7 @@ python -m cli.expository glossary expository-20261111-120000
 | `inputs` | JSON 안에 들어가는 입력 |
 | `documents` | 긴 글 입력(본문). 배치에 따라 JSON 밖으로 나간다. 없어도 된다 |
 | `expected_output_schema` | 출력을 JSON 으로 받는다 |
-| `output_document` | 출력을 문서로 받는다: 첫 줄 `# 제목`, 빈 줄, 본문 마크다운. 5·8단계에만 둔다. 코드가 `title`·`content_markdown` 으로 읽는다 |
+| `output_document` | 출력을 문서로 받는다: 첫 줄 `# 제목`, 빈 줄, 본문 마크다운. 5단계에만 둔다. 코드가 `title`·`content_markdown` 으로 읽는다 |
 
 출력 키는 둘 중 하나만 둔다. 러너가 넘기는 값의 이름은 그대로이고, 어느 값이 `documents` 인지는 프롬프트가 정한다.
 
@@ -194,10 +194,11 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 2 뒤: `core_message == core_argument`, 역할의 순서와 개수가 양식과 같다, 본론 region 수 == focus_points 수, 슬롯 채움(예시·정리 구절은 역할이 쓰는 곳에만), `key_sentence` 한 문장, 양식이 적은 슬롯별 문장 수, `takeaway` 10단어 이하, 지시문 낱말(`toy project`, `undergraduate`, `dilemma`, 밑줄 든 필드 이름)이 없다.
 - 3 뒤: 여러 번 올 수 있는 본론 역할의 region 마다 입력과 글자까지 같거나 review_log 에 `added` 로 있다. 빠진 region 은 `removed` 로 있다. 그 밖의 region 과 core_message 는 입력과 같다. 그 역할의 최소 개수 이상 남았는데 더하지 않았다.
 - 4 뒤: `corrected_text` 가 있는 REFUTED 주장의 location(`regions[2].key_sentence` 꼴)만 바뀌었다. `blocking` 주장이 있으면 멈춘다. `--redo-from 2` 로 뼈대부터 다시 돌린다.
-- 5 뒤: 섹션 앵커가 뼈대와 양식에서 나온 순서 그대로다(`diagnosis` 면 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion`). 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음.
+- 5 뒤: 섹션 앵커가 뼈대와 양식에서 나온 순서 그대로다(`diagnosis` 면 `intro`, `concept`, `mech-1`…`mech-N`, `application`, `exceptions`, `conclusion`). 기존 게이트(`services/validation.py`)의 코드 블록·`code-N` 앵커·언어 태그·변환·코드 주석 검사, 표 없음, 지시문 낱말 없음. 제목 40자 이하, 괄호·콜론 없음(5단계 제목이 최종 제목이다, D-111).
 - 6 뒤(코드): 패치의 `before` 가 그 섹션에 정확히 한 번 나올 때만 바꾸고, 바꾼 본문이 5의 검사에 걸리면 되돌린다. 버린 패치는 실행 문서의 `rejected_patches` 에 남는다.
-- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 Summary: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 Overview**` 표(머리는 양식의 `overview_header`), 용어에 `definition` 이 있으면 `<!-- sec:glossary -->` 용어 정리 절을 붙인다. 지금 7단계 지시문은 정의를 쓰지 않아 이 절이 붙지 않는다(용어는 용어 사전으로 간다, D-106). 표 문구(`Summary`·`Item`·`Explanation`·`Overview`)는 코드가 영어로 넣고 8단계가 한국어로 옮긴다.
-- 8 뒤: 앵커 목록·순서와 코드 블록별 줄 수가 7단계 조립본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 변환·합쇼체·명령형·코드 주석 검사. 글자 수는 보지 않는다(D-109).
+- 7 뒤(코드): 마지막 섹션을 뺀 섹션 끝마다 `**📊 요약: …**` 표, 마지막 섹션 끝에 뼈대 본론 region 의 heading | takeaway 로 `**📊 전체 정리**` 표(머리는 양식의 `overview_header`), 용어에 `definition` 이 있으면 `<!-- sec:glossary -->` 용어 정리 절을 붙인다. 지금 7단계 지시문은 정의를 쓰지 않아 이 절이 붙지 않는다(용어는 용어 사전으로 간다, D-106). 표 문구(요약·항목·설명·전체 정리)는 코드가 한국어로 넣는다(D-111).
+- 8(코드): 조립본을 빈 줄로 덩어리로 나누고(`split_blocks`. 코드 펜스 안의 빈 줄은 나누지 않는다) 산문 문단과 목록만 하나씩 부른다(동시에 6개까지). 제목 줄·앵커·표·코드·인용은 보내지 않고 그대로 둔다. 문단마다 검사한다: 제목·표·코드 펜스·앵커를 만들지 않는다, 원문의 인라인 코드와 괄호 안 영어 원어가 그대로다, 목록은 항목 수가 같다, 문단이 목록으로 바뀌지 않는다. 걸리면 그 문단만 다시 부른다.
+- 8 뒤: 이어 붙인 글의 앵커 목록·순서와 코드 블록별 줄 수가 7단계 조립본과 같다. 제목 40자 이하, 괄호·콜론 없음. 기존 게이트의 변환·합쇼체·명령형·코드 주석 검사. 글자 수는 보지 않는다(D-109). 여기서 걸리면 다시 부르지 않고 단계가 멈춘다(고친 문단은 남지 않는다).
 - 9 뒤: 요약 150자 이하, "이 글"로 시작하지 않는다.
 
 ## 기존 프로젝트에서 가져온 규칙
@@ -205,13 +206,13 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 섹션·코드 앵커, 허용 마크다운, 언어 태그와 `-snippet`, 긴 코드 블록 주석: `app/agents/prompts/v4/claude/write_draft.md`, `app/services/validation.py`
 - 합쇼체: 09 문서 D-86
 - 용어 표기(통용 한국어 용어, 음차 금지, 본문 첫 등장에 영어 원어 괄호): v4 `write_draft.md`·`propose_topic.md`
-- 한국어 제목 규칙(40자): v4 `write_draft.md`. 글 형태별 제목 꼴은 뺐다. 8단계 제목은 글이 설명하는 대상을 가리키는 명사구이고 질문형·괄호·콜론 부제를 쓰지 않는다(2026-11-17, 제목 꼴 목록을 주면 모든 제목이 그 꼴로 나왔다)
+- 한국어 제목 규칙(40자): v4 `write_draft.md`. 글 형태별 제목 꼴은 뺐다. 제목(5단계가 짓는다)은 글이 설명하는 대상을 가리키는 명사구이고 질문형·괄호·콜론 부제를 쓰지 않는다(2026-11-17, 제목 꼴 목록을 주면 모든 제목이 그 꼴로 나왔다)
 - 사실 확인의 주장 종류·판정·"기억으로 판단 금지": v4 `claude/fact_check.md`. 사실 확인 첫 후보는 Gemini 다(D-92). 기존은 검색 호출을 글로 받아 `FACT_TRANSFORM` 으로 JSON 으로 바꾼다. 여기서는 JSON 을 글로 받아 바로 꺼낸다. 꺼내기 실패가 잦으면 기존처럼 변환 단계를 둔다.
 - 긴 자료를 위에, 지시를 끝에 두는 배치(`documents_first`): Anthropic·Gemini 프롬프트 지침. 근거와 확인하지 못한 것은 `.claude/reviews/exchange_format_design_2026-11-17.md` A부 3절.
 - 용어 정의는 사전체 명사구: 09 문서 D-88, `haiku/glossary.md`
-- 작성(5단계)·교정(8단계)에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1
+- 작성(5단계)에서 피할 패턴: 09 문서 D-90 기본 문체 패턴 D-14·D-8·D-10·T-1. 8단계 지시문에는 패턴 목록이 없다: 독자·주제·문체 한 줄만 주고 고칠지는 모델이 문단마다 판단한다(D-111)
 - 메타 설명 규칙: v4 `common/summarize.md`(D-95)를 `9_summarize.json` 으로 옮겼다.
-- 단계 모델(`routes.json`): 작성·8단계(제목·문단 단위 다시 쓰기)는 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다). 8단계는 64000 이다: 문단 단위로 다시 쓰게 된 뒤(D-110) 2026-11-18 시험에서 14,001자 글이 32000 으로는 첫 시도가 잘렸고 64000 에서 출력 41,185 토큰으로 끝났다. 64000 은 비스트리밍 호출의 상한이라, 다시 쓴 글이 이보다 길어지면 8단계가 잘림 오류로 멈춘다.
+- 단계 모델(`routes.json`): 작성·8단계(문단 고치기)는 claude-fable-5-2, 주제·뼈대·뼈대 리뷰는 claude-opus-5-5, 사실 확인은 gemini-4-argon(키가 없으면 claude-opus-5-5), 요약·용어·메타 요약은 claude-haiku-5-5 다. 기존 라운드의 라우트와 별개라 라운드 쪽 모델을 바꿔도 여기에는 반영되지 않는다. 작성은 `max_output_tokens` 32000 이다(기존 24000 은 첫 시도마다 잘렸다). 8단계는 16000 이다: 호출 하나가 문단 하나라 큰 한도가 필요 없다(D-111. 글 전체를 한 번에 다시 쓰던 D-110 때는 64000 이었고 14,001자 글이 41,185 토큰을 썼다). 2026-11-19 확인에서 문단 호출은 한 번에 평균 2천 토큰쯤을 썼다.
 
 ## 아직 없는 것
 

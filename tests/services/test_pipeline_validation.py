@@ -146,7 +146,7 @@ def test_r13_allows_a_document_output_only_where_the_runner_reads_title_and_body
 
     messages = [finding.message for finding in errors_of(validate_version(body)) if finding.rule == "R-13"]
 
-    assert messages == ["prompts.expository.9_summarize: output_document is allowed only in ['5_write', '8_translate']"]
+    assert messages == ["prompts.expository.9_summarize: output_document is allowed only in ['5_write']"]
 
 
 def test_r13_checks_article_forms_and_that_prompts_take_them():

@@ -37,6 +37,11 @@ _ABBREVIATION = re.compile(r"(?:\be\.g|\bi\.e|\betc|\bvs|\bcf)\.$", re.IGNORECAS
 _HANGUL = re.compile(r"[가-힣]")
 _TABLE_LINE = re.compile(r"^\s*\|")
 _PATH_TOKEN = re.compile(r"[A-Za-z_]+|\d+")
+# 8단계 문단 검사(check_paragraph). 문단 하나가 제목·표·코드·앵커를 만들면 조립된 글의 구조가 깨진다
+_NOT_IN_PARAGRAPH = ("#", "|", "```", "~~~", "<!--")
+_INLINE_CODE = re.compile(r"`[^`\n]+`")
+_ENGLISH_GLOSS = re.compile(r"[가-힣]\(([A-Za-z][A-Za-z0-9 .\-]*)\)")
+_LIST_LINE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s")
 _NO_LENGTH_LIMIT = 10**9  # 5단계 본문은 어절 수로만 조절한다. 8단계(교정) 결과에도 글자 수 제한을 걸지 않는다 (09 문서 D-109)
 _REQUIRED_SLOTS = ("heading", "key_sentence", "elaboration")  # 어느 역할이든 채운다. example·takeaway 는 역할이 정한다
 
@@ -195,6 +200,7 @@ def check_article(output: dict[str, Any], sections: list[str]) -> list[str]:
     if errors:
         return errors
     markdown = output["content_markdown"]
+    errors += _check_title(output["title"])  # 5단계 제목이 최종 제목이다. 8단계는 제목을 고치지 않는다
     anchors = [anchor for anchor in find_anchors(markdown) if not CODE_ANCHOR_PATTERN.match(anchor)]
     if anchors != sections:
         errors.append(f"section anchors are {anchors}; they must be exactly {sections} in this order")
@@ -265,11 +271,8 @@ def check_translation(output: dict[str, Any], english_markdown: str, parameters:
     errors = _require_strings(output, ("title", "content_markdown"))
     if errors:
         return errors
-    markdown, title = output["content_markdown"], output["title"]
-    if len(title) > MAX_TITLE_CHARS:
-        errors.append(f"title has {len(title)} characters; keep it within {MAX_TITLE_CHARS}")
-    if any(mark in title for mark in "():"):
-        errors.append("title must not contain parentheses or a colon")
+    markdown = output["content_markdown"]
+    errors += _check_title(output["title"])
     source_anchors = find_anchors(english_markdown)
     if find_anchors(markdown) != source_anchors:
         errors.append(f"anchors changed; keep exactly {source_anchors} in this order")
@@ -288,6 +291,40 @@ def check_translation(output: dict[str, Any], english_markdown: str, parameters:
         code_comments=parameters.code_comments,
     )
     return errors + gate.check_markdown(markdown, None) + gate.check_style(markdown)
+
+
+def check_paragraph(output: dict[str, Any], original: str, kind: str) -> list[str]:
+    """8단계 호출 하나. 고친 문단은 한 덩어리의 산문(paragraph) 또는 목록(list)이고, 원문의 인라인 코드·괄호 영어 원어·목록 항목 수를 지킨다."""
+    paragraph = output.get("paragraph")
+    if not _is_text(paragraph):
+        return ["paragraph must be a non-empty string"]
+    errors: list[str] = []
+    lines = paragraph.strip().split("\n")
+    if any(line.lstrip().startswith(_NOT_IN_PARAGRAPH) for line in lines):
+        errors.append("the paragraph must not contain headings, tables, code fences, or anchor comments")
+    missing = [span for span in dict.fromkeys(_INLINE_CODE.findall(original)) if span not in paragraph]
+    if missing:
+        errors.append(f"inline code {missing} must stay exactly as in the original")
+    glosses = [gloss for gloss in dict.fromkeys(_ENGLISH_GLOSS.findall(original)) if f"({gloss})" not in paragraph]
+    if glosses:
+        errors.append(f"English terms in parentheses {glosses} must stay as in the original")
+    items = sum(1 for line in lines if _LIST_LINE.match(line))
+    if kind == "list":
+        expected = sum(1 for line in original.split("\n") if _LIST_LINE.match(line))
+        if items != expected:
+            errors.append(f"the list has {items} items; keep exactly {expected}")
+    elif items:
+        errors.append("the paragraph must stay a paragraph, not a list")
+    return errors
+
+
+def _check_title(title: str) -> list[str]:
+    errors: list[str] = []
+    if len(title) > MAX_TITLE_CHARS:
+        errors.append(f"title has {len(title)} characters; keep it within {MAX_TITLE_CHARS}")
+    if any(mark in title for mark in "():"):
+        errors.append("title must not contain parentheses or a colon")
+    return errors
 
 
 def check_summary(output: dict[str, Any]) -> list[str]:

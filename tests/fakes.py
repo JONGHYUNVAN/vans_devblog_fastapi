@@ -534,6 +534,32 @@ class FakeLLMClient:
         return self.outcomes.pop(0)
 
 
+class ExpositoryLLMClient(FakeLLMClient):
+    """설명문 8단계의 문단 호출(inputs 에 paragraph·section 이 있다)에는 edit(문단)을 {"paragraph": …} 로 답하고,
+    나머지 호출은 FakeLLMClient 처럼 outcomes 를 순서대로 쓴다. 문단 호출은 동시에 오므로 순서 없는 스크립트가 필요하다.
+    paragraphs 는 받은 문단 원문이다.
+    """
+
+    def __init__(
+        self,
+        outcomes: Iterable[str | LLMResponse | Exception],
+        edit: Callable[[str], str] = lambda paragraph: paragraph,
+    ) -> None:
+        super().__init__(outcomes)
+        self.edit = edit
+        self.paragraphs: list[str] = []
+
+    def _next_outcome(self, messages: list[LLMMessage]) -> str | LLMResponse | Exception:
+        try:
+            inputs = json.loads(messages[1].content).get("inputs", {})
+        except json.JSONDecodeError:
+            inputs = {}
+        if {"paragraph", "section"} <= set(inputs):
+            self.paragraphs.append(inputs["paragraph"])
+            return json.dumps({"paragraph": self.edit(inputs["paragraph"])}, ensure_ascii=False)
+        return super()._next_outcome(messages)
+
+
 # 시스템 프롬프트(v1 템플릿)의 문구로 호출 종류를 가린다. LLMClient 계약에는 종류가 없다 (설계 06 문서 6절).
 _KIND_MARKERS = {
     "주제를 세 개 제안": "PROPOSE_TOPIC",

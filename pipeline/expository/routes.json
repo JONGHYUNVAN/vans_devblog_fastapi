@@ -23,7 +23,7 @@
     { "provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 8000 }
   ],
   "8_translate": [
-    { "provider": "anthropic", "model_id": "claude-fable-5-2", "effort": "high", "max_output_tokens": 64000 }
+    { "provider": "anthropic", "model_id": "claude-fable-5-2", "effort": "high", "max_output_tokens": 16000 }
   ],
   "9_summarize": [
     { "provider": "anthropic", "model_id": "claude-haiku-5-5", "effort": "low", "max_output_tokens": 2000 }

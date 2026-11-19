@@ -27,10 +27,12 @@ from app.repositories.glossary import GlossaryRepository
 from app.repositories.pipeline_version import PipelineVersionRepository
 from app.services.agent_calls import AgentCallService
 from app.services.expository import TOPIC_KEYS, ExpositoryPipeline, RunSeed
+from app.services.expository_assembly import split_blocks
 from app.services.glossary import GlossaryService
 from app.services.pipeline_versions import PipelineVersionService
 from tests.factories import (
     CONCEPT_SECTION_IDS,
+    expository_section_ids,
     glossary_candidate,
     glossary_output,
     make_expository_body,
@@ -46,7 +48,13 @@ from tests.factories import (
     make_pipeline_version,
     new_sense,
 )
-from tests.fakes import FakeAgentCallRepository, FakeAsyncDatabase, FakeLLMClient, FakePostBE
+from tests.fakes import (
+    ExpositoryLLMClient,
+    FakeAgentCallRepository,
+    FakeAsyncDatabase,
+    FakeLLMClient,
+    FakePostBE,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -54,6 +62,7 @@ KOREAN_TITLE = "셀프 호출이 트랜잭션을 건너뛰는 이유"
 
 
 RUN_ID = "expository-test"
+PARAGRAPHS = len(expository_section_ids())  # 8단계가 부르는 수: 글의 섹션마다 문단 하나
 
 
 async def _no_sleep(seconds: float) -> None:
@@ -105,17 +114,16 @@ class Harness:
 def _full_script() -> list[str]:
     topic = make_expository_topic()
     outline = make_expository_outline(topic["core_argument"])
-    patch = {"section_id": "concept", "before": "The concept part", "after": "The concept section", "reason": "r"}
-    # 작성(5)·번역(8)은 "# 제목" + 본문 문서로, 나머지는 JSON 으로 답한다 (D-103)
+    patch = {"section_id": "concept", "before": "concept 절은", "after": "concept 섹션은", "reason": "r"}
+    # 작성(5)은 "# 제목" + 본문 문서로, 나머지는 JSON 으로 답한다 (D-103). 8단계 문단 호출은 ExpositoryLLMClient 가 답한다
     outputs = [
         topic,
         outline,
         {"outline": outline, "review_log": []},
         {"outline": outline, "claims": []},
-        f"# Self-invocation and transactions\n\n{make_expository_english_article()}",
+        f"# {KOREAN_TITLE}\n\n{make_expository_korean_article(glossary=False)}",
         {"claims": [], "patches": [patch]},
         {"section_summaries": make_expository_summaries(), "terms": make_expository_terms()},
-        f"# {KOREAN_TITLE}\n\n{make_expository_korean_article()}",
         {"summary": "같은 객체 안의 호출은 프록시를 거치지 않아 트랜잭션 설정이 적용되지 않습니다."},
     ]
     return [output if isinstance(output, str) else json.dumps(output, ensure_ascii=False) for output in outputs]
@@ -123,7 +131,7 @@ def _full_script() -> list[str]:
 
 async def test_run_completes_every_stage_and_stores_the_article_and_receipts():
     harness = Harness()
-    client = FakeLLMClient(_full_script())
+    client = ExpositoryLLMClient(_full_script(), edit=lambda paragraph: paragraph.replace("설명합니다", "보여 줍니다"))
 
     result = await (await harness.pipeline(client)).run(RUN_ID, RunSeed())
 
@@ -133,21 +141,29 @@ async def test_run_completes_every_stage_and_stores_the_article_and_receipts():
     stored = await harness.runs.get(RUN_ID)
     assert stored is not None and stored.article is not None
     assert stored.article.keywords == ["spring", "transaction", "proxy"]
-    assert "The concept section" in (stored.checked_markdown or "")
-    assert "**📊 Overview**" in (stored.assembled_markdown or "")
-    # 단계마다 영수증 한 건: 실행 id, 단계 key, 프롬프트를 읽은 버전
-    assert [receipt.item_id for receipt in harness.receipts.calls] == list(STAGE_KEYS)
+    assert "concept 섹션은" in (stored.checked_markdown or "")
+    assembled = stored.assembled_markdown or ""
+    assert "**📊 전체 정리**" in assembled and "**📊 요약: Part intro**" in assembled
+    # 8단계는 문단만 하나씩 보내고 고친 문단으로 바꾼다. 제목·앵커·표·코드는 그대로 남는다
+    assert sorted(client.paragraphs) == sorted(
+        block.text for block in split_blocks(assembled) if block.kind in ("paragraph", "list")
+    )
+    assert len(client.paragraphs) == PARAGRAPHS
+    assert stored.article.content_markdown == assembled.replace("설명합니다", "보여 줍니다")
+    # 호출마다 영수증 한 건: 실행 id, 단계 key, 프롬프트를 읽은 버전. 8단계는 문단 수만큼이다
+    stage_calls = [*STAGE_KEYS[:7], *["8_translate"] * PARAGRAPHS, "9_summarize"]
+    assert [receipt.item_id for receipt in harness.receipts.calls] == stage_calls
     assert {(receipt.kind, receipt.round_id, receipt.pipeline_version) for receipt in harness.receipts.calls} == {
         ("EXPOSITORY", RUN_ID, "v1")
     }
     assert harness.receipts.calls[3].model_binding.model_id == "claude-opus-5-5"
     searches = [call.params.web_search for call in client.calls]
-    assert searches == [False, False, False, True, False, True, False, False, False]
+    assert searches == [False, False, False, True, False, True, *[False] * (PARAGRAPHS + 2)]
 
 
 async def test_run_skips_stages_whose_prompt_did_not_change():
     harness = Harness()
-    await (await harness.pipeline(FakeLLMClient(_full_script()))).run(RUN_ID, RunSeed())
+    await (await harness.pipeline(ExpositoryLLMClient(_full_script()))).run(RUN_ID, RunSeed())
     again = FakeLLMClient([])  # 부르면 AssertionError
 
     result = await (await harness.pipeline(again)).run(RUN_ID, RunSeed())
@@ -158,12 +174,12 @@ async def test_run_skips_stages_whose_prompt_did_not_change():
 
 async def test_run_redo_from_calls_that_stage_and_the_ones_after_it_again():
     harness = Harness()
-    await (await harness.pipeline(FakeLLMClient(_full_script()))).run(RUN_ID, RunSeed())
-    again = FakeLLMClient(_full_script()[7:])
+    await (await harness.pipeline(ExpositoryLLMClient(_full_script()))).run(RUN_ID, RunSeed())
+    again = ExpositoryLLMClient(_full_script()[7:])
 
     result = await (await harness.pipeline(again)).run(RUN_ID, RunSeed(), redo_from=8)
 
-    assert len(again.calls) == 2
+    assert len(again.calls) == PARAGRAPHS + 1
     assert result.finished_stages == list(STAGE_KEYS)
 
 
@@ -187,20 +203,21 @@ async def test_run_sends_check_errors_back_and_retries():
 async def test_run_sends_the_article_outside_the_json_when_the_layout_is_documents_first():
     body = make_expository_body(draft_min_chars=10, expository={"layouts": {"default": "documents_first"}})
     harness = Harness(body=body)
-    client = FakeLLMClient(_full_script())
+    client = ExpositoryLLMClient(_full_script())
 
     result = await (await harness.pipeline(client)).run(RUN_ID, RunSeed())
 
     assert result.title == KOREAN_TITLE
     stored = await harness.runs.get(RUN_ID)
     assert stored is not None and stored.assembled_markdown is not None
-    translate = client.calls[7].messages[1].content
-    # 번역 입력 본문이 이스케이프 없이 원문 그대로 지시문 위에 있다
-    assert translate.startswith(f"<documents>\n<content_markdown>\n{stored.assembled_markdown}\n</content_markdown>")
-    instructions = json.loads(translate.split("\n\n<instructions>\n")[1].removesuffix("\n</instructions>"))
+    article = stored.stage_outputs["5_write"]["content_markdown"]
+    fact_check = client.calls[5].messages[1].content
+    # 사실 확인 입력 본문이 이스케이프 없이 원문 그대로 지시문 위에 있다
+    assert fact_check.startswith(f"<documents>\n<content_markdown>\n{article}\n</content_markdown>")
+    instructions = json.loads(fact_check.split("\n\n<instructions>\n")[1].removesuffix("\n</instructions>"))
     assert instructions["documents"] == {"content_markdown": "provided above in <content_markdown>"}
     # 실행 문서에 남는 프롬프트는 배치와 무관한 중심 양식이다. 배치만 바꾼 뒤 이어 해도 이 단계를 다시 부르지 않는다
-    assert json.loads(stored.stage_prompts["8_translate"])["documents"]["content_markdown"] == stored.assembled_markdown
+    assert json.loads(stored.stage_prompts["6_article_fact_check"])["documents"]["content_markdown"] == article
     # 문서 입력이 없는 단계는 배치와 무관하게 JSON 하나다
     assert client.calls[1].messages[1].content == stored.stage_prompts["2_outline"]
 
@@ -374,7 +391,7 @@ CATEGORIES = [
 async def _finished(harness: Harness, topic: dict | None = None) -> None:
     """9단계까지 끝난 실행을 만든다. topic 을 주면 1단계를 건너뛴 실행이다(카테고리·키워드 없음)."""
     script = _full_script() if topic is None else _full_script()[1:]
-    await (await harness.pipeline(FakeLLMClient(script))).run(RUN_ID, RunSeed(topic=topic))
+    await (await harness.pipeline(ExpositoryLLMClient(script))).run(RUN_ID, RunSeed(topic=topic))
 
 
 async def test_publish_posts_the_article_with_the_note_and_records_it_once():
@@ -494,7 +511,7 @@ def _glossary_body() -> PipelineVersionBody:
 
 async def test_run_registers_the_finished_article_terms_with_the_run_as_source():
     harness = Harness(body=_glossary_body())
-    client = FakeLLMClient([*_full_script(), glossary_output(PROXY)])
+    client = ExpositoryLLMClient([*_full_script(), glossary_output(PROXY)])
 
     result = await (await harness.pipeline(client, FakePostBE(categories=CATEGORIES))).run(RUN_ID, RunSeed())
 
@@ -525,7 +542,7 @@ async def test_run_registers_the_finished_article_terms_with_the_run_as_source()
 
 async def test_run_finishes_and_records_why_when_the_glossary_is_skipped():
     failing = Harness(body=_glossary_body())
-    client = FakeLLMClient([*_full_script(), *[LLMTransportError("boom")] * 5])
+    client = ExpositoryLLMClient([*_full_script(), *[LLMTransportError("boom")] * 5])
 
     result = await (await failing.pipeline(client)).run(RUN_ID, RunSeed())
 
@@ -534,19 +551,21 @@ async def test_run_finishes_and_records_why_when_the_glossary_is_skipped():
     assert stored is not None and stored.glossary is not None
     assert stored.glossary.skipped is not None and stored.glossary.skipped.startswith("LLMRetriesExhaustedError")
     # 카테고리 목록이 없으면(Post BE 미설정) 라벨 없이 뽑는다. id 를 보내지 않는다
-    assert '"main_category": ""' in client.calls[9].messages[1].content
+    assert '"main_category": ""' in client.calls[PARAGRAPHS + 8].messages[1].content
 
     no_route = Harness()  # 기본 픽스처의 용어 라우트 후보에는 키가 없다
-    await (await no_route.pipeline(FakeLLMClient(_full_script()))).run(RUN_ID, RunSeed())
+    await (await no_route.pipeline(ExpositoryLLMClient(_full_script()))).run(RUN_ID, RunSeed())
     stored = await no_route.runs.get(RUN_ID)
     assert stored is not None and stored.glossary is not None and stored.glossary.skipped == "no GLOSSARY route"
 
 
 async def test_run_redo_clears_the_glossary_with_the_article():
     harness = Harness(body=_glossary_body())
-    await (await harness.pipeline(FakeLLMClient([*_full_script(), glossary_output(PROXY)]))).run(RUN_ID, RunSeed())
+    await (await harness.pipeline(ExpositoryLLMClient([*_full_script(), glossary_output(PROXY)]))).run(
+        RUN_ID, RunSeed()
+    )
 
-    await (await harness.pipeline(FakeLLMClient(_full_script()[7:8]))).run(RUN_ID, RunSeed(), redo_from=8, stop_after=8)
+    await (await harness.pipeline(ExpositoryLLMClient([]))).run(RUN_ID, RunSeed(), redo_from=8, stop_after=8)
 
     stored = await harness.runs.get(RUN_ID)
     assert stored is not None and (stored.article, stored.glossary) == (None, None)
@@ -554,7 +573,9 @@ async def test_run_redo_clears_the_glossary_with_the_article():
 
 async def test_publish_links_the_glossary_to_the_post_and_approves_the_proposals():
     harness = Harness(body=_glossary_body())
-    await (await harness.pipeline(FakeLLMClient([*_full_script(), glossary_output(PROXY)]))).run(RUN_ID, RunSeed())
+    await (await harness.pipeline(ExpositoryLLMClient([*_full_script(), glossary_output(PROXY)]))).run(
+        RUN_ID, RunSeed()
+    )
 
     await (await harness.pipeline(FakeLLMClient([]), FakePostBE(categories=CATEGORIES))).publish(RUN_ID)
 
@@ -596,7 +617,9 @@ async def test_publish_succeeds_when_linking_the_glossary_fails():
 
 async def test_extract_glossary_reextracts_and_overwrites_the_post_glossary_of_a_published_run():
     harness = Harness(body=_glossary_body())
-    await (await harness.pipeline(FakeLLMClient([*_full_script(), glossary_output(PROXY)]))).run(RUN_ID, RunSeed())
+    await (await harness.pipeline(ExpositoryLLMClient([*_full_script(), glossary_output(PROXY)]))).run(
+        RUN_ID, RunSeed()
+    )
     await (await harness.pipeline(FakeLLMClient([]), FakePostBE(categories=CATEGORIES))).publish(RUN_ID)
 
     summary = await (await harness.pipeline(FakeLLMClient([glossary_output(TRANSACTION)]))).extract_glossary(RUN_ID)

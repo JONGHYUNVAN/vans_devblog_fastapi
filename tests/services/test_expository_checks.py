@@ -8,6 +8,7 @@ from app.services.expository_checks import (
     check_article,
     check_outline,
     check_outline_fact_check,
+    check_paragraph,
     check_review,
     check_summary_glossary,
     check_topic,
@@ -191,6 +192,32 @@ def test_check_article_takes_the_section_order_of_the_form():
     assert check_article(article, CONCEPT_SECTION_IDS) == []
     errors = check_article(article, ["intro", "structure", "rationale", "mechanism", "conclusion"])
     assert any("section anchors are" in error for error in errors)
+
+
+def test_check_article_checks_the_final_title():
+    article = {"title": "셀프 호출: 트랜잭션이 빠지는 이유", "content_markdown": make_expository_english_article()}
+    errors = check_article(
+        article, ["intro", "concept", "mech-1", "mech-2", "mech-3", "application", "exceptions", "conclusion"]
+    )
+    assert errors == ["title must not contain parentheses or a colon"]
+    errors = check_article({**article, "title": "가" * 41}, [])
+    assert "title has 41 characters; keep it within 40" in errors
+
+
+def test_check_paragraph_keeps_inline_code_glosses_and_list_items():
+    original = "`@Transactional` 이 붙은 메서드는 프록시(proxy)를 거쳐야 트랜잭션이 열립니다."
+    assert check_paragraph({"paragraph": original}, original, "paragraph") == []
+    dropped = original.replace("`@Transactional` 이", "트랜잭션 어노테이션이")
+    assert check_paragraph({"paragraph": dropped}, original, "paragraph") == [
+        "inline code ['`@Transactional`'] must stay exactly as in the original"
+    ]
+    errors = check_paragraph({"paragraph": "## 제목\n\n- 목록"}, original, "paragraph")
+    assert any("headings" in error for error in errors) and any("not a list" in error for error in errors)
+    assert any("English terms" in error for error in errors)
+    items = "- 첫째입니다.\n- 둘째입니다."
+    assert check_paragraph({"paragraph": "- 하나로 합쳤습니다."}, items, "list") == [
+        "the list has 1 items; keep exactly 2"
+    ]
 
 
 def test_check_translation_passes_matching_polite_article():
