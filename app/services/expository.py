@@ -90,6 +90,8 @@ logger = logging.getLogger(__name__)
 # 5단계 본문(코드 제외)의 어절 상한. 본문을 한국어로 바로 쓰게 되면서(09 문서 D-105) 단위가 영어 단어에서 어절로 바뀌었다.
 # 1800 은 2026-11-17 실제 실행 세 번에 쓴 값이고 표·코드까지 합친 글이 9,509~13,979자였다(글자 수 제한은 어느 단계에도 없다, D-109)
 DEFAULT_MAX_WORDS = 1800
+# 글 수준 id. 지시문의 level_profiles 키 중 하나이고, 수준을 받지 않는 버전에서는 이 값만 허용한다(그 버전의 독자가 이 수준이다)
+DEFAULT_LEVEL = "advanced"
 LAST_STAGE = len(STAGES)
 RUN_ID_PREFIX = "expository-"  # 실행 id 이자 영수증의 round_id. 라운드 id 와 섞이지 않게 앞에 붙인다
 TOPIC_KEYS = ("topic", "core_argument", "focus_points", "out_of_scope")  # 1단계 결과 중 뼈대 단계에 들어가는 것
@@ -113,6 +115,7 @@ class RunSeed:
     """실행 시작값. topic 을 주면 1단계를 부르지 않고 그 값을 1단계 결과로 쓴다.
 
     form 은 글 양식 id 다(D-104). 주면 1단계가 그 양식으로만 주제를 고르고, topic 을 같이 주면 그 topic 의 양식이 된다.
+    level 은 글 수준 id 다. 지시문 inputs 에 level 이 있는 단계에 들어간다. 없으면 이어 하는 실행의 수준, 새 실행은 DEFAULT_LEVEL 이다.
     """
 
     theme_keyword: str = ""
@@ -120,6 +123,7 @@ class RunSeed:
     topic: dict[str, Any] | None = None
     max_words: int = DEFAULT_MAX_WORDS
     form: str | None = None
+    level: str | None = None
 
 
 class ExpositoryPipeline:
@@ -179,6 +183,15 @@ class ExpositoryPipeline:
         self._parameters = version.parameters
         self._layouts = version.parameters.expository.layouts
         self._run = await self._repository.get(run_id) or ExpositoryRun(run_id=run_id)
+        # 수준도 호출 전에 본다. 주지 않으면 이어 하는 실행의 수준을 그대로 쓰고(그래야 끝난 단계를 다시 부르지 않는다), 새 실행은 기본 수준이다.
+        # 수준을 받지 않는 버전(수준 입력 전 지시문)은 기본 수준으로만 돈다
+        level = seed.level or self._run.level or DEFAULT_LEVEL
+        levels = sorted(self._prompts["1_topic_thesis"].get("level_profiles") or {})
+        if levels and level not in levels:
+            raise ValueError(f"모르는 글 수준 {level!r}. 최신 버전의 수준: {levels}")
+        if not levels and level != DEFAULT_LEVEL:
+            raise ValueError(f"최신 버전의 지시문은 글 수준을 받지 않는다. 수준 {level!r} 로 돌릴 수 없다")
+        self._run.level = level  # 다음 저장 때 남는다. 이어 할 때 수준을 바꾸면 프롬프트가 달라져 수준을 받는 단계가 다시 불린다(1단계 결과는 그대로 쓴다)
         self._seed = seed
         if redo_from is not None:
             self._run.drop_from([stage.key for stage in STAGES if stage.number >= redo_from])
@@ -205,7 +218,9 @@ class ExpositoryPipeline:
             and self._run.glossary is None
             and self._glossary is not None
         ):
-            self._run.glossary = await self._extract_glossary(self._glossary, self._run.run_id, article, version)
+            self._run.glossary = await self._extract_glossary(
+                self._glossary, self._run.run_id, article, version, self._run.level
+            )
             await self._save()
         return to_result(self._run)
 
@@ -325,7 +340,7 @@ class ExpositoryPipeline:
         if run.article is None:
             raise InvalidRequestError(f"{run_id}: 9단계까지 끝나지 않아 용어를 뽑을 글이 없다")
         version = await self._versions.require_latest()
-        record = await self._extract_glossary(self._glossary, run_id, run.article, version)
+        record = await self._extract_glossary(self._glossary, run_id, run.article, version, run.level)
         run.glossary = record
         run.updated_at = datetime.now(UTC)
         await self._repository.upsert(run)
@@ -342,12 +357,26 @@ class ExpositoryPipeline:
         }
 
     async def _extract_glossary(
-        self, glossary: GlossaryService, run_id: str, article: ExpositoryArticle, version: PipelineVersion
+        self,
+        glossary: GlossaryService,
+        run_id: str,
+        article: ExpositoryArticle,
+        version: PipelineVersion,
+        level: str | None,
     ) -> GlossaryRecord:
-        """끝난 글 하나의 용어 추출. 예외를 내지 않는다(GlossaryService.extract_article 계약)."""
-        # 독자 묘사는 작성 단계 지시문의 것이다. 설명문 실행에는 라운드 주제의 audience 같은 필드가 없다
-        config = stage_prompts(version.prompts)[WRITE_STAGE].get("system_config")
-        reader = config.get("reader") if isinstance(config, dict) else None
+        """끝난 글 하나의 용어 추출. 예외를 내지 않는다(GlossaryService.extract_article 계약).
+
+        level 은 실행 문서의 글 수준이다. 수준 전에 만든 실행은 없어서 기본 수준으로 본다.
+        """
+        # 독자 묘사는 작성 단계 지시문의 것이다. 설명문 실행에는 라운드 주제의 audience 같은 필드가 없다.
+        # 수준을 받는 지시문은 수준마다 reader 가 있고, 그 전 지시문은 system_config.reader 하나다
+        write = stage_prompts(version.prompts)[WRITE_STAGE]
+        profiles, config = write.get("level_profiles"), write.get("system_config")
+        profile = profiles.get(level or DEFAULT_LEVEL) if isinstance(profiles, dict) else None
+        if isinstance(profile, dict):
+            reader = profile.get("reader")
+        else:
+            reader = config.get("reader") if isinstance(config, dict) else None
         extractor = next(
             (model for model in version.routes.get(ROUTE_GLOSSARY, []) if model.provider in self._providers), None
         )
@@ -402,6 +431,7 @@ class ExpositoryPipeline:
             "categories": categories,
             "forms": form_choices(forms),
         }
+        inputs = self._with_level(stage, inputs)
         prompt = render_prompt(self._prompts[stage.key], inputs)
         topic = await self._call_until_valid(stage, inputs, lambda output: check_topic(output, categories, forms))
         await self._save_stage(stage, topic, prompt)
@@ -493,7 +523,10 @@ class ExpositoryPipeline:
         지시문이나 조립본이 바뀌지 않으면 이 단계를 다시 부르지 않는다.
         """
         assembled, topic = self._run.assembled_markdown or "", self._output("1_topic_thesis")["topic"]
-        prompt = render_prompt(self._prompts[stage.key], {"topic": topic, "paragraph": assembled, "section": ""})
+        prompt = render_prompt(
+            self._prompts[stage.key],
+            self._with_level(stage, {"topic": topic, "paragraph": assembled, "section": ""}),
+        )
         if stage.key in self._run.stage_outputs and self._run.stage_prompts.get(stage.key) == prompt:
             return
         blocks = split_blocks(assembled)
@@ -505,7 +538,9 @@ class ExpositoryPipeline:
         semaphore = asyncio.Semaphore(_PARAGRAPH_CONCURRENCY)
 
         async def edit(index: int, block: Block) -> None:
-            inputs = {"topic": topic, "paragraph": block.text, "section": "\n\n".join(sections[block.section])}
+            inputs = self._with_level(
+                stage, {"topic": topic, "paragraph": block.text, "section": "\n\n".join(sections[block.section])}
+            )
             async with semaphore:
                 output = await self._call_until_valid(
                     stage, inputs, lambda output: check_paragraph(output, block.text, block.kind)
@@ -561,6 +596,7 @@ class ExpositoryPipeline:
 
     async def _run_stage(self, stage: Stage, inputs: dict[str, Any], check: Check) -> dict[str, Any]:
         """결과가 있고 프롬프트가 그 결과를 만든 프롬프트와 같으면 그 결과를 쓰고, 아니면 부른다."""
+        inputs = self._with_level(stage, inputs)
         prompt = render_prompt(self._prompts[stage.key], inputs)
         cached = self._run.stage_outputs.get(stage.key)
         if cached is not None and self._run.stage_prompts.get(stage.key) == prompt:
@@ -568,6 +604,12 @@ class ExpositoryPipeline:
         output = await self._call_until_valid(stage, inputs, check)
         await self._save_stage(stage, output, prompt)
         return output
+
+    def _with_level(self, stage: Stage, inputs: dict[str, Any]) -> dict[str, Any]:
+        """지시문 inputs 에 level 이 있으면 실행의 수준을 더한 입력. 없는 지시문(수준 입력 전 버전 포함)은 그대로다."""
+        if "level" not in self._prompts[stage.key]["inputs"]:
+            return inputs
+        return {**inputs, "level": self._run.level or DEFAULT_LEVEL}
 
     async def _save_stage(self, stage: Stage, output: dict[str, Any], prompt: str | None) -> None:
         # 결과와 프롬프트를 같이 쓴다. 프롬프트만 먼저 쓰면 호출이 실패했을 때 옛 결과가 새 프롬프트의 결과로 보인다

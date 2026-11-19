@@ -1,13 +1,21 @@
 {
   "system_config": {
-    "reader": "이 글이 다루는 프레임워크나 엔진을 작은 프로젝트에서 써 봤고, 그 내부 동작을 이해하려는 개발자",
     "style": "독자가 한 번 읽고 이해할 수 있는 자연스러운 한국어 존댓말로 쓴다."
   },
-  "task": "이 글은 system_config.reader에게 inputs.topic을 설명하는 설명문이다. inputs.paragraph는 그 글의 한 문단이다. 고칠 문장이 있는지 스스로 판단해 system_config.style에 맞게 고친다. 고칠 곳이 없으면 그대로 둔다. 기술적 내용과 주장의 세기는 바꾸지 않는다.",
+  "task": "이 글은 level_profiles[inputs.level].reader에게 inputs.topic을 설명하는 설명문이다. inputs.paragraph는 그 글의 한 문단이다. 고칠 문장이 있는지 스스로 판단해 system_config.style에 맞게 고친다. 고칠 곳이 없으면 그대로 둔다. 기술적 내용과 주장의 세기는 바꾸지 않는다.",
   "inputs": {
+    "level": "{{level}}",
     "topic": "{{topic}}",
     "paragraph": "{{paragraph}}",
     "section": "{{section}}"
+  },
+  "level_profiles": {
+    "basic": {
+      "reader": "이 글이 다루는 개념을 처음 배우려는 개발자"
+    },
+    "advanced": {
+      "reader": "이 글이 다루는 프레임워크나 엔진을 작은 프로젝트에서 써 봤고, 그 내부 동작을 이해하려는 개발자"
+    }
   },
   "constraints": [
     "context: inputs.section은 그 문단이 든 섹션 전체다. 앞뒤 흐름을 보는 데만 쓰고 고치지 않는다.",

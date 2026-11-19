@@ -20,7 +20,7 @@ from app.core.exceptions import (
 )
 from app.models.enums import GlossaryStatus
 from app.models.model_binding import CallModel
-from app.models.pipeline import PipelineVersionBody
+from app.models.pipeline import EXPOSITORY_FAMILY, PipelineVersionBody
 from app.models.routing import ROUTE_GLOSSARY
 from app.repositories.expository_run import ExpositoryRunRepository
 from app.repositories.glossary import GlossaryRepository
@@ -318,6 +318,49 @@ async def test_run_raises_before_any_call_for_an_unknown_form_or_a_version_witho
     assert client.calls == []
 
 
+# 지시문에 level 입력이 있는 단계
+LEVEL_STAGES = {"1_topic_thesis", "2_outline", "3_outline_review", "5_write", "8_translate"}
+
+
+async def test_run_adds_the_level_only_to_stages_whose_prompt_takes_it():
+    harness = Harness()
+    client = ExpositoryLLMClient(_full_script())
+
+    await (await harness.pipeline(client)).run(RUN_ID, RunSeed(level="basic"))
+
+    for receipt, call in zip(harness.receipts.calls, client.calls, strict=True):
+        inputs = json.loads(call.messages[1].content)["inputs"]
+        assert inputs.get("level") == ("basic" if receipt.item_id in LEVEL_STAGES else None), receipt.item_id
+    stored = await harness.runs.get(RUN_ID)
+    assert stored is not None and stored.level == "basic"
+    assert json.loads(stored.stage_prompts["8_translate"])["inputs"]["level"] == "basic"
+
+
+async def test_run_raises_before_any_call_for_an_unknown_level_or_a_level_the_version_does_not_take():
+    client = FakeLLMClient([])
+
+    with pytest.raises(ValueError, match=r"모르는 글 수준 'expert'.*\['advanced', 'basic'\]"):
+        await (await Harness().pipeline(client)).run(RUN_ID, RunSeed(level="expert"))
+
+    body = make_expository_body(draft_min_chars=10)
+    stored = body.prompts[EXPOSITORY_FAMILY]
+    for key, text in stored.items():  # 수준 입력 전 지시문의 모양
+        prompt = json.loads(text)
+        prompt["inputs"].pop("level", None)
+        prompt.pop("level_profiles", None)
+        stored[key] = json.dumps(prompt, ensure_ascii=False)
+    harness = Harness(body=body)
+    with pytest.raises(ValueError, match="글 수준을 받지 않는다"):
+        await (await harness.pipeline(client)).run(RUN_ID, RunSeed(level="basic"))
+    assert client.calls == []
+
+    # 기본 수준이면 그 버전으로 그대로 돈다
+    topic = make_expository_topic()
+    outline = FakeLLMClient([json.dumps(make_expository_outline(topic["core_argument"]))])
+    await (await harness.pipeline(outline)).run(RUN_ID, RunSeed(topic=topic), stop_after=2)
+    assert "level" not in json.loads(outline.calls[0].messages[1].content)["inputs"]
+
+
 async def test_run_refuses_a_form_that_differs_from_the_stored_topic():
     harness = Harness()
     await (await harness.pipeline(FakeLLMClient([json.dumps(make_expository_topic())]))).run(
@@ -513,7 +556,9 @@ async def test_run_registers_the_finished_article_terms_with_the_run_as_source()
     harness = Harness(body=_glossary_body())
     client = ExpositoryLLMClient([*_full_script(), glossary_output(PROXY)])
 
-    result = await (await harness.pipeline(client, FakePostBE(categories=CATEGORIES))).run(RUN_ID, RunSeed())
+    result = await (await harness.pipeline(client, FakePostBE(categories=CATEGORIES))).run(
+        RUN_ID, RunSeed(level="basic")
+    )
 
     # 번호 단계는 그대로 9개이고 용어 추출은 그 뒤 한 번이다
     assert result.finished_stages == list(STAGE_KEYS)
@@ -521,7 +566,8 @@ async def test_run_registers_the_finished_article_terms_with_the_run_as_source()
     assert (receipt.kind, receipt.round_id, receipt.draft_id, receipt.item_id) == ("GLOSSARY", RUN_ID, None, None)
     assert (receipt.target_version, receipt.pipeline_version, receipt.model_binding) == (1, "v1", GLOSSARY_MODEL)
     sent = json.loads(client.calls[-1].messages[1].content.removeprefix("입력(JSON):\n"))
-    reader = stage_prompts(harness._body.prompts)["5_write"]["system_config"]["reader"]
+    # 독자 묘사는 실행 수준의 작성 단계 프로필에서 온다
+    reader = stage_prompts(harness._body.prompts)["5_write"]["level_profiles"]["basic"]["reader"]
     assert (sent["title"], sent["audience"], sent["prerequisites"], sent["main_category"]) == (
         KOREAN_TITLE,
         reader,

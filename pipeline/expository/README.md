@@ -76,6 +76,7 @@ python -m cli.expository run --theme spring
 부를 때의 최신 버전을 쓴다. 최신 버전에 설명문 프롬프트나 글 양식이 없으면 호출 전에 멈춘다(`seed` 먼저).
 
 - `--form concept`: 글 양식을 정한다. 없으면 1단계가 고른다. 이미 주제를 고른 실행에 다른 양식을 주면 멈춘다(`--redo-from 1`).
+- `--level basic`: 글 수준을 정한다(D-114). `basic` 은 입문 과목 수준의 기본 개념, `advanced` 는 내부 동작 원리다. 없으면 이어 하는 실행은 그 실행의 수준, 새 실행은 `advanced` 다. 수준별 내용은 1·2·3·5·8단계 지시문의 `level_profiles` 에 있고, 지시문 `inputs` 에 `level` 이 있는 단계에만 들어간다. 모르는 수준을 주면 호출 전에 멈춘다.
 - `--topic-file topic.json`: 1단계 결과(form·topic·core_argument·focus_points·out_of_scope)를 직접 준다. 1단계를 부르지 않는다. `--form` 을 같이 주면 파일의 form 대신 그 양식이다.
 - `--stop-after 4`: 그 단계까지만 돌린다. `--run-id <실행 id>` 로 이어 한다.
 - `--redo-from 5`: 그 단계부터의 결과를 지우고 다시 부른다.
@@ -222,5 +223,5 @@ python -m cli agents pipeline edit-param 'expository.layouts={"default":"documen
 - 문서 출력과 `documents_first` 배치(D-103)의 실제 실행 확인. 같은 뼈대로 전후를 견주는 방법: 새 프롬프트를 넣기 전에 실행을 끝까지 돌려 `show --out a.md`, `seed` 와 `edit-param` 뒤 같은 실행을 `run --run-id … --redo-from 5` 로 다시 돌려 `show --out b.md`. 두 글과 영수증의 5·8단계 출력 토큰·재시도, 실행 문서의 `rejected_patches` 수를 본다.
 - 자동 발행. `run` 이 끝나도 올리지 않는다. `publish` 를 따로 부른다.
 - 발행한 글의 제작 기록 연결.
-- 수준 입력(`level`, `level_profiles`). 2026-11-15 에 다른 PC 에서 만든 것이 운영 v26·v27 지시문에만 있고 코드는 이 저장소에 없다.
+- 수준 `basic` 으로 끝까지 돌린 글. 수준 입력(D-114)은 1단계만 실제 호출로 확인했다.
 - 실행이 고칠 수 없는 사실 오류(blocking)에서 뼈대를 자동으로 다시 만드는 것. 지금은 멈추고 사람이 다시 돌린다.

@@ -16,7 +16,7 @@ from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.dependencies import build_expository_pipeline, build_pipeline_version_service, open_async_database
 from app.schemas.expository import ExpositoryResult
-from app.services.expository import DEFAULT_MAX_WORDS, LAST_STAGE, RunSeed, new_run_id
+from app.services.expository import DEFAULT_LEVEL, DEFAULT_MAX_WORDS, LAST_STAGE, RunSeed, new_run_id
 from app.services.pipeline_versions import meta_of
 
 EXPOSITORY_DIR = Path(__file__).resolve().parents[1] / "pipeline" / "expository"  # 버전에 넣는 입력(프롬프트·라우트)
@@ -103,12 +103,21 @@ def run(
             help="글 양식 id(concept·procedure·taxonomy·diagnosis). 없으면 1단계가 고른다. --topic-file 과 같이 주면 그 주제의 양식이 된다",
         ),
     ] = None,
+    level: Annotated[
+        str | None,
+        typer.Option(
+            "--level",
+            help=f"글 수준 id. 최신 버전 1단계 지시문의 level_profiles 키(basic·advanced 등). 없으면 이어 하는 실행의 수준, 새 실행은 {DEFAULT_LEVEL}",
+        ),
+    ] = None,
     out: Annotated[Path | None, typer.Option("--out", help="끝난 글(마크다운)을 쓸 파일. 없으면 찍지 않는다")] = None,
 ) -> None:
     """1~9단계를 최신 파이프라인 버전으로 돌린다. 같은 --run-id 로 다시 부르면 입력이 바뀌지 않은 단계는 건너뛴다."""
     target = run_id or new_run_id()
     topic = json.loads(topic_file.read_text(encoding="utf-8")) if topic_file else None
-    seed_values = RunSeed(theme_keyword=theme, avoid_topics=avoid or [], topic=topic, max_words=max_words, form=form)
+    seed_values = RunSeed(
+        theme_keyword=theme, avoid_topics=avoid or [], topic=topic, max_words=max_words, form=form, level=level
+    )
     typer.echo(f"실행 id: {target}")
 
     async def _pipeline(database, settings) -> ExpositoryResult:
