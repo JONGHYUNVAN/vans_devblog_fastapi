@@ -15,7 +15,9 @@ GLOSSARY_SECTION = "glossary"
 BLOCK_KINDS = ("anchor", "heading", "code", "table", "quote", "list", "paragraph")
 _NUMBERED_HEADING = re.compile(r"^##\s+(\d+)\.", re.MULTILINE)
 _BLOCK_SPLIT = re.compile(r"\n[ \t]*\n")
-_NOT_PROSE = ("#", "<!--", "```", "~~~", "|", "**📊", ">", "-", "1.")
+_NOT_PROSE = ("#", "<!--", "```", "~~~", "|", ">", "-", "1.")
+# 코드가 표 위에 넣는 라벨 줄(`**요약: …**`). 통째로 굵은 한 줄이면 라벨로 본다. 옛 실행 문서의 `**📊 …**` 도 여기에 든다
+_TABLE_LABEL = re.compile(r"\*\*(?:(?!\*\*).)+\*\*")
 _FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})")  # models/sections 의 펜스 규칙과 같다
 _ANCHOR_LINE = re.compile(r"^\s*<!--\s*sec:[A-Za-z0-9_-]+\s*-->\s*$")
 _LIST_ITEM = re.compile(r"^(?:[-*+]|\d+\.)\s")
@@ -96,7 +98,7 @@ def first_paragraph(markdown: str) -> str:
     text = markdown[span[0] : span[1]] if span else markdown
     for block in _BLOCK_SPLIT.split(text):
         stripped = block.strip()
-        if stripped and not stripped.startswith(_NOT_PROSE):
+        if stripped and not stripped.startswith(_NOT_PROSE) and not _TABLE_LABEL.fullmatch(stripped):
             return " ".join(stripped.split())
     return ""
 
@@ -165,7 +167,7 @@ def _block_kind(lines: list[str]) -> str:
     first = rest[0]
     if first.startswith("#"):
         return "heading"
-    if first.startswith(("|", "**📊")):
+    if first.startswith("|") or (len(rest) == 1 and _TABLE_LABEL.fullmatch(first)):
         return "table"
     if first.startswith(">"):
         return "quote"
@@ -186,7 +188,7 @@ def _append_to_section(markdown: str, section_id: str, block: str) -> str:
 
 
 def _table(header: tuple[str, str], rows: list[tuple[str, str]], title: str | None = None) -> str:
-    lines = [f"**📊 {title}**", ""] if title else []
+    lines = [f"**{title}**", ""] if title else []
     lines += [f"| {header[0]} | {header[1]} |", "|---|---|"]
     lines += [f"| {_cell(left)} | {_cell(right)} |" for left, right in rows]
     return "\n".join(lines)

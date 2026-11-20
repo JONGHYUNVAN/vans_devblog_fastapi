@@ -46,10 +46,10 @@ def test_assemble_article_adds_summary_tables_overview_and_numbered_glossary():
         overview_rows=[("Mechanism 1", "Advice runs only on proxy entry 1")],
         last_section="conclusion",
     )
-    assert assembled.index("**📊 요약: Part intro**\n\n| 항목 | 설명 |") < assembled.index("<!-- sec:concept -->")
+    assert assembled.index("**요약: Part intro**\n\n| 항목 | 설명 |") < assembled.index("<!-- sec:concept -->")
     # 전체 정리 표는 마지막 섹션(용어 정리 절 앞)에 양식의 머리로 붙는다
     overview = assembled.split("<!-- sec:conclusion -->")[1].split("<!-- sec:glossary -->")[0]
-    assert "**📊 전체 정리**" in overview
+    assert "**전체 정리**" in overview
     assert "| Mechanism | Takeaway |\n|---|---|\n| Mechanism 1 | Advice runs only on proxy entry 1 |" in overview
     glossary = assembled.split("<!-- sec:glossary -->")[1]
     assert glossary.startswith("\n## 9. 용어 정리\n\n| 용어 | 정의 |")
@@ -61,7 +61,7 @@ def test_split_blocks_keeps_a_code_fence_with_a_blank_line_and_its_anchor_in_one
     markdown = (
         "<!-- sec:intro -->\n## 1. 소개\n\n첫 문단입니다.\n\n- 하나\n- 둘\n\n"
         "<!-- sec:code-1 -->\n```java\nclass A {}\n\nclass B {}\n```\n\n"
-        "**📊 요약: 소개**\n\n| 항목 | 설명 |\n|---|---|\n| a | b |\n\n> 인용입니다.\n\n"
+        "**요약: 소개**\n\n| 항목 | 설명 |\n|---|---|\n| a | b |\n\n> 인용입니다.\n\n"
         "<!-- sec:concept -->\n\n~~~\nx\n\ny\n~~~\n\n둘째 문단입니다.\n"
     )
     blocks = split_blocks(markdown)

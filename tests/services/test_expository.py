@@ -143,7 +143,7 @@ async def test_run_completes_every_stage_and_stores_the_article_and_receipts():
     assert stored.article.keywords == ["spring", "transaction", "proxy"]
     assert "concept 섹션은" in (stored.checked_markdown or "")
     assembled = stored.assembled_markdown or ""
-    assert "**📊 전체 정리**" in assembled and "**📊 요약: Part intro**" in assembled
+    assert "**전체 정리**" in assembled and "**요약: Part intro**" in assembled
     # 8단계는 문단만 하나씩 보내고 고친 문단으로 바꾼다. 제목·앵커·표·코드는 그대로 남는다
     assert sorted(client.paragraphs) == sorted(
         block.text for block in split_blocks(assembled) if block.kind in ("paragraph", "list")
